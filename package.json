@@ -1,0 +1,16 @@
+{
+  "name": "otomig",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Open Transit On Map Info Game — a transit sandbox on a real 15x15 km piece of the world",
+  "type": "module",
+  "scripts": {
+    "start": "python3 -m http.server 8000",
+    "fixture": "node fixtures/make-fixture.js",
+    "test": "node tests/run.js"
+  },
+  "comment": "There is no build step and no runtime dependency. MapLibre is vendored into vendor/ from the pinned version below; see RESEARCH.md section 5 for why v5 and not v6.",
+  "vendored": {
+    "maplibre-gl": "5.24.0"
+  }
+}
