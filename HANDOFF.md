@@ -2,126 +2,71 @@
 
 Read this first in every session. Update it last.
 
-**Current state:** Phases 0, 1 and 2 complete, verified in a real browser except the live network path.
+**State:** Phases 0, 1 and 2 complete. Verified in a real browser against the fixture; the live import has never been run end to end.
 **Last session:** Oct 10, 2026 — Phase 0 (research), Phase 1 (region and map), Phase 2 (buses and passengers).
-**Next session:** confirm a live import works, then Phase 3 (trams).
+**Next:** one live import on Alex's machine, then Phase 3 (trams).
 
-## Testing
+---
+
+## 1. Two things only Alex can do
+
+### Push — nine commits are waiting
+
+Committed on `main`, `origin` set to `https://github.com/alexandrosgavrilis/otomig.git`, **not pushed**. GitHub removed password auth for git over HTTPS in 2021, and signing in with Google never creates a git password, so the credential prompt is unanswerable as-is.
+
+`gh` 2.102.0 is installed at `~/.local/bin/gh` (already on PATH via `.profile`):
 
 ```bash
-npm test            # 240 logic assertions, plain Node, no dependencies
-npm run test:browser    # 68 assertions driving real Chromium via Playwright
-npm run test:browser -- --headed    # ...and watch it
+gh auth login          # GitHub.com → HTTPS → Yes → Login with a web browser
+gh repo create otomig --private
+git push -u origin main
 ```
 
-The browser suite serves the project on **port 4001**, loads the fixture, and checks that MapLibre really renders (by sampling pixels from a screenshot, not just trusting the `load` event), that the toggles work, that pan/zoom and `maxBounds` behave, that IndexedDB round-trips, and that the module worker resolves its import graph. Screenshots land in `tests/screenshots/` — look at them, they catch things assertions don't.
+That also configures the git credential helper permanently, so later sessions can push without asking.
 
-Playwright is a devDependency. `npm test` stays dependency-free.
+### Run one live import
 
-### Bugs the browser suite caught
-
-Three in Phase 1, one in Phase 2 — all of which would have met you as a broken screen.
-
-**Phase 2: the entire game layer rendered into a 300×150 box in the corner.** A `<canvas>` is a replaced element, so `position: absolute; inset: 0` does *not* stretch it — `width: auto` resolves to the intrinsic 300×150. The map, HUD, toolbar and panels all looked perfect; lines, stops and vehicles were simply invisible. Fixed with explicit `width/height: 100%` in [style.css](style.css). The suite now checks the overlay's CSS box against the viewport, and samples the overlay for the line's own colour — asserting the model has a line is not the same as asserting the player can see one.
-
-### Phase 1 bugs
-
-Both would have met you as a blank or wrong map:
-
-1. **The MapLibre style was invalid**, so `load` never fired and the map stayed empty. `line-cap` is a *layout* property, not paint; and a `zoom` expression may only be the direct input of a top-level `interpolate`, so wrapping one in a `['*', ...]` is rejected. Fixed in [render/basemap.js](render/basemap.js).
-2. **Land at exactly 0 m was painted as sea.** Marching squares treats a corner equal to the trace level as being on the low side, so a flat zero-height area read as water — in the fixture, a whole valley floor appeared as a blue tower. [data/terrain.js](data/terrain.js) now traces half a metre *below* sea level, so "exactly sea level" counts as land. This was never a fixture-only quirk: reclaimed coast and polder are plateaux of exact zeros in real elevation data.
-
-A third, found by the worker test: **`fetch` has no timeout**, so a silently dropped connection would hang an import forever behind a frozen progress bar. Overpass and terrain requests are now aborted and retried ([`fetchWithTimeout`](data/overpass.js)).
-
-## Live endpoints — tested, and two real problems found
-
-**Correction to my earlier note: this sandbox CAN reach Overpass, Nominatim, the elevation bucket and the OSM tile server.** The spec said it could not and I took that on trust instead of checking. Having now tested them directly:
-
-**Elevation is fine.** `Access-Control-Allow-Origin: *` is present on GET (not on HEAD, which is what made it look missing at first), so there is no tainted-canvas problem. The decode formula is confirmed against live tiles: London reads −5…30 m, Athens −3…263 m, Mont Blanc 1,719…**4,790 m** against a true summit of 4,806 m. `tileXY` is correct.
-
-**Nominatim is fine.** Returns results with `extratags` as expected.
-
-**Problem 1 — Overpass 406s a request with no `User-Agent`.** Browsers always send one, so the game is unaffected, but any Node-side test of the live API must set it. Note that the game cannot and does not set this header: `User-Agent` is a [forbidden header name](https://developer.mozilla.org/en-US/docs/Glossary/Forbidden_header_name), so `fetch` silently ignores any attempt. We identify to the OSM services via `Referer`, which the browser sends automatically — which is also why the app must be served over `http://` and never opened as a `file://` URL.
-
-**Problem 2 — Overpass fails on chunk AREA, and the chunk grid used to ignore that.** Measured against central Athens:
-
-| Box | Result |
-| --- | --- |
-| 1 km | 200, 1.9 MB, 6.5 s |
-| 2 km | 200, 7.5 MB, 18.4 s |
-| 3 km | **504** |
-| 5 km (our chunk size) | **504** |
-
-The public instance will not build a 5 km query there, and retrying the identical query — which is all the old code did — fails again.
-
-**Two fixes.** `fetchChunkAdaptive` splits a refused chunk into four and recurses, up to `REGION.OVERPASS_MAX_SUBDIVIDE` (3 levels, down to 625 m); sparse regions never subdivide and pay nothing. And the chunk grid is now derived from a target tile *size* (`OVERPASS_CHUNK_TARGET_KM`, 2.5 km) rather than a fixed 3×3 count. Previously a 15 km region began with 5 km chunks — all nine guaranteed to fail, each burning a 2+4+8+16 s retry cycle before subdividing, roughly four wasted minutes before any real work. Now:
-
-| Region | Grid | Requests | Chunk |
-| --- | --- | --- | --- |
-| 5 km | 2×2 | 4 | 2.50 km |
-| **6 km** | **3×3** | **9** | **2.00 km** (unchanged) |
-| 10 km | 4×4 | 16 | 2.50 km |
-| 15 km | 6×6 | 36 | 2.50 km |
-
-36 requests for the largest region is inside Overpass's ~100/day guidance for a regular user.
-
-**The 504s are mostly transient, and the retry absorbs them.** Running the real `fetchChunkAdaptive` against the centre chunk of a 6 km Athens import: it 504'd, retried, and recovered in 4 seconds with no subdivision — 1,249 roads, 7,878 buildings, 4,336 POIs. The same 2 km box had succeeded outright earlier in the day. Overpass simply has bad minutes.
-
-**This means the Phase 1 acceptance criterion needs revising, and that is your call.** At the measured 1.87 MB/km², a dense 15×15 km city is roughly **200–400 MB and 10–20 minutes**, not "about two minutes". It is also far beyond Overpass's ~10 MB/day courtesy guidance for regular use. Options:
-
-- Accept slower imports for dense cities and restate the criterion (simplest; the data is cached forever afterwards).
-- Lower `REGION.SIZE_KM_DEFAULT` so the default is a 5–8 km box and 15 km is an explicit "this will take a while" choice.
-- Trim the query further — but note the POI trim already done was worth only 2.9%; the weight is in buildings, at 49%.
-
-**Both applied.** `REGION.SIZE_KM_DEFAULT` is now **6 km** (the slider still reaches 15), and the POI query is trimmed — `node[amenity]` was unfiltered, which in a city means every bench, bin, postbox, parking space and drinking fountain arriving with a full tag dictionary, 18% of the payload. It now matches `POPULATION.POI_AMENITIES`, a 30-entry list of places people actually travel to. Every `shop` is still kept, and buildings are untouched: a school building is still classified as a school because it comes from `way[building]` with all its tags.
-
-**Now measured, and I was wrong about the size of it.** I estimated 15–18%; the real figure is **2.9%**. Over a 1 km box of central Athens, 1,558 shop/amenity nodes become 1,334 — only 224 dropped, because nearly all POI nodes in a city centre are cafés, restaurants, shops and banks, which the list keeps. My 18% figure was the share of *all* POI nodes in the payload, and we keep 86% of them.
-
-| dropped | count |
-| --- | --- |
-| waste_basket | 43 |
-| bench | 34 |
-| recycling | 22 |
-| telephone | 18 |
-| atm | 17 |
-| money_transfer | 12 |
-| parking_entrance / parking | 18 |
-| post_box, charging_station, toilets, … | the rest |
-
-**Keep the filter anyway — it is a correctness fix, not a bandwidth one.** Every POI node contributes `POINT_ATTRACTION`, so before this a park bench generated as much trip attraction as a bakery, and about 14% of all point attraction in that sample was street furniture. In a suburb, where benches and parking outnumber shops, the distortion is worse.
-
-**The payload problem is unsolved and lives in buildings** — 49% of it. The only real levers there are the smaller default box (applied) or the vector-tile hybrid discussed above (not applied; it would cost the attraction categories).
-
-## What still needs your machine
-
-The import path has now been exercised piece by piece, but **never end to end in a browser**. Please do this once:
+Everything is verified against the fixture, which needs no network. The assembly — worker → Overpass → elevation → IndexedDB → playable map — has never run as a whole.
 
 ```bash
 npm start      # then open http://localhost:8000
 ```
 
-Never open `index.html` as a `file://` URL. Nominatim's policy requires requests to identify themselves; a browser cannot set `User-Agent`, so we rely on `Referer`, which is only sent over `http://`.
+**Never open `index.html` as a `file://` URL.** `User-Agent` is a forbidden header name, so a browser silently ignores any attempt to set it; we identify to the OSM services via `Referer`, which is only sent over `http://`.
 
-1. **Import a real region** — search a place, place the square, Import.
-2. **Reload it.** It must come back instantly from IndexedDB without refetching.
-3. **Time a dense 15 km city.** The acceptance criterion is about two minutes or less. If it's slower, trim the Overpass building query first.
-
-Both former risks are now resolved — elevation CORS is confirmed present, and dense-city 504s are handled by subdivision. What remains unverified is only the assembly: worker → IndexedDB → playable map, on a real region, in a real browser. The default is now a 6 km box, so the first live import should take a few minutes rather than twenty.
-
-### The push didn't happen
-
-Committed locally on `main` (one commit, `origin` set to `https://github.com/alexandrosgavrilis/otomig.git`), but **not pushed** — this machine has no GitHub credentials. `~/.gitconfig` has a helper for GitLab only, and the generic `credential.helper = cache` is empty. So:
-
-```bash
-# create the repo once (any name — adjust the remote if you pick another)
-git push -u origin main
-```
-
-If you want me to push in future sessions, the simplest fix is installing `gh` and running `gh auth login`, or adding a GitHub entry to the credential helper the way GitLab already has one.
+The default region is now 6 km, so the first import should take a few minutes rather than twenty. Then reload the same region and confirm it comes back instantly from IndexedDB.
 
 ---
 
-## Phase 0 decisions — all four resolved (Oct 10, 2026)
+## 2. Testing
+
+```bash
+npm test                            # 257 logic assertions, plain Node, no dependencies
+npm run test:browser                # 68 assertions in real Chromium via Playwright
+npm run test:browser -- --headed    # ...and watch it
+npm run fixture                     # regenerate fixtures/test-region.json
+```
+
+The browser suite serves on **port 4001**, loads the fixture, and checks that MapLibre genuinely renders by sampling pixels rather than trusting the `load` event. Screenshots land in `tests/screenshots/` — **look at them.** They have caught things no assertion did.
+
+Playwright is a devDependency. `npm test` stays dependency-free.
+
+Phase 2's acceptance criteria live in `tests/phase2.js` marked `ACCEPTANCE:`, so they stay checked rather than being verified once by hand.
+
+### Four bugs the browser suite caught
+
+All four would have met Alex as a broken screen:
+
+1. **The whole game layer rendered into a 300×150 box in the corner.** A `<canvas>` is a replaced element, so `position: absolute; inset: 0` does *not* stretch it — `width: auto` resolves to the intrinsic 300×150. Map, HUD, toolbar and panels all looked perfect; lines, stops and vehicles were invisible. Every assertion passed, because they asserted the *model* had a line, not that it could be seen. The suite now checks the overlay's CSS box against the viewport and samples it for the line's own colour.
+2. **The MapLibre style was invalid**, so `load` never fired and the map stayed blank. `line-cap` is a *layout* property, not paint; and a `zoom` expression may only be the direct input of a top-level `interpolate`, so wrapping one in `['*', …]` is rejected.
+3. **Land at exactly 0 m was painted as sea.** Marching squares puts a corner equal to the trace level on the low side, so flat zero-height ground read as water — a whole valley floor appeared as a blue tower. Now traced half a metre *below* sea level. Not a fixture quirk: reclaimed coast and polder are plateaux of exact zeros in real elevation data.
+4. **`fetch` has no timeout**, so a dropped connection would hang an import forever behind a frozen progress bar. Overpass and terrain requests now abort and retry.
+
+---
+
+## 3. Decisions on the record
+
+### Phase 0 conflicts — all resolved by Alex, Oct 10 2026
 
 Applied in [config.js](config.js); reasoning and sources in [RESEARCH.md](RESEARCH.md).
 
@@ -129,86 +74,153 @@ Applied in [config.js](config.js); reasoning and sources in [RESEARCH.md](RESEAR
 | --- | --- |
 | **C1** | Tram on-street stays **€15M/km**; the Eno citation is replaced with German project reporting, which is what actually supports the number. |
 | **C2 + C3** | **Metro and train tunnel costs swapped: metro €80M/km, train €120M/km.** Fixes both complaints at once — heavy-rail bores genuinely cost more than metro bores, and €80M/km keeps metro reachable instead of loan-only. Knowingly below the efficient-European band, for playability. |
-| **C4** | Loans are now **3/6/12 years at 4/6/9%**, down from 5/10/20 at 3/5/8. |
+| **C4** | Loans are **3/6/12 years at 4/6/9%**, down from 5/10/20 at 3/5/8. |
 
-### One spec amendment, needs your nod
+Good news from the same research, and worth not relitigating: **the spec's cruise speeds and capacities are right.** They look wrong against real commercial speeds until the dwell is worked through — bus at 25 km/h cruise with a 20 s dwell and 400 m spacing is 18.5 km/h door to door, which is exactly real. `tests/run.js` guards those relationships so a retune can't silently break them.
 
-**One dot no longer always means ten passengers.** It now scales with the region: `passengersPerDot(residents)` in [config.js](config.js), which is 1 for anything up to ~150,000 residents, 10 at a million, capped at 50. The reason is arithmetic, not taste — the visible dot count is roughly `(trips/day × journey length ÷ 18 h) ÷ dot size`, so a town of 40,000 showed about one dot at a time and a village showed none. That was not a bug: a village really does have about four people on its buses at any moment, and four people is less than half a dot. The scale is fixed at import and never changes mid-game, because a dot that silently changed meaning would make every count lie. Every dot↔people conversion now reads one value; there were four hardcoded `× 10`s, including one in the ticket income, which would have silently desynced the money.
+### One spec amendment, applied — flag if you disagree
 
-Good news from the same research: **the spec's cruise speeds and capacities are right.** They look wrong against real commercial speeds until you work the dwell through — bus at 25 km/h cruise with a 20 s dwell and 400 m spacing comes out at 18.5 km/h door to door, which is exactly real. All four modes land in the real range, and all four capacities are a consistent ~60% of crush capacity. `tests/run.js` now guards those numbers so a future retune can't silently break the match.
+**One dot no longer always means ten passengers.** It scales with the region: `passengersPerDot(residents)` in [config.js](config.js) — 1 up to ~150,000 residents, 10 at a million, capped at 50.
+
+The reason is arithmetic, not taste. Visible dots ≈ `(trips/day × journey length ÷ 18 h) ÷ dot size`, so at a fixed 10 a town of 40,000 showed about one dot at a time and a village showed none. That was never a bug: a village really does have about four people on its buses at any moment, and four people is less than half a dot.
+
+The scale is fixed at import and never changes mid-game — a dot that silently changed meaning would make every count on screen a lie. Every dot↔people conversion now reads one value; there were four hardcoded `× 10`s, one of them inside ticket income, which would have silently desynced the money.
+
+### Where the spec was silent
+
+1. **MapLibre v5.24.0, not v6.** v6 ships ESM only — a bare `.mjs` plus separate shared and worker modules, no UMD — which needs a bundler and breaks the no-build-step rule.
+2. **Everything works in local metres.** `LocalFrame` converts lon/lat to metres from the region's SW corner once, at the edges. A 15 km region is flat enough that this is exact to centimetres, and it keeps the grade rule, grids and collision checks in plain metres. **Phase 4 depends heavily on this.**
+3. **Sea polygons by padding the height grid** with a one-cell border of high land before marching squares, so every sea area closes on itself and there is no open coastline to stitch against the region edge.
+4. **Terrain at zoom 12** — 30 m/px at 38°N, 24 m at 52°N. z13 is false precision against ~30 m SRTM source data.
+5. **The fixture is built by the real pipeline.** `make-fixture.js` synthesises OSM elements in Overpass's own JSON shape and runs them through `parseResponses` → `buildGraph` → `processBuildings` → `buildContours`, so its shape cannot drift from real imported data. Only the height grid is analytic.
+6. **Terrain tiles decode via `fetch` + `createImageBitmap`**, not `<img>` + `drawImage`, which would taint the canvas.
+7. **Region cache keys round the centre to 4 decimals** (~10 m), so nudging the square by a pixel reuses the import.
+8. **`meta.populationTotal` holds our computed residents**, not the OSM tag. The tag, when present, scales the floor-area estimate and is then discarded.
+9. **Buildings land in one demand cell by centroid**, not split across cells by area. Cells are 200 m and buildings are metres.
+10. **`POINT_ATTRACTION = 50`** for a standalone POI node. The spec says "a small fixed amount" without naming it. Pure guess — retune when real data is in.
+11. **MapLibre's keyboard handling is disabled**, so 1–4, Space and Esc belong to the game.
+12. **Passengers are not saved.** Transient, would multiply save size, and a reloaded network refills within seconds. Structure, money and satisfaction history survive. A save is under 20 kB and a test enforces it.
+13. **Line segments are re-routed on load, not stored** — derived from stops plus the road graph, so storing them would be larger and a chance to go stale.
+14. **The transfer penalty sits on the walking edge, not on boarding**, so a passenger's first boarding is never penalised — only an actual change of vehicle.
+15. **A finished line is given one vehicle automatically** if affordable. A line with no vehicles carries nobody, and a player who draws one and sees nothing happen has no way to tell what is wrong.
+16. **Lifetime counters** (`game.totals`) alongside instantaneous state. On a sparse network the instant you look is usually between passengers.
+17. **Vehicles are spaced evenly in time, not distance.** Hops differ in length, so distance spacing still bunches vehicles where stops are close.
+18. **Only Bus is enabled**; Tram, Metro and Train buttons are present but disabled. A dead button that says "Tram" tells the player the plan; a missing one tells them nothing.
 
 ---
 
-## What works
+## 4. Live endpoints — all four tested directly
 
-Verified by `npm test` (113 logic assertions) and `npm run test:browser` (36 in real Chromium):
+An earlier note in this file claimed the sandbox could not reach Overpass, Nominatim, the elevation bucket or the OSM tile server. **That was wrong** — the spec said so and it was repeated without checking. All four are reachable, and have now been exercised.
 
-- **Geometry.** `LocalFrame` (lon/lat ↔ local metres), `squareBbox`, `chunkBbox` tiles a bbox with no gaps or drift, ring area and point-in-ring.
-- **Grids.** Terrain height grid with bilinear interpolation (exact on a linear ramp), 200 m demand grid, 10 m building occupancy bitset, 30 m height grid.
-- **Overpass parsing.** Road class filtering (service, footway, path correctly excluded), building/water/rail separation, abandoned rail rejected, chunk-overlap de-duplication, shared OSM nodes collapsing into one graph node so routing crosses way boundaries, building classification into residential and the six attraction categories.
-- **Terrain.** Terrarium decode formula, slippy tile maths, tile→grid resampling, marching-squares contours at 20/100 m, sea polygons.
-- **The fixture.** Every field of the data contract, cross-checked — including regenerating the contours from the stored terrain and confirming they match, which proves the fixture came out of the real pipeline.
-- **Base map GeoJSON.** Major/minor road partition, closed water rings, normalised heat map.
+**Elevation: resolved, no action needed.** `Access-Control-Allow-Origin: *` is present on GET (absent on HEAD, which is what made it look missing at first), so there is no tainted-canvas problem. The decode formula is confirmed against live tiles: London −5…30 m, Athens −3…263 m, Mont Blanc 1,719…**4,790 m** against a true summit of 4,806. `tileXY` is correct.
 
-- **In the browser.** The new-game screen mounts with all four seasons and difficulties; typing in the search box fires no Nominatim request (the policy forbids autocomplete); the fixture loads; MapLibre renders real pixels in the right colours; contour and heat-map toggles work; zoom reveals minor roads; `maxBounds` keeps the player inside the region; IndexedDB round-trips a region; the module worker boots and reports progress; no console or page errors.
+**Nominatim: fine.** Returns results with `extratags` as expected.
 
-Still **unverified** — needs network this sandbox doesn't have: live Overpass import, Nominatim search results, Terrarium elevation decoding.
+**Overpass, problem 1 — it 406s a request with no `User-Agent`.** Browsers always send one, so the game is unaffected. Any Node-side test of the live API must set it. The game cannot set it: `User-Agent` is a forbidden header name and `fetch` silently ignores the attempt. We identify via `Referer`.
 
-## Layout
+**Overpass, problem 2 — it fails on chunk AREA.** Measured over central Athens:
+
+| Box | Result |
+| --- | --- |
+| 1 km | 200, 1.9 MB, 6.5 s |
+| 2 km | 200, 7.5 MB, 18.4 s |
+| 3 km | 504 |
+| 5 km | **504, every time** |
+
+Two fixes. `fetchChunkAdaptive` splits a refused chunk into four and recurses (`OVERPASS_MAX_SUBDIVIDE`, 3 levels, down to 625 m); sparse regions never subdivide and pay nothing. And the chunk grid now derives from a target tile *size* (`OVERPASS_CHUNK_TARGET_KM`, 2.5 km) rather than a fixed 3×3 count — previously a 15 km region began with 5 km chunks, all nine guaranteed to fail, each burning a 2+4+8+16 s retry cycle before subdividing, about four wasted minutes before any real work.
+
+| Region | Grid | Requests | Chunk |
+| --- | --- | --- | --- |
+| 5 km | 2×2 | 4 | 2.50 km |
+| **6 km (default)** | **3×3** | **9** | **2.00 km** |
+| 10 km | 4×4 | 16 | 2.50 km |
+| 15 km | 6×6 | 36 | 2.50 km |
+
+36 requests for the largest region is inside Overpass's ~100/day guidance for a regular user.
+
+**Most 504s are transient and the retry absorbs them.** Running the real `fetchChunkAdaptive` against the centre chunk of a 6 km Athens import: it 504'd, retried, recovered in 4 seconds with no subdivision — 1,249 roads, 7,878 buildings, 4,336 POIs. The same 2 km box had succeeded outright earlier the same day. Overpass has bad minutes; `kumi.systems` was 500ing even on `/api/status`.
+
+### Import cost, and what is left unsolved
+
+At the measured **1.87 MB/km²** for central Athens, payload is the open problem:
+
+| Region | Dense city estimate |
+| --- | --- |
+| 6 km (default) | ~66 MB, a few minutes |
+| 15 km | ~420 MB, 10–20 minutes |
+
+Payload scales with feature *density*, not area — a rural 15 km box may be a few MB, so the slider reaching 15 is genuinely useful outside cities.
+
+The weight is **buildings at 49%** of payload. The spec's "about two minutes" acceptance criterion for a dense 15 km city is not achievable with this query; the default dropping to 6 km is the mitigation applied. The only remaining lever is a vector-tile hybrid for buildings — rejected for now because tile schemas carry no building category, and attraction is floor area × category weight, so it would gut half the demand model.
+
+### The POI trim was worth 2.9%, not the 15–18% estimated
+
+Measured A/B on the same 1 km box: 1,558 shop/amenity nodes become 1,334. Only 224 dropped — benches (34), waste baskets (43), recycling (22), telephones, ATMs, postboxes, parking entrances. The earlier 18% figure was the share of *all* POI nodes, and the list keeps 86% of them.
+
+**Kept anyway, because it is a correctness fix.** Every POI node contributes `POINT_ATTRACTION`, so a park bench was generating as much trip attraction as a bakery, and about 14% of point attraction in that sample was street furniture. Worse in suburbs, where benches and parking outnumber shops.
+
+---
+
+## 5. What works
+
+Verified by `npm test` (257) and `npm run test:browser` (68).
+
+**Phase 1.** `LocalFrame` and the bbox/chunk maths; terrain height grid with bilinear interpolation (exact on a ramp); 200 m demand grid; 10 m occupancy bitset; Overpass parsing with road-class filtering, abandoned-rail rejection, chunk-overlap de-duplication and shared-node collapsing; Terrarium decode and tile resampling; marching-squares contours and sea polygons; the base-map GeoJSON. In the browser: the new-game screen, search firing no request while typing, MapLibre rendering real pixels, layer toggles, zoom revealing minor roads, `maxBounds`, IndexedDB round-trips, the module worker booting.
+
+**Phase 2.** The two clocks reconciling to an 18-hour service day; Dijkstra road routing; catchments and the sparse O-D pair table; seasonal multipliers (Tourist swells in August) and fare elasticity at exactly 2^−0.3; the platform graph with transfers costing a wait and a penalty while staying aboard is free; vehicles shuttling and looping, spaced evenly in time; patience, the grace period, satisfaction dropping 0.15 and recovering 0.02/day; tickets, advertising, running costs, maintenance, Hard's twelve-month game over; save/load round-tripping stops, lines, vehicle positions, balance and calendar.
+
+**Acceptance, asserted in code:** two bus lines sharing an interchange carry passengers who transfer and arrive; neglected routes visibly dip; money moves; a reload restores the game exactly.
+
+---
+
+## 6. Layout
 
 ```
-index.html  style.css  config.js  main.js      package.json (no deps; vendored pin)
+index.html  style.css  config.js  main.js      package.json (no runtime deps)
 data/    overpass.js  terrain.js  import.worker.js  cache.js
-model/   region.js (contract, frame, grids)  population.js
-render/  basemap.js (MapLibre style)  overlay.js (Canvas 2D)
-ui/      new-game.js  strings.js
-vendor/  maplibre-gl.js  maplibre-gl.css  LICENSE.txt     (v5.24.0, UMD)
-fixtures/ make-fixture.js  test-region.json              (npm run fixture)
-tests/   run.js (npm test)  browser.js (npm run test:browser)  screenshots/
+model/   region.js (contract, frame, grids)  population.js  network.js  save.js
+build/   road-routing.js                     ← track-geometry.js arrives in Phase 3
+sim/     clock.js  demand.js  routing.js  vehicles.js  passengers.js
+         economy.js  game.js
+render/  basemap.js (MapLibre style)  overlay.js (Canvas 2D)  shapes.js
+ui/      new-game.js  hud.js  toolbar.js  panels.js  strings.js
+vendor/  maplibre-gl.js  maplibre-gl.css  LICENSE.txt      (v5.24.0, UMD)
+fixtures/ make-fixture.js  test-region.json               (npm run fixture)
+tests/   run.js  phase2.js  browser.js  screenshots/
 ```
 
-Not yet created, and deliberately so: `build/`, `sim/`, `ui/hud.js`, `ui/toolbar.js`, `ui/panels.js`, `model/network.js`, `model/save.js`, `render/shapes.js`. They arrive with the phase that needs them.
+The fixture is a 6×6 km synthetic coast: a bay in the south-west, a lake, a river, a ridge with a notched valley (for Phase 4's tunnels and bridges), a motorway, a pedestrian street, a road tunnel and bridge, an existing railway with three stations, and an abandoned branch the parser must reject. **41,828 residents, ~1,162/km²** — a small town, so `passengersPerDot` is 1.
 
-## Decisions I made where the spec was silent
+---
 
-1. **MapLibre v5.24.0, not v6.** v6 ships ESM only — a bare `.mjs` plus a separate shared chunk and worker module, no UMD — which would need a bundler and break the no-build-step rule. v5 is one `<script>` tag. [RESEARCH.md §5](RESEARCH.md).
-2. **Everything works in local metres.** `LocalFrame` converts lon/lat to metres from the region's SW corner once, at the edges. A 15 km region is flat enough that this is exact to centimetres, and it keeps the grade rule, the grids and collision checks in plain metres with no projection maths scattered about. Phase 4 depends heavily on this.
-3. **Sea polygons by padding the height grid.** The spec avoided coastline polygons because closing them against the region edge is fiddly. Padding the grid with a one-cell border of high land before marching squares makes every sea area close on itself, so there is nothing to stitch. Costs one cell of inset, invisible at play zoom.
-4. **Terrain at zoom 12.** Arithmetic, not taste: z12 is 30 m/px at 38°N and 24 m at 52°N, which is the spec's "about 30 m cells", and z13 is false precision against ~30 m SRTM source data.
-5. **The fixture is built by the real pipeline.** `make-fixture.js` synthesises OSM elements in Overpass's own JSON shape and runs them through `parseResponses` → `buildGraph` → `processBuildings` → `buildContours`. The shape therefore cannot drift from real imported data, and the tests exercise the real parser. Only the height grid is analytic, because tiles have no offline substitute.
-6. **Terrain tiles decode via `fetch` + `createImageBitmap`**, not `<img>` + `drawImage`, because the latter taints the canvas on a cross-origin image and `getImageData` then throws.
-7. **Region cache keys round the centre to 4 decimals** (~10 m), so nudging the square by a pixel reuses the import instead of refetching it.
-8. **`meta.populationTotal` holds our computed residents**, not the OSM tag. The tag, when present, is used to scale the floor-area estimate and is then discarded.
-9. **Buildings land in one demand cell**, by centroid, rather than being split across cells by area. Cells are 200 m and buildings are metres; splitting would be more correct and invisible.
-10. **`POINT_ATTRACTION = 50`** for a standalone shop or amenity node. The spec says "a small fixed amount each" without naming it. Pure guess — retune in Phase 2.
-11. **MapLibre's keyboard handling is disabled**, so 1–4, Space and Esc are free for the game as the spec's keyboard section requires.
-12. **The heat map shows total demand in Phase 1.** With no stops, nothing is served, so total demand *is* unserved demand. Phase 2 swaps the numbers via `setHeatMapData`; the geometry never changes.
+## 7. Known gaps
 
-## Known gaps and limitations
-
-- **Water from multipolygon relations is not imported.** We query and parse `way["natural"="water"]` only. Big lakes and most coastal water in OSM are relations, so a region with one will be missing it. The sea mask comes from elevation and is unaffected. Worth fixing early in Phase 2 if a region you care about looks wrong.
-- **A land island inside a sea area is painted as sea.** The sea tracer returns the island as its own ring rather than a hole. Rare at 15 km; the fix is ring-containment tests, not worth the code until a region needs it.
-- **The fixture is sparse** — 9,258 residents over 6×6 km, 720 buildings. Fine for testing logic, not representative of a real city's density. Don't tune demand constants against it; tune them against a real import.
-- **No save/load yet.** `data/cache.js` has the save-slot stores ready and unused. Phase 2.
-- **Nominatim's `population` extratag is often absent**, so most regions will fall back to our floor-area estimate. The new-game screen has no "type the population" field yet, which the spec allows for — add it in Phase 2 if the estimates look off.
+- **Dragging to shape a route is not implemented.** The spec's via-points (drag between two stops to force a different road route) are not wired to the mouse, though `RoadIndex.pathThrough` supports them. Belongs with tram off-road dragging in Phase 3 — same gesture.
+- **Edit stops is select-only.** Dragging a stop to move it and clicking a segment to insert one are unwired; `Network.insertStop` and `removeStopFromLine` exist and are tested.
+- **No cost preview follows the cursor** while building.
+- **Water from multipolygon relations is not imported.** Only `way[natural=water]`. Big lakes and most coastal water in OSM are relations, so a region with one will be missing it. The sea mask comes from elevation and is unaffected.
+- **A land island inside a sea area is painted as sea** — the tracer returns it as its own ring, not a hole. Rare; fix is ring-containment tests.
+- **Save slots are one slot** in the UI. `model/save.js` supports any number.
+- **`revalidateDots` releases passengers aboard a deleted line** at the next stop rather than somewhere sensible.
+- **Nominatim's `population` extratag is often absent**, and the new-game screen has no "type the population" field, which the spec allows for.
 - **One-way roads are ignored**, per the spec's v1 decision.
+- **Import payload** — see §4. Unsolved, mitigated by the smaller default.
 
-## Next: Phase 2 — buses and passengers
+---
 
-The core loop. Bus lines and stops, vehicles, demand grid and heat map, passenger spawning, routing with transfers, patience and satisfaction, tickets and running costs, HUD, speed controls, save and load.
+## 8. Next: Phase 3 — trams
 
-Accept when: two bus lines sharing an interchange carry passengers who transfer and arrive; neglected stops lose passengers and ridership dips; money moves; a reload restores the game exactly.
+Tram-road snapping, on-street track, off-road dragging, the grade rule for off-road segments, tram visuals.
 
-Suggested order, since this phase is the largest:
+**Accept when:** a tram line follows only allowed roads, a dragged segment leaves the road at a higher price, and a steep off-road segment gets a tunnel by itself.
 
-1. `sim/clock.js` — the two clocks. `CLOCK.DAILY_SCALE` is already correct and tested at 324.
-2. `model/network.js` — stops, lines, the interchange rule (150 m).
-3. `build/road-routing.js` — Dijkstra on the road graph between consecutive stops. The graph already collapses shared nodes, so this should be straightforward.
-4. `sim/demand.js` — catchments, the pair table, spawning. Recompute only on network or month change, store sparsely.
-5. `sim/routing.js` — the (stop, line) platform graph and passenger Dijkstra.
-6. `sim/vehicles.js`, `sim/passengers.js` — movement, boarding, patience. Don't forget `PATIENCE.GRACE_SIM_S`: it is Mini Metro's 2-second grace, and it is the single rule that makes waiting feel fair rather than punishing.
-7. `sim/economy.js` — tickets, advertising, running costs.
-8. `ui/hud.js`, `ui/toolbar.js`, `ui/panels.js`, `render/shapes.js`.
-9. `model/save.js` — IndexedDB slots plus JSON export/import.
+Most of the scaffolding exists:
 
-The canvas overlay is already wired to MapLibre's `render` event with device-pixel scaling handled, and draws through `Overlay.painters` — Phase 2 pushes painters onto that array rather than touching the sync logic. `main.js` currently builds the Phase 1 toolbar (three toggles) inline; move it to `ui/toolbar.js` when the mode and tool buttons arrive.
+1. **Road restriction is done.** `BUILD.TRAM_ROADS` and `RoadIndex.snap(lon, lat, 'tram')` already limit trams to trunk/primary/secondary/tertiary (+links) and pedestrian streets. The fixture has a pedestrian street ("Market Walk") and plenty of residential roads to prove both sides of the rule.
+2. **Tram visuals are done.** The dotted-circle line pattern and rounded-end vehicle shape are in [render/shapes.js](render/shapes.js) and selected by mode, so enabling Tram should just work.
+3. **Enable `'tram'` in `PHASE_2_MODES`** in [ui/toolbar.js](ui/toolbar.js) — and rename that constant.
+4. **The new work is `build/track-geometry.js`**: the spline for dragged off-road segments, the grade rule, and structure classification. [model/region.js](model/region.js) already provides `heightAt` (bilinear, tested exact on a ramp) and `isOccupied` for the building collision check. The fixture's ridge and notched valley exist specifically so tunnels and bridges have something to find.
+5. **Dragging is the shared gesture.** Implementing off-road tram drags also gives bus via-points for free — do them together.
+
+Watch out for: the grade rule samples every 20 m (`BUILD.SAMPLE_M`) against a ~30 m height grid, which is why `heightAt` interpolates rather than snapping. Don't change that to nearest-cell or the smoothed profile will step.

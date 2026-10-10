@@ -6,8 +6,11 @@
  *
  * Values marked [spec] come straight from the design spec. Values marked
  * [research] were pinned down in Phase 0 — see RESEARCH.md for the source.
- * Four figures are disputed and waiting on Alex; they are marked [C1]..[C4]
- * and are set to the SPEC value, not the suggested one, until he decides.
+ *
+ * Four figures were disputed and are now resolved by Alex (Oct 10, 2026);
+ * they are marked [C1]..[C4] at the value they were settled on. One further
+ * value departs from the spec deliberately — `passengersPerDot` — and says so
+ * where it is defined. Everything else matches the spec as written.
  */
 
 // ─── Region and import ────────────────────────────────────────────────────────

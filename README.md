@@ -15,12 +15,12 @@ npm start          # python3 -m http.server 8000
 # then open http://localhost:8000
 ```
 
-Click **Use the test region** for a synthetic region that needs no network at all, or search a real place and import it.
+Click **Use the test region** for a synthetic region that needs no network at all, or search a real place and import it. Regions default to 6 × 6 km; the slider reaches 15 km, which is comfortable for rural areas and slow for dense cities.
 
 Serve it over `http://` — don't open `index.html` as a `file://` URL. ES modules, the import worker and the OSM services all need a real origin.
 
 ```bash
-npm test               # 240 logic assertions, plain Node, no framework, no dependencies
+npm test               # 257 logic assertions, plain Node, no framework, no dependencies
 npm run test:browser   # 68 assertions driving real Chromium (needs: npm install)
 npm run fixture        # regenerate fixtures/test-region.json
 ```
@@ -49,6 +49,6 @@ The game follows the OSMF usage policies for [tiles](https://operations.osmfound
 ## Documents
 
 - [HANDOFF.md](HANDOFF.md) — current phase, what works, known gaps, next steps. Read first.
-- [RESEARCH.md](RESEARCH.md) — Phase 0: what to borrow from Mini Metro and Cities: Skylines, every cost and speed figure checked against public sources, the endpoint policies, and four figures that need a decision.
+- [RESEARCH.md](RESEARCH.md) — Phase 0: what to borrow from Mini Metro and Cities: Skylines, every cost and speed figure checked against public sources, the endpoint policies, and the four disputed figures (since resolved).
 - `Open Transit On Map Info Game — Build Prompt & Design Spec.md` — the design spec.
 - [config.js](config.js) — every tunable number in the game. There are no magic numbers anywhere else.
