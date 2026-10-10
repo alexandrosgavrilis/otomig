@@ -2,8 +2,8 @@
 
 Read this first in every session. Update it last.
 
-**State:** Phases 0, 1 and 2 complete. Verified in a real browser against the fixture; the live import has never been run end to end.
-**Last session:** Oct 10, 2026 — Phase 0 (research), Phase 1 (region and map), Phase 2 (buses and passengers).
+**State:** Phases 0, 1, 2 and R complete. Verified in a real browser against the fixture **and against a real live import of central Athens**, which found two bugs no fixture could have (§1).
+**Last session:** Oct 10, 2026 — Phase 0 (research), Phase 1 (region and map), Phase 2 (buses and passengers), Phase R (data architecture), first live import.
 
 **Phase R is done, and it cancelled Phase D.** See [RESEARCH_TILES.md](RESEARCH_TILES.md).
 
@@ -23,7 +23,9 @@ The reason Phase R was ordered before Phase 3 was that a data-layer rewrite woul
 
 ### Push — resolved, and `gh` is authenticated
 
-`https://github.com/alexandrosgavrilis/otomig` exists and `main` tracks it. `gh` 2.102.0 at `~/.local/bin/gh` is logged in as `alexandrosgavrilis` with the token in the keyring, which also configured git's credential helper — so `git push` works in later sessions with no prompt. The 2021 password-auth problem recorded here before is gone.
+`https://github.com/alexandrosgavrilis/otomig` exists, `main` tracks it, and everything through Phase R is pushed. The 2021 password-auth problem recorded here before is gone.
+
+`gh` 2.102.0 at `~/.local/bin/gh` is logged in as `alexandrosgavrilis` with the token in the keyring. **Being logged in to `gh` is not enough on its own** — `git push` still failed with `could not read Username for 'https://github.com'` until `gh auth setup-git` was run, which installs `credential.https://github.com.helper = !gh auth git-credential`. That is now configured globally, so pushes need no prompt. If a future machine hits the same error, that one command is the fix.
 
 **The repo is PUBLIC**, deliberately. The earlier instruction in this file said `--private`; Alex's decision on Oct 10 2026 was to leave it public, because nothing in the project needs to be secret. There are no API keys anywhere — Overpass, Nominatim and the elevation tiles all work keyless, and that is a property worth keeping. Say so in any future README edit rather than re-raising it.
 
@@ -37,20 +39,48 @@ npm start      # then open http://localhost:8000
 
 **Never open `index.html` as a `file://` URL.** `User-Agent` is a forbidden header name, so a browser silently ignores any attempt to set it; we identify to the OSM services via `Referer`, which is only sent over `http://`.
 
-**This no longer needs a human.** Phase 0 recorded that the sandbox could not reach the OSM endpoints, which was false — Phase R exercised all of them directly. So the live import can be driven by Playwright like the rest of the browser suite, and `npm run test:live` does exactly that. See §2.
+**Done, Oct 10 2026 — and it found two bugs that the fixture could never have caught.** Phase 0 recorded that the sandbox could not reach the OSM endpoints, which was false, so this is automated now: `npm run test:live` drives a real import of central Athens through Chromium. 24 assertions. See §2.
+
+Central Athens, 5 km, as actually imported:
+
+| | |
+| --- | --- |
+| road edges / nodes | 25,974 / 21,172 |
+| buildings | 51,700 — **2,068/km²**, against Phase R's 1,835/km² ground truth |
+| residents | 502,376 — **20,095/km²**, against a real ~20,000/km² |
+| rail edges / stations | 221 / 19 |
+| elevation | 27.5 m … 257.1 m, 50 contour features |
+| region JSON | 13.3 MB (6.3 MB in IndexedDB) |
+| import | ~50–120 s, 5–10 Overpass requests; cached reload ~9 s |
+
+**The population model is calibrated.** `M2_PER_RESIDENT: 40` and `DEFAULT_LEVELS: 2` put central Athens within 0.5% of its real density. That was a guess in Phase 1 and is now a measurement.
+
+### The two bugs
+
+Both would have reached Alex as a broken screen, and both were invisible to 272 passing unit tests.
+
+1. **The whole map was sea.** `fetchTerrariumTile` sized its output array from `bitmap.width` *after* calling `bitmap.close()`, which sets width and height to 0. Every tile decoded to a zero-length `Float32Array`, every height sampled back as `undefined`, every contour vanished, and the sea mask swallowed the region. Nothing threw. The unit tests never caught it because they feed `sampleTilesToGrid` synthetic `Float32Array`s and never call `fetchTerrariumTile` — the bug lived entirely in the four lines no test could reach. `sampleTilesToGrid` now rejects a wrongly-sized tile instead of writing `undefined` into the grid.
+
+2. **Overpass reports failure with HTTP 200.** A query that times out or runs out of memory server-side returns **200** with an empty `elements` array and a `remark` saying why. `fetchChunk` treated any 200 as success, so a loaded Overpass produced a silently empty region — no roads, no buildings, no error, just a blank blue map. The remark is now treated as the failure it is, and it feeds the existing retry and subdivision logic because the wording contains "timed out". `importRegion` also refuses outright to build a region with zero roads, as a backstop.
+
+**Test-design note worth keeping.** The test first geocoded `"Athens"` and used Nominatim's first result. That result moves between calls, and some of those points put a 5 km box mostly out to sea — which legitimately imports almost nothing and made the test fail at random. It now geocodes `"Syntagma Square, Athens"`. Live tests need a *stable* subject, or their failures teach you nothing.
 
 ---
 
 ## 2. Testing
 
 ```bash
-npm test                            # 270 logic assertions, plain Node, no dependencies
+npm test                            # 274 logic assertions, plain Node, no dependencies
 npm run test:browser                # 75 assertions in real Chromium via Playwright
 npm run test:browser -- --headed    # ...and watch it
+npm run test:live                   # 24 assertions against a REAL import — hits live OSM services
+npm run test:live -- --km 5         # ...at a given size (default 5, the slider minimum)
 npm run fixture                     # regenerate fixtures/test-region.json
 ```
 
 The browser suite serves on **port 4001**, loads the fixture, and checks that MapLibre genuinely renders by sampling pixels rather than trusting the `load` event. Screenshots land in `tests/screenshots/` — **look at them.** They have caught things no assertion did.
+
+`test:live` serves on **port 4002** and is deliberately *not* part of `npm test` or `test:browser`: it geocodes through Nominatim, pulls a real region from Overpass and fetches real elevation tiles. One import of one small region is well inside casual use — **do not loop it.** Overpass is also genuinely flaky, so an occasional retry in its output is normal rather than a regression. Its screenshots are `tests/screenshots/live-*.png`.
 
 Playwright is a devDependency. `npm test` stays dependency-free.
 

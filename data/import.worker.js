@@ -78,6 +78,17 @@ export async function importRegion(request, onProgress) {
 
   const parsed = parseResponses(responses);
 
+  // A region with no roads is not a place you can run buses in, and in practice
+  // it never means "we picked an empty bit of sea" — it means every chunk came
+  // back empty and nothing noticed. Overpass used to manage that with HTTP 200
+  // responses carrying a `remark`; `fetchChunk` now rejects those, and this is
+  // the backstop. Failing here gives the player a message instead of a blank
+  // blue map they cannot do anything with.
+  if (parsed.roadWays.length === 0) {
+    throw new Error('No roads found in this area. If it is not genuinely empty, ' +
+      'Overpass may be overloaded — wait a minute and try again.');
+  }
+
   // 2. Road and rail graphs.
   onProgress('graph', 0, 1);
   const roads = buildGraph(parsed.roadWays, parsed.nodes, frame);

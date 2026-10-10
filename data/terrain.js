@@ -42,13 +42,20 @@ export async function fetchTerrariumTile(url) {
   if (!response.ok) throw new Error(`terrain tile ${url}: HTTP ${response.status}`);
   const bitmap = await createImageBitmap(await response.blob());
 
-  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+  // Read the dimensions out before closing. `ImageBitmap.close()` releases the
+  // image and sets width and height to 0, so sizing the output array from
+  // `bitmap.width` afterwards silently produces a zero-length Float32Array:
+  // the decode loop never runs, every sample reads back `undefined`, and the
+  // whole region renders as sea. Found by the first live import.
+  const { width, height } = bitmap;
+
+  const canvas = new OffscreenCanvas(width, height);
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   ctx.drawImage(bitmap, 0, 0);
-  const { data } = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+  const { data } = ctx.getImageData(0, 0, width, height);
   bitmap.close();
 
-  const heights = new Float32Array(bitmap.width * bitmap.height);
+  const heights = new Float32Array(width * height);
   for (let i = 0, p = 0; i < heights.length; i++, p += 4) {
     heights[i] = data[p] * 256 + data[p + 1] + data[p + 2] / 256 - REGION.TERRAIN_OFFSET;
   }
@@ -112,6 +119,12 @@ export function sampleTilesToGrid(frame, tiles, z) {
       const tx = Math.floor(fx), ty = Math.floor(fy);
       const tile = tiles.get(`${tx}/${ty}`);
       if (!tile) continue; // Outside what we fetched; leave at 0.
+      // A tile of the wrong size can only mean the decode went wrong, and
+      // reading past the end would quietly write `undefined` into the grid —
+      // which renders as sea and traces no contours. Fail loudly instead.
+      if (tile.length !== 256 * 256) {
+        throw new Error(`terrain tile ${tx}/${ty} has ${tile.length} samples, expected 65536`);
+      }
       const px = Math.min(255, Math.floor((fx - tx) * 256));
       const py = Math.min(255, Math.floor((fy - ty) * 256));
       values[row * cols + col] = tile[py * 256 + px];

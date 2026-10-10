@@ -92,7 +92,24 @@ export async function fetchChunk(bbox, log) {
       continue;
     }
 
-    if (response.ok) return response.json();
+    if (response.ok) {
+      const json = await response.json();
+      // Overpass does not always signal failure with a status code. A query
+      // that times out or runs out of memory server-side comes back as
+      // **HTTP 200** with an empty `elements` array and a `remark` explaining
+      // why. Treated as success it silently yields a region with no roads and
+      // no buildings, which reaches the player as an empty blue map with no
+      // error — exactly what the first live imports produced. Treat it as the
+      // failure it is, and let the retry and subdivision logic handle it.
+      if (json.remark) {
+        if (lastAttempt) throw new Error(`Overpass: ${json.remark}`);
+        log?.(`Overpass could not finish the query, retrying in ${delay / 1000}s`);
+        await new Promise((r) => setTimeout(r, delay));
+        delay *= 2;
+        continue;
+      }
+      return json;
+    }
 
     const retryable = response.status === 429 || response.status === 504;
     if (!retryable || lastAttempt) throw new Error(`Overpass HTTP ${response.status}`);
@@ -150,8 +167,12 @@ export async function fetchChunkAdaptive(bbox, log, depth = 0) {
     const message = String(error?.message || error);
     // 504 and timeouts mean "too much to build". A 400 means our query is
     // wrong and splitting it would just fail four times as slowly.
+    // Overpass's own `remark` wording is included: it reports a server-side
+    // give-up as "runtime error: Query timed out" or "out of memory", both of
+    // which a smaller box can fix.
     const tooHeavy = message.includes('504') || message.includes('timed out') ||
-      message.includes('unreachable');
+      message.includes('unreachable') || message.includes('out of memory') ||
+      message.includes('runtime error');
     if (!tooHeavy) throw error;
 
     log?.('Area too dense for one query — splitting it');

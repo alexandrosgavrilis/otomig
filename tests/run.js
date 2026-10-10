@@ -17,7 +17,7 @@ import {
   heightAt, isOccupied, setOccupied, makeOccupancy, ringAreaM2, pointInRing,
   reviveRegion,
 } from '../model/region.js';
-import { parseResponses, buildGraph, classifyBuilding, buildQuery } from '../data/overpass.js';
+import { parseResponses, buildGraph, classifyBuilding, buildQuery, fetchChunk } from '../data/overpass.js';
 import { processBuildings } from '../model/population.js';
 import { tileXY, tileNW, buildContours, buildSeaPolygons, sampleTilesToGrid } from '../data/terrain.js';
 import {
@@ -161,6 +161,49 @@ for (const [mode, [spacingM, lowKmh, highKmh]] of Object.entries(EFFECTIVE)) {
   check('sampled grid has the configured cell size', grid.cellM === REGION.HEIGHT_CELL_M);
   check('sampled grid reads the tile values', grid.values.every((v) => v === 123),
     `found ${grid.values.filter((v) => v !== 123).length} wrong cells`);
+  check('every sampled height is a real number', grid.values.every(Number.isFinite));
+
+  // The first live import produced a region that was entirely sea, because
+  // `fetchTerrariumTile` sized its output from `bitmap.width` *after* calling
+  // `bitmap.close()`, which zeroes it. Every tile came back empty, every
+  // sample read `undefined`, and nothing complained. The resampler now refuses
+  // a wrongly-sized tile rather than writing undefined into the grid.
+  const empty = new Map(tiles);
+  empty.set(`${tx}/${ty}`, new Float32Array(0));
+  let threw = false;
+  try { sampleTilesToGrid(frame, empty, z); } catch { threw = true; }
+  check('a zero-length terrain tile is rejected, not silently sampled', threw);
+}
+
+// ─── Overpass failure modes ───────────────────────────────────────────────────
+
+{
+  // Overpass reports a server-side give-up as HTTP 200 with a `remark` and an
+  // empty `elements` array, not as an error status. The first live imports
+  // produced completely empty regions this way — no roads, no buildings, no
+  // error — and reached the screen as a blank blue map. Stub `fetch` and prove
+  // the remark is treated as a failure.
+  const realFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ version: 0.6, remark: 'runtime error: Query timed out', elements: [] }),
+    };
+  };
+  let message = '';
+  try {
+    await fetchChunk([23.7, 37.9, 23.8, 38.0]);
+  } catch (error) {
+    message = String(error.message);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  check('an Overpass 200 carrying a remark is rejected, not imported as empty',
+    message.includes('Query timed out'), `got "${message}"`);
+  check('...and it was retried before giving up', calls > 1, `${calls} attempts`);
 }
 
 // ─── Overpass parsing ─────────────────────────────────────────────────────────
