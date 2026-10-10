@@ -20,6 +20,7 @@ import {
 import { parseResponses, buildGraph, classifyBuilding } from '../data/overpass.js';
 import { tileXY, tileNW, buildContours, buildSeaPolygons, sampleTilesToGrid } from '../data/terrain.js';
 import { roadsToGeoJSON, waterToGeoJSON, demandToGeoJSON } from '../render/basemap.js';
+import { runPhase2Tests } from './phase2.js';
 
 let passed = 0;
 const failures = [];
@@ -367,6 +368,10 @@ check('some contours are major', region.contours.features.some((f) => f.properti
   check('heat map reaches full intensity somewhere',
     heat.features.some((f) => f.properties.intensity > 0.9));
 }
+
+// ─── Phase 2: the core loop ───────────────────────────────────────────────────
+
+runPhase2Tests(check, near);
 
 // ─── report ───────────────────────────────────────────────────────────────────
 

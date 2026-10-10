@@ -57,6 +57,59 @@ export const STRINGS = {
     lastMonth: 'Last month',
     paused: 'Paused',
     thousands: 'k',
+    monthsLeft: 'months left',
+  },
+
+  panel: {
+    line: 'line',
+    stop: 'Stop',
+    finances: 'Finances',
+    vehicles: 'Vehicles',
+    vehicleCost: 'Each',
+    headway: 'Headway',
+    headwayCapped: 'Any more and vehicles would run less than a minute apart.',
+    length: 'Length',
+    stops: 'Stops',
+    loop: 'loop',
+    ridersNow: 'Riders now',
+    ridersPerDay: 'Riders per day',
+    deleteLine: 'Delete line',
+    deleteStop: 'Delete stop',
+    waiting: 'Waiting',
+    longestWait: 'Longest wait',
+    residents: 'Residents in catchment',
+    interchange: 'Interchange',
+    noLines: 'No lines call here yet.',
+    yes: 'Yes',
+    no: 'No',
+  },
+
+  finance: {
+    tickets: 'Tickets',
+    advertising: 'Advertising',
+    subsidy: 'Coverage subsidy',
+    running: 'Running costs',
+    maintenance: 'Maintenance',
+    construction: 'Construction',
+    net: 'Net this month',
+    lastMonth: 'Last month',
+    coverage: 'Residents covered',
+    difficulty: 'Difficulty',
+  },
+
+  saves: {
+    title: 'Save and load',
+    save: 'Save',
+    load: 'Load',
+    export: 'Export file',
+    import: 'Import file',
+    autosave: 'Autosave',
+    saved: 'Saved.',
+    loaded: 'Loaded.',
+    noSave: 'Nothing saved in that slot.',
+    regionMissing: 'That save needs a region this browser has not imported.',
+    badFile: 'That file is not an OTOMIG save.',
+    badVersion: 'That save was made by a different version.',
   },
 
   toolbar: {
@@ -72,6 +125,7 @@ export const STRINGS = {
     heatMap: 'Demand',
     contours: 'Contours',
     underlay: 'Real map',
+    finances: 'Finances',
   },
 
   region: {
@@ -82,8 +136,22 @@ export const STRINGS = {
     noRail: 'No existing railway',
   },
 
+  gameOver: {
+    title: 'The network could not pay its way.',
+    body: 'Twelve months in the red. Hard is meant to be tight — on a small '
+      + 'region a bus line or two may be all it can ever support.',
+    again: 'Start again',
+  },
+
   errors: {
     tooFarFromRoad: 'Too far from a road.',
+    cannotAfford: 'Not enough money.',
+    noRoadPath: 'No road route between those stops.',
+    alreadyOnLine: 'That stop is already on this line.',
+    lineIsLoop: 'This line is a closed loop.',
+    noDraft: 'Start a line first.',
+    pickALine: 'Click a stop on the line you want to extend.',
+    nothingThere: 'Nothing to remove there.',
     noTrackPath: 'No connected track between those stations.',
     blockedByBuilding: 'Buildings in the way.',
     crossingTooShallow: 'Crossing the road too shallowly.',

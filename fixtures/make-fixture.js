@@ -221,17 +221,24 @@ function random() {
 /**
  * Fill the blocks with buildings: dense and tall near the centre, sparse and
  * low at the edges, nothing in the water or on the ridge top.
+ *
+ * Density is tuned to give roughly 1,500 residents per km² — a small real
+ * town. An earlier, thinner version produced about 250/km², and at that
+ * density the demand model is arithmetically correct but spawns well under
+ * one passenger dot per in-game day, so the core loop could not be observed
+ * in the fixture at all. A test fixture has to be dense enough to exercise
+ * what it is testing.
  */
 const CENTRE_X = 3000, CENTRE_Y = 2800;
 for (let bx = BLOCK; bx < W - BLOCK; bx += BLOCK) {
   for (let by = BLOCK; by < H - BLOCK; by += BLOCK) {
     const fromCentre = Math.hypot(bx - CENTRE_X, by - CENTRE_Y) / 1000;
     // Density falls off from the centre; the ridge is too steep to build on.
-    const density = Math.max(0, 1 - fromCentre / 3.2);
+    const density = Math.max(0, 1 - fromCentre / 4.6);
     const steep = heightAtLocal(bx, by) > 120;
     if (steep || random() > density) continue;
 
-    const perBlock = 2 + Math.floor(random() * 4);
+    const perBlock = 4 + Math.floor(random() * 6);
     for (let i = 0; i < perBlock; i++) {
       const cx = bx + 20 + random() * (BLOCK - 70);
       const cy = by + 20 + random() * (BLOCK - 70);
@@ -239,9 +246,9 @@ for (let bx = BLOCK; bx < W - BLOCK; bx += BLOCK) {
 
       const w = 8 + random() * 16;
       const h = 8 + random() * 16;
-      const levels = fromCentre < 0.8 ? 4 + Math.floor(random() * 5)
-        : fromCentre < 1.8 ? 2 + Math.floor(random() * 3)
-        : 1 + Math.floor(random() * 2);
+      const levels = fromCentre < 0.8 ? 5 + Math.floor(random() * 6)
+        : fromCentre < 1.8 ? 3 + Math.floor(random() * 4)
+        : 2 + Math.floor(random() * 3);
 
       // A commercial core, residential elsewhere.
       const commercial = fromCentre < 0.9 && random() < 0.6;

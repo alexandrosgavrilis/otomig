@@ -4,7 +4,7 @@ A transit sandbox with Mini Metro's look and drawing feel and Cities: Skylines' 
 
 You draw bus, tram, metro and train lines. Passengers appear where people live and want to go. Money comes from tickets, coverage subsidies and advertising. There is no win condition — a good network settles into balance. Some places can only ever support a bus line or two, and that is fine.
 
-**Status:** Phase 1 of 7 (region and map). See [HANDOFF.md](HANDOFF.md).
+**Status:** Phases 0–2 of 7 done — region import, base map, and the bus core loop (lines, passengers, transfers, money, save/load). See [HANDOFF.md](HANDOFF.md).
 
 ## Running it
 
@@ -20,8 +20,8 @@ Click **Use the test region** for a synthetic region that needs no network at al
 Serve it over `http://` — don't open `index.html` as a `file://` URL. ES modules, the import worker and the OSM services all need a real origin.
 
 ```bash
-npm test               # 113 logic assertions, plain Node, no framework, no dependencies
-npm run test:browser   # 36 assertions driving real Chromium (needs: npm install)
+npm test               # 240 logic assertions, plain Node, no framework, no dependencies
+npm run test:browser   # 68 assertions driving real Chromium (needs: npm install)
 npm run fixture        # regenerate fixtures/test-region.json
 ```
 

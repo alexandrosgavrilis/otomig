@@ -1,0 +1,89 @@
+/**
+ * The top bar: balance, date, speed, and the two headline numbers.
+ *
+ * The spec's headline numbers are passengers transported (cumulative, in
+ * thousands) and passengers on the network right now. The first is scaled to a
+ * daily total; the second never is. Keeping them side by side makes the
+ * difference between "how much work has this network done" and "how busy is it
+ * this second" legible without any explanation.
+ */
+
+import { CLOCK } from '../config.js';
+import { formatMoney, formatThousands } from '../sim/economy.js';
+import { formatDate } from '../sim/clock.js';
+import { STRINGS } from './strings.js';
+
+export function mountHud(root, game) {
+  root.innerHTML = `
+    <div class="topbar">
+      <div class="stat" id="hud-balance-wrap">
+        <b id="hud-balance">—</b><span>${STRINGS.hud.balance}</span>
+      </div>
+      <div class="stat">
+        <b id="hud-date">—</b><span id="hud-season">—</span>
+      </div>
+      <div class="speeds" id="hud-speeds">
+        ${CLOCK.SPEEDS.map((speed, index) => `
+          <button type="button" data-speed="${index}" class="${index === 0 ? 'on' : ''}"
+            title="${speed === 0 ? STRINGS.hud.paused : `${speed}×`}">
+            ${speed === 0 ? '❙❙' : `${speed}×`}
+          </button>`).join('')}
+      </div>
+      <div class="spacer"></div>
+      <div class="stat">
+        <b id="hud-transported">0k</b><span>${STRINGS.hud.transported}</span>
+      </div>
+      <div class="stat">
+        <b id="hud-onnetwork">0</b><span>${STRINGS.hud.onNetwork}</span>
+      </div>
+      <div class="stat" id="hud-lastmonth-wrap">
+        <b id="hud-lastmonth">—</b><span>${STRINGS.hud.lastMonth}</span>
+      </div>
+    </div>
+  `;
+
+  const $ = (id) => root.querySelector(`#${id}`);
+  const speeds = $('hud-speeds');
+
+  speeds.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-speed]');
+    if (!button) return;
+    game.clock.setSpeedIndex(Number(button.dataset.speed));
+    syncSpeedButtons();
+  });
+
+  function syncSpeedButtons() {
+    for (const button of speeds.querySelectorAll('button')) {
+      button.classList.toggle('on', Number(button.dataset.speed) === game.clock.speedIndex);
+    }
+  }
+
+  function update() {
+    const stats = game.stats;
+
+    $('hud-balance').textContent = formatMoney(stats.balance);
+    // Red when negative, with Hard's game-over countdown beside it.
+    const negative = Number.isFinite(stats.balance) && stats.balance < 0;
+    $('hud-balance-wrap').classList.toggle('negative', negative);
+    const limit = game.economy.rules.gameOverMonths;
+    $('hud-balance-wrap').querySelector('span').textContent =
+      negative && limit
+        ? `${STRINGS.hud.balance} · ${limit - stats.negativeMonths} ${STRINGS.hud.monthsLeft}`
+        : STRINGS.hud.balance;
+
+    $('hud-date').textContent = formatDate(game.clock);
+    $('hud-season').textContent = STRINGS.seasons[game.region.meta.season] || '';
+
+    $('hud-transported').textContent = formatThousands(stats.transported);
+    $('hud-onnetwork').textContent = stats.onNetwork.toLocaleString();
+
+    const net = stats.lastMonthNet;
+    $('hud-lastmonth').textContent = net === 0 ? '—' : formatMoney(net);
+    $('hud-lastmonth-wrap').classList.toggle('negative', net < 0);
+
+    syncSpeedButtons();
+  }
+
+  update();
+  return { update, syncSpeedButtons };
+}

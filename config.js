@@ -243,11 +243,26 @@ export const BUILD = {
 
 /** All costs in euros. [spec] */
 export const COSTS = {
-  /** Track per km by mode and structure. */
+  /**
+   * Track per km by mode and structure.
+   *
+   * Tram on-street €15M/km is supported by German practice (recent light rail
+   * track at £13–20M/km; an Essen at-grade line at about €17.8M/km) rather than
+   * by the Eno figure the spec originally cited — Eno publishes no per-mode
+   * costs at all. Citation corrected, number unchanged. [C1, resolved]
+   *
+   * Metro and train tunnel costs are SWAPPED relative to the spec: metro
+   * €80M/km, train €120M/km. This fixes both problems at once. Heavy-rail
+   * bores are larger and really do cost more per km than metro tunnels, so the
+   * original ordering was backwards; and €80M/km keeps metro reachable instead
+   * of a loan-only endgame. It sits below the efficient-European band
+   * ($80–120M/km in Spain and France) — deliberately optimistic, for
+   * playability. [C2, C3, resolved]
+   */
   TRACK_PER_KM: {
     tram:  { onStreet: 15e6, atGrade: 25e6, tunnel: 100e6, bridge: 50e6 },
-    metro: { atGrade: 30e6, tunnel: 120e6, bridge: 60e6 },
-    train: { atGrade: 15e6, tunnel: 80e6, bridge: 40e6 },
+    metro: { atGrade: 30e6, tunnel: 80e6, bridge: 60e6 },
+    train: { atGrade: 15e6, tunnel: 120e6, bridge: 40e6 },
   },
 
   /** Stop or station, by mode and structure. */
@@ -287,15 +302,19 @@ export const INCOME = {
 
 /**
  * Three loan slots, sized as a fraction of starting capital.
- * [C4] Research flags these terms as longer than the game's own horizon: one
- * in-game year is ~1 real hour, so the Large loan is 20 real hours of play and
- * can never be repaid in a session. Suggested instead: 3/6/12 years at
- * 4/6/9%. Spec values kept until Alex decides. [spec]
+ *
+ * Terms shortened from the spec's 5/10/20 years at 3/5/8%. One in-game year is
+ * about one real hour, so a 20-year loan was 20 real hours of play — it could
+ * never be repaid in any realistic session, and its interest compounded across
+ * a span the player would never see the end of. At 3/6/12 years the Small loan
+ * clears in roughly three hours and the Large one is a decision with a visible
+ * end. Rates rise to keep the three slots meaningfully different risks.
+ * [C4, resolved]
  */
 export const LOANS = [
-  { slot: 'small',  fraction: 0.2, interest: 0.03, termYears: 5 },
-  { slot: 'medium', fraction: 0.5, interest: 0.05, termYears: 10 },
-  { slot: 'large',  fraction: 1.0, interest: 0.08, termYears: 20 },
+  { slot: 'small',  fraction: 0.2, interest: 0.04, termYears: 3 },
+  { slot: 'medium', fraction: 0.5, interest: 0.06, termYears: 6 },
+  { slot: 'large',  fraction: 1.0, interest: 0.09, termYears: 12 },
 ];
 
 // ─── Difficulty ───────────────────────────────────────────────────────────────

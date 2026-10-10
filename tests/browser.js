@@ -125,6 +125,9 @@ try {
       contourFeatures: map.querySourceFeatures('contours').length,
       canvasWidth: overlay.canvas.width,
       cssWidth: overlay.canvas.clientWidth,
+      cssHeight: overlay.canvas.clientHeight,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
       dpr: window.devicePixelRatio,
       center: map.getCenter(),
       zoom: map.getZoom(),
@@ -145,6 +148,14 @@ try {
   check('the overlay canvas is scaled for device pixels',
     info.canvasWidth === Math.round(info.cssWidth * info.dpr),
     `${info.canvasWidth} vs ${info.cssWidth}×${info.dpr}`);
+  // A canvas is a replaced element, so `inset: 0` alone leaves it at its
+  // intrinsic 300×150 and the whole game layer renders into a corner while
+  // the HUD and map look perfectly fine. Check the CSS box, not just the
+  // backing store.
+  check('the overlay canvas fills the viewport',
+    Math.abs(info.cssWidth - info.viewportWidth) < 2 &&
+    Math.abs(info.cssHeight - info.viewportHeight) < 2,
+    `overlay ${info.cssWidth}×${info.cssHeight}, viewport ${info.viewportWidth}×${info.viewportHeight}`);
   check('the map is centred on the region',
     Math.abs(info.center.lng - 23.6) < 0.05 && Math.abs(info.center.lat - 37.95) < 0.05,
     `${info.center.lng.toFixed(3)}, ${info.center.lat.toFixed(3)}`);
@@ -277,6 +288,239 @@ try {
   check('the worker either errors cleanly or keeps working — never dies silently',
     ['error', 'done', 'still-working'].includes(workerResult.outcome),
     `outcome ${workerResult.outcome}: ${workerResult.message}`);
+
+  // ─── Phase 2: building a line and running the sim ─────────────────────────
+
+  // Click the map to place stops, so the real interaction path is exercised
+  // rather than just the model underneath it.
+  async function clickAt(x, y) {
+    const point = await page.evaluate(([lx, ly]) => {
+      const p = window.otomig.map.project(window.otomig.frame.toLonLat(lx, ly));
+      return { x: p.x, y: p.y };
+    }, [x, y]);
+    await page.mouse.click(point.x, point.y);
+    await page.waitForTimeout(60);
+  }
+
+  // Frame the whole region so every click lands on screen.
+  await page.evaluate(() => {
+    const [w, s, e, n] = window.otomig.region.meta.bbox;
+    window.otomig.map.fitBounds([[w, s], [e, n]], { padding: 30, duration: 0 });
+  });
+  await page.waitForTimeout(500);
+
+  check('the toolbar mounted with Bus selected',
+    await page.evaluate(() => document.querySelector('#tb-modes button[data-mode="bus"]')
+      ?.classList.contains('on')) === true);
+  check('later-phase modes are visibly disabled, not missing',
+    await page.evaluate(() => ['tram', 'metro', 'train'].every((m) =>
+      document.querySelector(`#tb-modes button[data-mode="${m}"]`)?.disabled)) === true);
+
+  // Three stops along a street, clear of the fixture's bay.
+  await clickAt(1600, 2800);
+  await clickAt(2600, 2800);
+  await clickAt(3400, 2800);
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(150);
+
+  const built = await page.evaluate(() => {
+    const line = [...window.otomig.game.network.lines.values()][0];
+    return line ? {
+      stops: line.stops.length, segments: line.segments.length,
+      vehicles: line.vehicles.length, lengthKm: line.lengthM / 1000,
+      color: line.color,
+    } : null;
+  });
+  check('clicking the map builds a line', built !== null);
+  check('the line has the three stops clicked', built?.stops === 3, `${built?.stops} stops`);
+  check('the line routed segments along real roads',
+    built?.segments === 2 && built.lengthKm > 1.5, `${built?.lengthKm?.toFixed(2)} km`);
+  check('the finished line was given a vehicle', built?.vehicles === 1);
+
+  // A click on the sea must be refused with a visible message, not silently.
+  await page.evaluate(() => { window.otomig.game.draft = null; });
+  await page.evaluate(() => {
+    document.querySelector('#tb-tools button[data-tool="newLine"]')?.click();
+  });
+  await clickAt(300, 300);
+  const refusal = await page.textContent('.feedback').catch(() => null);
+  check('a click on the water is refused with a message',
+    refusal !== null && refusal.length > 0, `saw "${refusal}"`);
+  await page.keyboard.press('Escape');
+
+  // The model having a line is not the same as the player seeing one. Sample
+  // the overlay canvas for the line's own colour — this is what catches the
+  // game layer rendering into the wrong box, or not at all.
+  const painted = await page.evaluate((lineColor) => {
+    const canvas = document.querySelector('#overlay');
+    const ctx = canvas.getContext('2d');
+    const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const hex = lineColor.replace('#', '');
+    const want = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));
+    let lineish = 0;
+    let opaque = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] < 32) continue;
+      opaque++;
+      if (Math.abs(data[i] - want[0]) < 26 &&
+          Math.abs(data[i + 1] - want[1]) < 26 &&
+          Math.abs(data[i + 2] - want[2]) < 26) lineish++;
+    }
+    return { lineish, opaque, width: canvas.width, height: canvas.height };
+  }, built.color);
+
+  check('the overlay paints something at all', painted.opaque > 0,
+    `${painted.opaque} opaque pixels on a ${painted.width}×${painted.height} canvas`);
+  check('the line is actually drawn in its own colour', painted.lineish > 200,
+    `${painted.lineish} pixels of ${built.color}`);
+
+  await page.screenshot({ path: join(SHOTS, '5-line-built.png') });
+
+  // Selecting a stop opens its panel.
+  await clickAt(2600, 2800);
+  const panelOpen = await page.evaluate(() =>
+    !document.querySelector('.panel')?.hidden);
+  check('clicking a stop opens its panel', panelOpen === true);
+  await page.keyboard.press('Escape');
+
+  // Run the simulation at 4x and watch the numbers move.
+  await page.evaluate(() => {
+    const game = window.otomig.game;
+    [...game.network.lines.values()].forEach((line) => {
+      for (let i = 0; i < 3; i++) game.addVehicle(line);
+    });
+    game.clock.setSpeedIndex(3);
+  });
+  await page.waitForTimeout(6000);
+
+  const running = await page.evaluate(() => {
+    const game = window.otomig.game;
+    return {
+      days: game.clock.days,
+      simSeconds: game.clock.simSeconds,
+      totals: game.totals,
+      transported: game.economy.transported,
+      balance: game.economy.balance,
+      vehicleMoved: [...game.network.lines.values()][0].vehicles[0].lon !== 0,
+      hudTransported: document.querySelector('#hud-transported')?.textContent,
+      hudDate: document.querySelector('#hud-date')?.textContent,
+    };
+  });
+
+  check('the calendar advances while running', running.days > 1,
+    `${running.days.toFixed(1)} days`);
+  check('the sim clock advances 20x faster than real time',
+    running.simSeconds > running.days * 150, `${running.simSeconds.toFixed(0)} sim s`);
+  check('vehicles move', running.vehicleMoved === true);
+  check('the HUD date updates', /\d/.test(running.hudDate || ''), running.hudDate);
+  check('the HUD shows transported', Boolean(running.hudTransported));
+
+  // Passenger volume needs in-game months, not seconds of wall time. The rAF
+  // loop is already proven above, so fast-forward by stepping the game
+  // directly — same code path, no waiting.
+  const flowed = await page.evaluate(() => {
+    const game = window.otomig.game;
+    game.clock.setSpeedIndex(3);
+    for (let i = 0; i < 6000; i++) game.tick(0.05); // ~120 in-game days
+    return {
+      totals: game.totals,
+      transported: game.economy.transported,
+      tickets: game.economy.month.tickets + game.economy.lastMonth.tickets,
+      running: game.economy.month.running + game.economy.lastMonth.running,
+      days: game.clock.days,
+    };
+  });
+
+  check('passengers spawn in the browser', flowed.totals.spawned > 0,
+    `${flowed.totals.spawned} dots over ${flowed.days.toFixed(0)} in-game days`);
+  check('passengers board in the browser', flowed.totals.boarded > 0,
+    `${flowed.totals.boarded} boardings`);
+  check('passengers arrive and are counted', flowed.transported > 0,
+    `${Math.round(flowed.transported).toLocaleString()} transported`);
+  check('ticket income accrues', flowed.tickets > 0, `${Math.round(flowed.tickets)}`);
+  check('running costs are charged', flowed.running < 0, `${Math.round(flowed.running)}`);
+
+  await page.waitForTimeout(200);
+
+  // Stops are white discs with a dark outline; vehicles are line-coloured.
+  // Both must be visible on the overlay once the line is running.
+  const furniture = await page.evaluate(() => {
+    const canvas = document.querySelector('#overlay');
+    const ctx = canvas.getContext('2d');
+    const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    let nearWhite = 0;
+    let nearInk = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] < 200) continue;
+      const [r, g, b] = [data[i], data[i + 1], data[i + 2]];
+      if (r > 245 && g > 245 && b > 245) nearWhite++;
+      if (r < 70 && g < 70 && b < 70) nearInk++;
+    }
+    return { nearWhite, nearInk };
+  });
+  check('stops are drawn as white discs', furniture.nearWhite > 20,
+    `${furniture.nearWhite} white pixels`);
+  check('stop outlines are drawn', furniture.nearInk > 20,
+    `${furniture.nearInk} dark pixels`);
+
+  await page.screenshot({ path: join(SHOTS, '6-running.png') });
+
+  // Speed controls and pause.
+  await page.evaluate(() => window.otomig.game.clock.setSpeedIndex(0));
+  const pausedDays = await page.evaluate(() => window.otomig.game.clock.days);
+  await page.waitForTimeout(800);
+  const stillDays = await page.evaluate(() => window.otomig.game.clock.days);
+  check('pause stops the clock', Math.abs(stillDays - pausedDays) < 1e-9);
+
+  await page.keyboard.press('Space');
+  await page.waitForTimeout(500);
+  check('Space resumes',
+    (await page.evaluate(() => window.otomig.game.clock.days)) > stillDays);
+  await page.evaluate(() => window.otomig.game.clock.setSpeedIndex(0));
+
+  // The demand heat map must respond to coverage.
+  await page.click('#t-heat');
+  check('the heat map turns on with a network present',
+    (await page.evaluate(() => window.otomig.map.getLayoutProperty('heat', 'visibility'))) === 'visible');
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: join(SHOTS, '7-heat-with-network.png') });
+  await page.click('#t-heat');
+
+  // Save and load round trip through IndexedDB.
+  const roundTrip = await page.evaluate(async () => {
+    const { saveGame, loadGame } = await import('/model/save.js');
+    const game = window.otomig.game;
+    const key = 'browser-test-region';
+    // The save references a region by key, so the region must be cached first.
+    const { putRegion } = await import('/data/cache.js');
+    await putRegion(key, JSON.parse(JSON.stringify({
+      ...game.region,
+      occupancy: { ...game.region.occupancy, bits: Array.from(game.region.occupancy.bits) },
+    })));
+    await saveGame(game, key, 'browser-test');
+    const result = await loadGame('browser-test');
+    if (result.error) return { error: result.error };
+    return {
+      stops: result.game.network.stops.size,
+      originalStops: game.network.stops.size,
+      lines: result.game.network.lines.size,
+      balance: result.game.economy.balance,
+      originalBalance: game.economy.balance,
+      days: result.game.clock.days,
+      originalDays: game.clock.days,
+      segments: [...result.game.network.lines.values()][0]?.segments.length,
+    };
+  });
+
+  check('a save round-trips through IndexedDB', !roundTrip.error, roundTrip.error);
+  check('the reload restores every stop', roundTrip.stops === roundTrip.originalStops,
+    `${roundTrip.stops} vs ${roundTrip.originalStops}`);
+  check('the reload restores the lines', roundTrip.lines > 0);
+  check('the reload re-routes segments', roundTrip.segments > 0);
+  check('the reload restores the balance',
+    Math.abs(roundTrip.balance - roundTrip.originalBalance) < 1);
+  check('the reload restores the calendar',
+    Math.abs(roundTrip.days - roundTrip.originalDays) < 1e-6);
 
   // ─── Nothing threw ────────────────────────────────────────────────────────
   check('the style is valid — no MapLibre errors', mapErrors.length === 0,

@@ -16,7 +16,11 @@
  * projection and the device-pixel scaling are right. Phase 2 fills it in.
  */
 
-import { COLORS } from '../config.js';
+import { COLORS, RENDER, DIFFICULTY } from '../config.js';
+import {
+  strokePath, drawLinePattern, drawVehicle, drawStop, drawInterchange,
+  drawWaiting, drawWaitRing, offsetPolyline, shade,
+} from './shapes.js';
 
 export class Overlay {
   /**
@@ -100,4 +104,153 @@ export function regionBoundaryPainter(bbox) {
     ctx.stroke();
     ctx.restore();
   };
+}
+
+/* ─── Game painters ────────────────────────────────────────────────────────
+ *
+ * Each returns a painter closure for Overlay.painters. They are pushed in
+ * draw order: lines first, then interchange rings, stops, waiting passengers,
+ * and finally vehicles on top.
+ */
+
+/**
+ * Lines, with their mode pattern inside and side-by-side offsets where several
+ * share the same stretch of road.
+ *
+ * Segments between the same pair of stops come out of the router as the same
+ * node path, so a signature built from the path's endpoints and length is
+ * enough to spot sharing without comparing whole polylines.
+ */
+export function linesPainter(game) {
+  return (ctx, overlay) => {
+    const { network } = game;
+    const zoomScale = Math.min(2, Math.max(0.6, overlay.map.getZoom() / 14));
+    const width = RENDER.LINE_WIDTH_PX * zoomScale;
+
+    // Group shared segments so each line in a bundle gets its own offset.
+    /** @type {Map<string, Array<{line:object, segment:object}>>} */
+    const bundles = new Map();
+    for (const line of network.lines.values()) {
+      for (const segment of line.segments) {
+        const key = segmentSignature(segment);
+        if (!bundles.has(key)) bundles.set(key, []);
+        bundles.get(key).push({ line, segment });
+      }
+    }
+
+    for (const bundle of bundles.values()) {
+      bundle.forEach(({ line, segment }, index) => {
+        const points = segment.points.map(([lon, lat]) => overlay.project(lon, lat));
+        if (points.length < 2) return;
+
+        // Centre the bundle on the road: one line sits on it, two straddle it.
+        const spread = (index - (bundle.length - 1) / 2) * RENDER.LINE_OFFSET_PX * zoomScale;
+        const drawn = offsetPolyline(points, spread);
+
+        strokePath(ctx, drawn, line.color, width);
+        drawLinePattern(ctx, drawn, line.mode, line.color, width);
+      });
+    }
+  };
+}
+
+/** Interchange rings, under the stops they join. */
+export function interchangesPainter(game) {
+  return (ctx, overlay) => {
+    for (const interchange of game.network.interchanges.values()) {
+      const points = interchange.stops
+        .map((id) => game.network.stops.get(id))
+        .filter(Boolean)
+        .map((stop) => overlay.project(stop.lon, stop.lat));
+      drawInterchange(ctx, points);
+    }
+  };
+}
+
+/** Stops, their waiting passengers, and the patience ring. */
+export function stopsPainter(game) {
+  return (ctx, overlay) => {
+    const patienceSeconds = DIFFICULTY[game.difficulty].patienceSimMinutes * 60;
+    const simNow = game.clock.simSeconds;
+
+    for (const stop of game.network.stops.values()) {
+      const [x, y] = overlay.project(stop.lon, stop.lat);
+      const radius = RENDER.STOP_RADIUS_PX[stop.mode] ?? 4;
+
+      // The ring tracks the OLDEST waiting passenger, because that is the one
+      // about to give up.
+      if (stop.waiting.length > 0) {
+        let oldest = 0;
+        for (const dot of stop.waiting) {
+          oldest = Math.max(oldest, simNow - dot.waitingSince);
+        }
+        drawWaitRing(ctx, x, y, radius, oldest / patienceSeconds);
+      }
+
+      drawStop(ctx, x, y, stop.mode, game.selection?.id === stop.id);
+      drawWaiting(ctx, x, y, stop.waiting.length, radius);
+    }
+  };
+}
+
+/** Vehicles, on top of everything. */
+export function vehiclesPainter(game) {
+  return (ctx, overlay) => {
+    const zoomScale = Math.min(1.8, Math.max(0.7, overlay.map.getZoom() / 14));
+    for (const line of game.network.lines.values()) {
+      for (const vehicle of line.vehicles) {
+        if (!vehicle.lon && !vehicle.lat) continue;
+        const [x, y] = overlay.project(vehicle.lon, vehicle.lat);
+        if (x < -40 || y < -40 || x > overlay.width + 40 || y > overlay.height + 40) continue;
+        drawVehicle(ctx, x, y, vehicle.bearing, line.mode, line.color,
+          vehicle.load, zoomScale);
+      }
+    }
+  };
+}
+
+/**
+ * The line currently being drawn: the confirmed part solid, plus a dashed
+ * rubber band from the last stop to the cursor, so the player can see what a
+ * click would add before committing to it.
+ */
+export function draftPainter(game) {
+  return (ctx, overlay) => {
+    const draft = game.draft;
+    if (!draft || !draft.line) return;
+    const zoomScale = Math.min(2, Math.max(0.6, overlay.map.getZoom() / 14));
+
+    if (draft.cursor && draft.line.stops.length > 0) {
+      const lastStop = game.network.stops.get(draft.line.stops.at(-1));
+      if (!lastStop) return;
+      const from = overlay.project(lastStop.lon, lastStop.lat);
+      const to = overlay.project(draft.cursor[0], draft.cursor[1]);
+
+      ctx.save();
+      ctx.setLineDash([6, 5]);
+      ctx.strokeStyle = draft.valid === false
+        ? '#E4463C'
+        : shade(draft.line.color, 0.25);
+      ctx.lineWidth = RENDER.LINE_WIDTH_PX * zoomScale * 0.8;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(from[0], from[1]);
+      ctx.lineTo(to[0], to[1]);
+      ctx.stroke();
+      ctx.restore();
+    }
+  };
+}
+
+/** Cheap identity for a routed segment, used to spot shared road stretches. */
+function segmentSignature(segment) {
+  const points = segment.points;
+  if (points.length === 0) return 'empty';
+  const [aLon, aLat] = points[0];
+  const [bLon, bLat] = points[points.length - 1];
+  // Order-independent, so A→B and B→A bundle together.
+  const forward = `${aLon.toFixed(6)},${aLat.toFixed(6)}|${bLon.toFixed(6)},${bLat.toFixed(6)}`;
+  const backward = `${bLon.toFixed(6)},${bLat.toFixed(6)}|${aLon.toFixed(6)},${aLat.toFixed(6)}`;
+  const ends = forward < backward ? forward : backward;
+  return `${ends}@${Math.round(segment.lengthM)}`;
 }

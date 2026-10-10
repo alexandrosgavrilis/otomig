@@ -2,15 +2,15 @@
 
 Read this first in every session. Update it last.
 
-**Current state:** Phase 0 complete. Phase 1 complete and **verified in a real browser**, except the live network path.
-**Last session:** Oct 10, 2026 — Phase 0 (research) and Phase 1 (region and map).
-**Next session:** confirm a live import works, then Phase 2 (buses and passengers).
+**Current state:** Phases 0, 1 and 2 complete, verified in a real browser except the live network path.
+**Last session:** Oct 10, 2026 — Phase 0 (research), Phase 1 (region and map), Phase 2 (buses and passengers).
+**Next session:** confirm a live import works, then Phase 3 (trams).
 
 ## Testing
 
 ```bash
-npm test            # 113 logic assertions, plain Node, no dependencies
-npm run test:browser    # 36 assertions driving real Chromium via Playwright
+npm test            # 240 logic assertions, plain Node, no dependencies
+npm run test:browser    # 68 assertions driving real Chromium via Playwright
 npm run test:browser -- --headed    # ...and watch it
 ```
 
@@ -18,7 +18,13 @@ The browser suite serves the project on **port 4001**, loads the fixture, and ch
 
 Playwright is a devDependency. `npm test` stays dependency-free.
 
-### Two bugs the browser suite caught immediately
+### Bugs the browser suite caught
+
+Three in Phase 1, one in Phase 2 — all of which would have met you as a broken screen.
+
+**Phase 2: the entire game layer rendered into a 300×150 box in the corner.** A `<canvas>` is a replaced element, so `position: absolute; inset: 0` does *not* stretch it — `width: auto` resolves to the intrinsic 300×150. The map, HUD, toolbar and panels all looked perfect; lines, stops and vehicles were simply invisible. Fixed with explicit `width/height: 100%` in [style.css](style.css). The suite now checks the overlay's CSS box against the viewport, and samples the overlay for the line's own colour — asserting the model has a line is not the same as asserting the player can see one.
+
+### Phase 1 bugs
 
 Both would have met you as a blank or wrong map:
 
@@ -56,16 +62,15 @@ If you want me to push in future sessions, the simplest fix is installing `gh` a
 
 ---
 
-## Four decisions waiting on you
+## Phase 0 decisions — all four resolved (Oct 10, 2026)
 
-From Phase 0. Full reasoning and sources in [RESEARCH.md](RESEARCH.md) under "Conflicts for Alex to decide". None are applied — [config.js](config.js) holds the spec's values, with each disputed one marked `[C1]`..`[C4]`.
+Applied in [config.js](config.js); reasoning and sources in [RESEARCH.md](RESEARCH.md).
 
-| | What | My suggestion |
-| --- | --- | --- |
-| **C1** | The spec's Eno citation ("German trams ~$36M/mile") doesn't appear in Eno's database article, which deliberately publishes no per-mode figures. The €15M/km tram cost is still well supported — by German project reporting. | Keep €15M, swap the citation. |
-| **C2** | Metro tunnel €120M/km is at the optimistic edge of the spec's own cited $180–270M/km range. | Keep €120M for playability; document it as "efficient European builder". Raising it makes metro loan-only. |
-| **C3** | Train tunnel (€80M/km) is cheaper than metro tunnel (€120M/km), which is backwards — heavy rail bores are bigger. As written, the cheapest way through a hill is a train line. | Raise train tunnel to ~€110M/km. Or keep it as a deliberate gameplay choice — your call. |
-| **C4** | Loan terms outlast the game. One in-game year ≈ 1 real hour, so the Large loan's 20-year term is 20 real hours and can never be repaid. CS1 uses 1/5/10 years. | 3/6/12 years at 4/6/9%. |
+| | Decision |
+| --- | --- |
+| **C1** | Tram on-street stays **€15M/km**; the Eno citation is replaced with German project reporting, which is what actually supports the number. |
+| **C2 + C3** | **Metro and train tunnel costs swapped: metro €80M/km, train €120M/km.** Fixes both complaints at once — heavy-rail bores genuinely cost more than metro bores, and €80M/km keeps metro reachable instead of loan-only. Knowingly below the efficient-European band, for playability. |
+| **C4** | Loans are now **3/6/12 years at 4/6/9%**, down from 5/10/20 at 3/5/8. |
 
 Good news from the same research: **the spec's cruise speeds and capacities are right.** They look wrong against real commercial speeds until you work the dwell through — bus at 25 km/h cruise with a 20 s dwell and 400 m spacing comes out at 18.5 km/h door to door, which is exactly real. All four modes land in the real range, and all four capacities are a consistent ~60% of crush capacity. `tests/run.js` now guards those numbers so a future retune can't silently break the match.
 
