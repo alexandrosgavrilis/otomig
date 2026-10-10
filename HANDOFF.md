@@ -4,7 +4,16 @@ Read this first in every session. Update it last.
 
 **State:** Phases 0, 1 and 2 complete. Verified in a real browser against the fixture; the live import has never been run end to end.
 **Last session:** Oct 10, 2026 — Phase 0 (research), Phase 1 (region and map), Phase 2 (buses and passengers).
-**Next:** one live import on Alex's machine, then Phase 3 (trams).
+
+**The roadmap changed at the end of that session.** Phase 3 is no longer next. A measured look at import cost turned up a better data architecture, and Alex's decision is to settle it *before* building more on the current one:
+
+| | |
+| --- | --- |
+| **Next** | **Phase R — map tile research.** Answer the open questions in [HANDOFF_maptileresearch.md](HANDOFF_maptileresearch.md) and commit to a final data architecture. |
+| Then | **Phase D — data layer rewrite**, if the research supports it. Roads stay on Overpass; buildings and POIs move to vector tiles. |
+| Then | Phase 3 — trams. |
+
+Rewriting the data layer later would mean redoing tram and rail work on top of it, so the order matters. Nothing in `sim/` or `ui/` is affected either way — see §9.
 
 ---
 
@@ -179,7 +188,72 @@ Measured A/B on the same 1 km box: 1,558 shop/amenity nodes become 1,334. Only 2
 
 ---
 
-## 5. What works
+## 5. The proposed data architecture (Phase D)
+
+Not built. The research that decides it is in [HANDOFF_maptileresearch.md](HANDOFF_maptileresearch.md).
+
+### Where the payload actually goes
+
+Measured over a 1 km box of central Athens, 1.88 MB total:
+
+| | share |
+| --- | --- |
+| Buildings — ways plus their exclusive geometry nodes | **49%** |
+| Shop/amenity POI nodes | 18% |
+| **Roads — ways plus their junction nodes** | **~9%** |
+| Water, rail, everything else | <1% |
+
+Only ~1,260 of 10,488 geometry nodes belong to roads. **The part we most need Overpass's fidelity for is the small part.**
+
+### The hybrid
+
+**Roads, rail and water stay on Overpass. Buildings and POIs move to vector tiles.**
+
+This was arrived at by elimination. A pure vector-tile import looked attractive — a 6 km region is ~4.4 MB of z15 tiles against ~66 MB of Overpass — but MVT carries geometry without topology: ways are clipped at tile edges and there are no shared nodes. Our whole routing layer depends on shared OSM node ids, which is what lets Dijkstra cross way boundaries for free. Reconstructing junctions from proximity means deciding whether two lines a metre apart are a crossroads or a **flyover**, and the failure mode is intermittent and horrible.
+
+Keeping roads on Overpass removes that risk entirely, and costs almost nothing because roads are 9% of the payload. It also keeps real `highway=*` classes and `tunnel`/`bridge` tags, which the tram rules and Phase 4's grade rule both need.
+
+| | Today | Hybrid (estimated) |
+| --- | --- | --- |
+| 6 km dense | ~66 MB | **~19 MB** (6 Overpass + 13 tiles at z16) |
+| 15 km dense | ~420 MB | ~115 MB |
+| Topology risk | none | **none** |
+| Building outlines | yes | yes |
+| Attraction source | building categories | POI categories + building volume |
+
+### Two insights that made it work
+
+**Zoom defeats the generalisation objection.** Vector tiles are simplified and POI-thinned, but that is a *low-zoom* behaviour. At z15 the quantisation grid is 0.24 m — finer than our 20 m grade sampling and 10 m occupancy cells — and at z16 the POI layer is essentially unthinned. Alex's point: if the player can only build at high zoom, the tiles in front of them already contain everything. Fetching at z15–16 gets near-raw detail.
+
+| zoom | tile span | precision | 6 km | 15 km |
+| --- | --- | --- | --- | --- |
+| z14 | 1,927 m | 0.47 m | 25 tiles | 81 |
+| z15 | 964 m | 0.24 m | 64 tiles | 289 |
+| z16 | 482 m | 0.12 m | 196 tiles | 1,089 |
+
+**POI categories survive; building categories do not.** The two are different layers. `building` carries geometry and `render_height` and nothing else, but `poi` carries `class` and `subclass`, where subclass is believed to be the raw OSM tag value. So the attraction model **inverts** rather than degrades: POIs become the destinations carrying the weights, with building volume as a "how much of it" multiplier. Arguably better — a POI is a literal destination, whereas a large untagged building might be a warehouse.
+
+### Rejected: dynamic streaming
+
+Accumulating features as the player pans breaks four things: determinism (a route re-routes when more tiles arrive), **saves** (the save would depend on where you had *looked*, not what you had built), demand (catchments shift underfoot), and the economy. It also gains nothing — 196 tiles in parallel behind the existing progress bar takes seconds. Keep the zoom insight as *which zoom we fetch*; drop the streaming.
+
+A build-zoom restriction then becomes a pure gameplay choice rather than a data constraint, and I would probably not impose it: zooming out to see your whole network is half of Mini Metro's appeal.
+
+### Held in reserve: file import
+
+An escape hatch, not a default. [extract.bbbike.org](https://extract.bbbike.org) is built for exactly this and carries no policy anxiety, but it is asynchronous and makes the player leave the game before playing it. We already have a `Region` JSON contract and a file picker for saves, so a `tools/make-region.js` would be cheap. Worth having for "Overpass is down" or "I want a dense 15 km city". **PMTiles** is the elegant long-term version — one archive, HTTP range requests, no tile server, works from static hosting if this ever lives on GitHub Pages.
+
+### What a rewrite would touch
+
+**Rewritten:** the Overpass query (trimmed to roads/rail/water), a new tiles module, `data/import.worker.js`, `model/population.js` (POI-led attraction), `fixtures/make-fixture.js`, the Phase 1 parsing tests.
+
+**Untouched:** `build/road-routing.js` — because roads still arrive with real node ids. All of `sim/`, `model/network.js`, `render/overlay.js`, `render/shapes.js`, every `ui/` file. The `Region` contract in `model/region.js` survives nearly intact.
+
+**The whole data layer, none of the game.** Roughly one session, low risk — against one and a half and one large unknown for the pure-tile version.
+
+---
+
+## 6. What works
 
 Verified by `npm test` (270) and `npm run test:browser` (75).
 
@@ -191,7 +265,7 @@ Verified by `npm test` (270) and `npm run test:browser` (75).
 
 ---
 
-## 6. Layout
+## 7. Layout
 
 ```
 index.html  style.css  config.js  main.js      package.json (no runtime deps)
@@ -211,7 +285,7 @@ The fixture is a 6×6 km synthetic coast: a bay in the south-west, a lake, a riv
 
 ---
 
-## 7. Known gaps
+## 8. Known gaps
 
 - **Dragging to shape a route is not implemented.** The spec's via-points (drag between two stops to force a different road route) are not wired to the mouse, though `RoadIndex.pathThrough` supports them. Belongs with tram off-road dragging in Phase 3 — same gesture.
 - **Edit stops is select-only.** Dragging a stop to move it and clicking a segment to insert one are unwired; `Network.insertStop` and `removeStopFromLine` exist and are tested.
@@ -226,7 +300,9 @@ The fixture is a 6×6 km synthetic coast: a bay in the south-west, a lake, a riv
 
 ---
 
-## 8. Next: Phase 3 — trams
+## 9. Phase 3 — trams (after Phases R and D)
+
+Deferred until the data architecture is settled; see the roadmap at the top. Nothing below depends on that decision, because trams are built on `sim/` and `ui/`, which the rewrite does not touch — but the grade rule in Phase 3 reads the occupancy raster, and the raster's provenance changes if buildings move to tiles. That is the one overlap, and it is why this waits.
 
 Tram-road snapping, on-street track, off-road dragging, the grade rule for off-road segments, tram visuals.
 

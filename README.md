@@ -4,7 +4,7 @@ A transit sandbox with Mini Metro's look and drawing feel and Cities: Skylines' 
 
 You draw bus, tram, metro and train lines. Passengers appear where people live and want to go. Money comes from tickets, coverage subsidies and advertising. There is no win condition — a good network settles into balance. Some places can only ever support a bus line or two, and that is fine.
 
-**Status:** Phases 0–2 of 7 done — region import, base map, and the bus core loop (lines, passengers, transfers, money, save/load). See [HANDOFF.md](HANDOFF.md).
+**Status:** Phases 0–2 of 7 done — region import, base map, and the bus core loop (lines, passengers, transfers, money, save/load). Phase 3 is deferred behind a data-architecture decision; see [HANDOFF.md](HANDOFF.md) and [HANDOFF_maptileresearch.md](HANDOFF_maptileresearch.md).
 
 ## Running it
 
@@ -49,6 +49,7 @@ The game follows the OSMF usage policies for [tiles](https://operations.osmfound
 ## Documents
 
 - [HANDOFF.md](HANDOFF.md) — current phase, what works, known gaps, next steps. Read first.
+- [HANDOFF_maptileresearch.md](HANDOFF_maptileresearch.md) — Phase R: the open questions on moving buildings and POIs to vector tiles, and the decision table they feed.
 - [RESEARCH.md](RESEARCH.md) — Phase 0: what to borrow from Mini Metro and Cities: Skylines, every cost and speed figure checked against public sources, the endpoint policies, and the four disputed figures (since resolved).
 - `Open Transit On Map Info Game — Build Prompt & Design Spec.md` — the design spec.
 - [config.js](config.js) — every tunable number in the game. There are no magic numbers anywhere else.
