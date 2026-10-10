@@ -20,9 +20,12 @@ Click **Use the test region** for a synthetic region that needs no network at al
 Serve it over `http://` — don't open `index.html` as a `file://` URL. ES modules, the import worker and the OSM services all need a real origin.
 
 ```bash
-npm test           # 113 assertions, plain Node, no framework
-npm run fixture    # regenerate fixtures/test-region.json
+npm test               # 113 logic assertions, plain Node, no framework, no dependencies
+npm run test:browser   # 36 assertions driving real Chromium (needs: npm install)
+npm run fixture        # regenerate fixtures/test-region.json
 ```
+
+The browser suite serves the project on port 4001, loads the fixture and checks that the map genuinely renders — by sampling pixels, not by trusting MapLibre's `load` event. Screenshots land in `tests/screenshots/`. Playwright is a devDependency; `npm test` needs nothing installed.
 
 ## How it is built
 
