@@ -41,7 +41,7 @@ The default region is now 6 km, so the first import should take a few minutes ra
 ## 2. Testing
 
 ```bash
-npm test                            # 257 logic assertions, plain Node, no dependencies
+npm test                            # 273 logic assertions, plain Node, no dependencies
 npm run test:browser                # 68 assertions in real Chromium via Playwright
 npm run test:browser -- --headed    # ...and watch it
 npm run fixture                     # regenerate fixtures/test-region.json
@@ -152,7 +152,36 @@ At the measured **1.87 MB/km²** for central Athens, payload is the open problem
 
 Payload scales with feature *density*, not area — a rural 15 km box may be a few MB, so the slider reaching 15 is genuinely useful outside cities.
 
-The weight is **buildings at 49%** of payload. The spec's "about two minutes" acceptance criterion for a dense 15 km city is not achievable with this query; the default dropping to 6 km is the mitigation applied. The only remaining lever is a vector-tile hybrid for buildings — rejected for now because tile schemas carry no building category, and attraction is floor area × category weight, so it would gut half the demand model.
+### Building polygons: measured, and the query now splits
+
+Building polygons were the single biggest component. Measured over the same 1 km box:
+
+| | |
+| --- | --- |
+| buildings, full polygons | 1.228 MB (11,063 elements) |
+| buildings, centroids only | 0.339 MB (1,835 elements) |
+| **difference** | **0.889 MB = 47% of the whole import** |
+
+1,835 buildings drag 9,228 geometry nodes behind them; that is the mass.
+
+**Applied.** `buildQuery` now splits the buildings in a *single* request — Overpass allows several `out` statements per query, so this costs no extra round trips:
+
+```
+.simpleBuildings out tags center;   ← residential: tags + a point, no nodes
+.points          out body;
+.needGeometry    out body;
+.needGeometry >; out skel qt;       ← geometry only for what needs it
+```
+
+Only ordinary residential buildings take the centroid path (`POPULATION.CENTROID_BUILDINGS`, plus `building=yes` with nothing commercial tagged). Everything else keeps its real polygon, because the tail is what matters: measured footprints run p10 106 m², median 220, mean 285, p90 514, p99 1,421 — only 4.8× across the bulk, but **the largest 10% of buildings hold 29% of all floor area**, and they are disproportionately the hospitals, universities and shopping centres whose attraction weight decides where passengers want to go. `building:levels` is a tag and arrives free either way, so the vertical half of the population model is untouched.
+
+`processBuildings` branches on whether a way has `nodes` or a `center`; a centroid building uses `POPULATION.ASSUMED_AREA_M2` and stamps a square of that size into the occupancy raster for Phase 4's collision check.
+
+**The fixture exercises both paths** — `make-fixture.js` applies the same split before running the pipeline, so 1,785 of its 1,971 buildings arrive as centroids exactly as a live import would.
+
+**Caveats.** The assumed areas are guesses, flagged as such in config. Switching the fixture to the split moved its population from 41,828 to 31,844, a 24% shift — but that measures assumed areas against the fixture's *synthetic* building sizes, not against real OSM, so do not read it as the real-world error. **The split query itself has not been run against live Overpass** — the server was 504ing every request by the time it was written. The syntax is standard Overpass QL and the key primitive (`out tags center`) was verified live, but the combined query needs one confirming run.
+
+**Still unsolved:** the remaining payload is roads and the non-residential buildings, both of which genuinely need their geometry. The last lever would be a vector-tile hybrid — rejected because tile schemas carry no building category at all, and attraction is floor area × category weight, so it would gut half the demand model.
 
 ### The POI trim was worth 2.9%, not the 15–18% estimated
 
@@ -164,7 +193,7 @@ Measured A/B on the same 1 km box: 1,558 shop/amenity nodes become 1,334. Only 2
 
 ## 5. What works
 
-Verified by `npm test` (257) and `npm run test:browser` (68).
+Verified by `npm test` (273) and `npm run test:browser` (68).
 
 **Phase 1.** `LocalFrame` and the bbox/chunk maths; terrain height grid with bilinear interpolation (exact on a ramp); 200 m demand grid; 10 m occupancy bitset; Overpass parsing with road-class filtering, abandoned-rail rejection, chunk-overlap de-duplication and shared-node collapsing; Terrarium decode and tile resampling; marching-squares contours and sea polygons; the base-map GeoJSON. In the browser: the new-game screen, search firing no request while typing, MapLibre rendering real pixels, layer toggles, zoom revealing minor roads, `maxBounds`, IndexedDB round-trips, the module worker booting.
 
@@ -190,7 +219,7 @@ fixtures/ make-fixture.js  test-region.json               (npm run fixture)
 tests/   run.js  phase2.js  browser.js  screenshots/
 ```
 
-The fixture is a 6×6 km synthetic coast: a bay in the south-west, a lake, a river, a ridge with a notched valley (for Phase 4's tunnels and bridges), a motorway, a pedestrian street, a road tunnel and bridge, an existing railway with three stations, and an abandoned branch the parser must reject. **41,828 residents, ~1,162/km²** — a small town, so `passengersPerDot` is 1.
+The fixture is a 6×6 km synthetic coast: a bay in the south-west, a lake, a river, a ridge with a notched valley (for Phase 4's tunnels and bridges), a motorway, a pedestrian street, a road tunnel and bridge, an existing railway with three stations, and an abandoned branch the parser must reject. **31,844 residents, ~885/km²** — a small town, so `passengersPerDot` is 1. Its buildings are split 1,785 centroids / 186 polygons, mirroring the real query.
 
 ---
 

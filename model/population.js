@@ -37,18 +37,37 @@ export function processBuildings(buildingWays, poiNodes, osmNodes, frame, popula
   let residentsTotal = 0;
 
   for (const way of buildingWays) {
-    const ring = wayRing(way, osmNodes);
-    if (ring.length < 3) continue;
-
     const tags = way.tags || {};
-    const areaM2 = ringAreaM2(ring, frame);
+
+    /*
+     * A building arrives one of two ways. Most residential buildings come
+     * back from `out tags center` — tags and a centre point, no corner nodes
+     * — because their polygons are 47% of the import payload and their
+     * footprints are similar enough that an assumed area washes out across a
+     * 200 m demand cell. Everything whose exact shape matters still carries
+     * its full ring. See POPULATION.CENTROID_BUILDINGS.
+     */
+    const ring = wayRing(way, osmNodes);
+    const hasShape = ring.length >= 3;
+
+    let areaM2;
+    let lon;
+    let lat;
+    if (hasShape) {
+      areaM2 = ringAreaM2(ring, frame);
+      [lon, lat] = ringCentroid(ring);
+    } else if (way.center) {
+      areaM2 = assumedArea(tags);
+      ({ lon, lat } = way.center);
+    } else {
+      continue; // Neither geometry nor a centre: nothing usable.
+    }
     if (areaM2 < 10) continue; // Noise, or a mis-tagged node cluster.
 
     const levels = parseLevels(tags) ?? POPULATION.DEFAULT_LEVELS;
     const floorArea = areaM2 * levels;
     const { residential, category } = classifyBuilding(tags);
 
-    const [lon, lat] = ringCentroid(ring);
     const [x, y] = frame.toLocal(lon, lat);
     const col = Math.floor(x / cellM);
     const row = Math.floor(y / cellM);
@@ -67,7 +86,12 @@ export function processBuildings(buildingWays, poiNodes, osmNodes, frame, popula
       }
     }
 
-    rasteriseRing(ring, frame, occupancy);
+    // Occupancy for Phase 4's "buildings block surface track". A real ring is
+    // burnt exactly; a centroid-only building is approximated by a square of
+    // the assumed area, which at 10 m cells is close enough for a collision
+    // check on the kind of building that takes this path.
+    if (hasShape) rasteriseRing(ring, frame, occupancy);
+    else rasteriseSquare(x, y, Math.sqrt(areaM2), occupancy);
   }
 
   // Standalone shops and amenities with no building of their own.
@@ -100,6 +124,28 @@ function parseLevels(tags) {
   const value = parseFloat(String(raw).split(/[;,]/)[0]);
   if (!Number.isFinite(value) || value <= 0 || value > 200) return null;
   return value;
+}
+
+/**
+ * Assumed footprint for a building that arrived as a centroid, m².
+ * Keyed on the `building` value, falling back to a general default.
+ */
+function assumedArea(tags) {
+  return POPULATION.ASSUMED_AREA_M2[tags.building]
+    ?? POPULATION.ASSUMED_AREA_M2.default;
+}
+
+/** Burn an axis-aligned square of side `sideM` centred on a local position. */
+function rasteriseSquare(x, y, sideM, occupancy) {
+  const { cellM, cols, rows } = occupancy;
+  const half = sideM / 2;
+  const fromCol = Math.max(0, Math.floor((x - half) / cellM));
+  const toCol = Math.min(cols - 1, Math.floor((x + half) / cellM));
+  const fromRow = Math.max(0, Math.floor((y - half) / cellM));
+  const toRow = Math.min(rows - 1, Math.floor((y + half) / cellM));
+  for (let row = fromRow; row <= toRow; row++) {
+    for (let col = fromCol; col <= toCol; col++) setOccupied(occupancy, col, row);
+  }
 }
 
 /**
