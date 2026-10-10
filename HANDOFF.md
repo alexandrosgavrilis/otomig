@@ -5,15 +5,17 @@ Read this first in every session. Update it last.
 **State:** Phases 0, 1 and 2 complete. Verified in a real browser against the fixture; the live import has never been run end to end.
 **Last session:** Oct 10, 2026 — Phase 0 (research), Phase 1 (region and map), Phase 2 (buses and passengers).
 
-**The roadmap changed at the end of that session.** Phase 3 is no longer next. A measured look at import cost turned up a better data architecture, and Alex's decision is to settle it *before* building more on the current one:
+**Phase R is done, and it cancelled Phase D.** See [RESEARCH_TILES.md](RESEARCH_TILES.md).
+
+The payload crisis that reordered the roadmap was a measurement error. `1.87 MB/km²` is Overpass's **decoded JSON**; it gzips 7.3–7.8× and browsers always ask for gzip, so a 6 km dense import is **6.8 MB on the wire, not 66**. And the 504s were never about chunk area — they were the `>;` recursion over building geometry nodes. Drop buildings and a whole **15 km** box of roads, rail, water and every POI node serves in **one request, 4.71 MB, 13.5 s**.
 
 | | |
 | --- | --- |
-| **Next** | **Phase R — map tile research.** Answer the open questions in [HANDOFF_maptileresearch.md](HANDOFF_maptileresearch.md) and commit to a final data architecture. |
-| Then | **Phase D — data layer rewrite**, if the research supports it. Roads stay on Overpass; buildings and POIs move to vector tiles. |
-| Then | Phase 3 — trams. |
+| **Next** | **Phase Q — restructure the Overpass query.** Two requests replace nine to thirty-six. One file, no new dependency, model bit-identical. Scope in [RESEARCH_TILES.md](RESEARCH_TILES.md) §8. |
+| Then | Phase 3 — trams. **No longer blocked.** |
+| Shelved | Vector tiles for building geometry. Viable and fully costed (§8), purely additive, worth it only if dense 15 km imports become the priority. |
 
-Rewriting the data layer later would mean redoing tram and rail work on top of it, so the order matters. Nothing in `sim/` or `ui/` is affected either way — see §9.
+The reason Phase R was ordered before Phase 3 was that a data-layer rewrite would change the occupancy raster's provenance. It no longer does, so trams can follow Phase Q immediately — or precede it.
 
 ---
 
@@ -151,7 +153,16 @@ Two fixes. `fetchChunkAdaptive` splits a refused chunk into four and recurses (`
 
 **Most 504s are transient and the retry absorbs them.** Running the real `fetchChunkAdaptive` against the centre chunk of a 6 km Athens import: it 504'd, retried, recovered in 4 seconds with no subdivision — 1,249 roads, 7,878 buildings, 4,336 POIs. The same 2 km box had succeeded outright earlier the same day. Overpass has bad minutes; `kumi.systems` was 500ing even on `/api/status`.
 
-### Import cost, and what is left unsolved
+### Import cost — corrected by Phase R, Oct 10 2026
+
+**The figures below were wrong, and the error drove a roadmap change.** `1.87 MB/km²` is the size of the **decoded JSON**. Overpass serves it gzipped at 7.3–7.8×, and a browser always sends `Accept-Encoding: gzip`. Neither `curl` without `--compressed` nor Node's `fetch` reports the wire size — the latter decompresses transparently even when told not to — so nobody saw it.
+
+| Region | estimate below | **measured on the wire** |
+| --- | --- | --- |
+| 6 km (default) | ~66 MB | **6.8 MB** |
+| 15 km | ~420 MB | **34.4 MB** |
+
+What *is* slow is Overpass's own query time, and only because of buildings: a 6 km import measured 4 m 48 s across 9 chunks with transient 504s and 429s. [RESEARCH_TILES.md](RESEARCH_TILES.md) §8 cuts that to two requests. The original text follows for the record.
 
 At the measured **1.87 MB/km²** for central Athens, payload is the open problem:
 
@@ -188,9 +199,18 @@ Measured A/B on the same 1 km box: 1,558 shop/amenity nodes become 1,334. Only 2
 
 ---
 
-## 5. The proposed data architecture (Phase D)
+## 5. The proposed data architecture (Phase D) — SUPERSEDED
 
-Not built. The research that decides it is in [HANDOFF_maptileresearch.md](HANDOFF_maptileresearch.md).
+**Not built, and now not recommended.** Phase R measured it and the answer is in [RESEARCH_TILES.md](RESEARCH_TILES.md). Four of this section's load-bearing claims did not survive:
+
+| claimed below | measured |
+| --- | --- |
+| 6 km dense costs ~66 MB | **6.8 MB on the wire** — the saving the hybrid existed to deliver is already there |
+| fetch at z15–z16 for near-raw detail | **maxzoom is 14** at every free planet provider. z14 is still 0.47 m precision, so this costs nothing |
+| `poi` carries the weights, so attraction *inverts* rather than degrades | POI `subclass` is indeed raw — but the **building category drives 39% of attraction**, and dropping it measured heat-map correlation 0.601 with 0 of the top 5 cells shared |
+| roads are 9% of payload, so keeping them on Overpass is nearly free | True, and better: **everything except buildings** is one 13.5 s request for a whole 15 km box |
+
+The section is kept because its reasoning about topology and shared node ids is still correct and still the reason roads must never come from tiles. Everything below this line is the original text.
 
 ### Where the payload actually goes
 
@@ -296,13 +316,17 @@ The fixture is a 6×6 km synthetic coast: a bay in the south-west, a lake, a riv
 - **`revalidateDots` releases passengers aboard a deleted line** at the next stop rather than somewhere sensible.
 - **Nominatim's `population` extratag is often absent**, and the new-game screen has no "type the population" field, which the spec allows for.
 - **One-way roads are ignored**, per the spec's v1 decision.
-- **Import payload** — see §4. Unsolved, mitigated by the smaller default.
+- **Import payload is not a problem** (§4, corrected). What remains is **region size in storage**: a dense 15 km region holds ~300,000 building outlines and ~76 MB of JSON in IndexedDB, identically whatever the source. Created by the decision to keep and draw footprints, which is still the right decision. It is an encoding problem — delta-encoded typed arrays instead of nested JSON arrays — and deserves its own task. See [RESEARCH_TILES.md](RESEARCH_TILES.md) §5.5.
+- **Overpass timing is unpredictable.** The same 2 km box measured 18.4 s, then 2.3 s, then 2.7 s on one afternoon. Region figures are single runs; read them as "minutes, variable".
+- **Building multipolygon relations are not imported.** `parseResponses` handles `way["building"]` only, so a mall or a courtyard block tagged as a relation is missing — the same gap as water. Measured at 166 relations against 30,686 ways over a 4 km box of Athens, but they are large buildings.
 
 ---
 
-## 9. Phase 3 — trams (after Phases R and D)
+## 9. Phase 3 — trams (no longer blocked)
 
-Deferred until the data architecture is settled; see the roadmap at the top. Nothing below depends on that decision, because trams are built on `sim/` and `ui/`, which the rewrite does not touch — but the grade rule in Phase 3 reads the occupancy raster, and the raster's provenance changes if buildings move to tiles. That is the one overlap, and it is why this waits.
+Phase R settled the data architecture without a rewrite, so the occupancy raster's provenance does not change and this no longer waits on anything.
+
+One finding from Phase R lands squarely here, and it is worth knowing before the grade rule is written: **about a quarter of buildings in a dense city come within 3 m of a road centreline in OSM itself** — 23.7% measured, against a 26.9% same-source control, worst case 8 cm. So "track may not cross a building" will block on-street alignments routinely, no matter where the footprints came from. On-street tram track follows roads and is meant to be exempt, but the exemption has to be real rather than incidental. See [RESEARCH_TILES.md](RESEARCH_TILES.md) §5.1.
 
 Tram-road snapping, on-street track, off-road dragging, the grade rule for off-road segments, tram visuals.
 

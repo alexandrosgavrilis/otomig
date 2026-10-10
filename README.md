@@ -4,7 +4,7 @@ A transit sandbox with Mini Metro's look and drawing feel and Cities: Skylines' 
 
 You draw bus, tram, metro and train lines. Passengers appear where people live and want to go. Money comes from tickets, coverage subsidies and advertising. There is no win condition — a good network settles into balance. Some places can only ever support a bus line or two, and that is fine.
 
-**Status:** Phases 0–2 of 7 done — region import, base map, and the bus core loop (lines, passengers, transfers, money, save/load). Phase 3 is deferred behind a data-architecture decision; see [HANDOFF.md](HANDOFF.md) and [HANDOFF_maptileresearch.md](HANDOFF_maptileresearch.md).
+**Status:** Phases 0–2 of 7 done — region import, base map, and the bus core loop (lines, passengers, transfers, money, save/load). The data architecture is settled: Overpass stays, with a two-request query restructure next — see [RESEARCH_TILES.md](RESEARCH_TILES.md) and [HANDOFF.md](HANDOFF.md).
 
 ## Running it
 
@@ -15,7 +15,7 @@ npm start          # python3 -m http.server 8000
 # then open http://localhost:8000
 ```
 
-Click **Use the test region** for a synthetic region that needs no network at all, or search a real place and import it. Regions default to 6 × 6 km; the slider reaches 15 km, which is comfortable for rural areas and slow for dense cities.
+Click **Use the test region** for a synthetic region that needs no network at all, or search a real place and import it. Regions default to 6 × 6 km; the slider reaches 15 km, which is comfortable for rural areas and slow for dense cities — a dense 6 km import downloads about 7 MB and a 15 km one about 34 MB, but Overpass's own query time dominates, and it is variable.
 
 Serve it over `http://` — don't open `index.html` as a `file://` URL. ES modules, the import worker and the OSM services all need a real origin.
 
@@ -44,12 +44,13 @@ Elevation from [Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) on 
 
 The game follows the OSMF usage policies for [tiles](https://operations.osmfoundation.org/policies/tiles/) and [Nominatim](https://operations.osmfoundation.org/policies/nominatim/): visible attribution, place search on Enter only (never autocomplete, which the policy forbids), at most one search per second, results cached, and no tile prefetching or bulk download.
 
-**Before hosting this publicly** — on GitHub Pages or anywhere else — note that Overpass asks regularly-running applications to stay under about 100 queries and 10 MB a day, and a single dense 15 km import can approach that on its own. One person importing a few regions is well inside casual use; a public deployment where strangers import regions is not, and would need its own Overpass instance.
+**Before hosting this publicly** — on GitHub Pages or anywhere else — note that Overpass asks regularly-running applications to stay under about 100 queries and 10 MB a day. A dense 6 km import transfers about 7 MB and a 15 km one about 34 MB, so a single large import can reach that on its own. One person importing a few regions is well inside casual use (10,000 queries and 1 GB a day); a public deployment where strangers import regions is not, and would need its own Overpass instance.
 
 ## Documents
 
 - [HANDOFF.md](HANDOFF.md) — current phase, what works, known gaps, next steps. Read first.
-- [HANDOFF_maptileresearch.md](HANDOFF_maptileresearch.md) — Phase R: the open questions on moving buildings and POIs to vector tiles, and the decision table they feed.
+- [RESEARCH_TILES.md](RESEARCH_TILES.md) — Phase R: whether to move buildings and POIs to vector tiles. Answer: no — the payload figure that motivated it was decoded JSON, not transfer. Measured provider terms, schema contents, alignment and costs, with rerunnable probes in `tools/`.
+- [HANDOFF_maptileresearch.md](HANDOFF_maptileresearch.md) — the Phase R brief, answered. Kept for its question numbering.
 - [RESEARCH.md](RESEARCH.md) — Phase 0: what to borrow from Mini Metro and Cities: Skylines, every cost and speed figure checked against public sources, the endpoint policies, and the four disputed figures (since resolved).
 - `Open Transit On Map Info Game — Build Prompt & Design Spec.md` — the design spec.
 - [config.js](config.js) — every tunable number in the game. There are no magic numbers anywhere else.

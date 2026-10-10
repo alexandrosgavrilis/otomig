@@ -1,10 +1,18 @@
-# HANDOFF_maptileresearch.md — Phase R
+# HANDOFF_maptileresearch.md — Phase R — ANSWERED
 
-**Purpose.** Decide the final data architecture before any more game is built on the current one. Read [HANDOFF.md](HANDOFF.md) §4 and §5 first — §4 is what was measured, §5 is what is proposed.
+**Done, Oct 10 2026. The deliverable is [RESEARCH_TILES.md](RESEARCH_TILES.md); read that instead of this.** This brief is kept because the questions were the right ones and the probe scripts in [tools/](tools/) are indexed against its numbering.
 
-**Deliverable.** A short `RESEARCH_TILES.md` answering the questions below, each with a source or a measurement, ending in one recommendation against the decision table in §7. Every claim links its source, as in [RESEARCH.md](RESEARCH.md).
+**Outcome: Phase D is cancelled.** The payload figure this brief treats as settled fact was decoded-JSON size, not transfer. Overpass gzips 7.3–7.8×, so a 6 km dense import is 6.8 MB on the wire rather than 66 MB, and the case for moving data off Overpass evaporated. The recommendation is a two-request restructure of the existing query.
 
-**Order of work.** Phase R (this) → Phase D (rewrite, if supported) → Phase 3 (trams).
+**Three of §0's "facts, not assumptions" were wrong:**
+
+| §0 says | measured |
+| --- | --- |
+| Overpass payload 1.87 MB/km² | that is decoded JSON; **0.19–0.25 MB/km² on the wire** |
+| 5 km box 504s every time | **only with buildings in the query.** Without them a 5 km box serves in 1.7 s and a 15 km box in 13.5 s — the cause was `>;` node recursion, not area |
+| z14/z15/z16 tile arithmetic | **z15 and z16 do not exist.** Every free planet provider caps at maxzoom 14 |
+
+The lesson §8 of this brief gives — "do not trust documentation over data" — applied to the brief itself.
 
 ---
 
@@ -14,7 +22,7 @@ Measured against the live APIs on Oct 10, 2026. These are facts, not assumptions
 
 | | |
 | --- | --- |
-| Overpass payload, central Athens | **1.87 MB/km²** |
+| Overpass payload, central Athens | **1.87 MB/km²** ← decoded, not wire; see above |
 | …of which buildings | 49% (ways + their exclusive geometry nodes) |
 | …of which POI nodes | 18% |
 | …of which **roads** | **~9%** — only 1,260 of 10,488 geometry nodes are road nodes |
