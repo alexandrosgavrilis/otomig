@@ -60,7 +60,18 @@ The public Overpass instance will not build a 5 km query there, and retrying the
 - Lower `REGION.SIZE_KM_DEFAULT` so the default is a 5–8 km box and 15 km is an explicit "this will take a while" choice.
 - Trim the query — dropping standalone `node["shop"]`/`node["amenity"]` would cut a lot in a city centre, at the cost of the small attraction bonus they contribute.
 
-My suggestion: restate the criterion and default to a smaller box. A 15 km square of Athens is genuinely a lot of the world.
+**Both applied.** `REGION.SIZE_KM_DEFAULT` is now **6 km** (the slider still reaches 15), and the POI query is trimmed — `node[amenity]` was unfiltered, which in a city means every bench, bin, postbox, parking space and drinking fountain arriving with a full tag dictionary, 18% of the payload. It now matches `POPULATION.POI_AMENITIES`, a 30-entry list of places people actually travel to. Every `shop` is still kept, and buildings are untouched: a school building is still classified as a school because it comes from `way[building]` with all its tags.
+
+A caveat on the saving: I could not re-measure it, because Overpass started refusing queries and I stopped rather than keep hitting it. The trim removes the obvious noise, but a dense centre is full of cafés, restaurants and bars — which are in the keep list — so expect the gain to be modest downtown and larger in suburbs, where parking and street furniture dominate. **Worth re-measuring on your machine**, where the one-line check is:
+
+```js
+// in the browser console on the new-game screen
+const { buildQuery } = await import('/data/overpass.js');
+const { squareBbox } = await import('/model/region.js');
+const r = await fetch('https://overpass-api.de/api/interpreter',
+  { method: 'POST', body: buildQuery(squareBbox(23.7275, 37.9838, 1)) });
+console.log(((await r.text()).length / 1048576).toFixed(2), 'MB');  // was 1.88
+```
 
 ## What still needs your machine
 
@@ -76,7 +87,7 @@ Never open `index.html` as a `file://` URL. Nominatim's policy requires requests
 2. **Reload it.** It must come back instantly from IndexedDB without refetching.
 3. **Time a dense 15 km city.** The acceptance criterion is about two minutes or less. If it's slower, trim the Overpass building query first.
 
-Both former risks are now resolved — elevation CORS is confirmed present, and dense-city 504s are handled by subdivision. What remains unverified is only the assembly: worker → IndexedDB → playable map, on a real region, in a real browser. Start with a **5 km box** rather than 15, so the first live import takes a minute rather than twenty.
+Both former risks are now resolved — elevation CORS is confirmed present, and dense-city 504s are handled by subdivision. What remains unverified is only the assembly: worker → IndexedDB → playable map, on a real region, in a real browser. The default is now a 6 km box, so the first live import should take a few minutes rather than twenty.
 
 ### The push didn't happen
 

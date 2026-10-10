@@ -16,7 +16,13 @@ export const REGION = {
   /** Region square side length, km. The new-game slider range. [spec] */
   SIZE_KM_MIN: 5,
   SIZE_KM_MAX: 15,
-  SIZE_KM_DEFAULT: 10,
+  /**
+   * Default box side, km. Lowered from 10 after measuring the real cost of an
+   * import: central Athens runs about 1.87 MB/km², so a 15 km box is 200–400 MB
+   * and 10–20 minutes while a 6 km box is a few tens of MB and a few minutes.
+   * The slider still reaches 15 km for anyone who wants it.
+   */
+  SIZE_KM_DEFAULT: 6,
 
   /** Overpass is queried as CHUNKS×CHUNKS tiles and merged. [spec] */
   OVERPASS_CHUNKS: 3,
@@ -112,6 +118,35 @@ export const POPULATION = {
   },
   /** A standalone shop/amenity node with no building adds this much. [spec] */
   POINT_ATTRACTION: 50,
+
+  /**
+   * Which `amenity=*` nodes count as places people travel to.
+   *
+   * `node[amenity]` unfiltered is one of the most expensive things in the
+   * import — 18% of the payload over central Athens — because OSM tags
+   * benches, bins, bicycle parking, postboxes, drinking fountains and parking
+   * spaces as amenities. None of those generate a transit trip, and each one
+   * arrives with a full tag dictionary.
+   *
+   * Every shop is kept (a shop really is somewhere people go); amenities are
+   * restricted to this list. Buildings are unaffected — they are fetched by
+   * `way[building]` with all their tags, so a school building is still
+   * classified as a school whether or not `school` appears here.
+   */
+  POI_AMENITIES: [
+    // Education
+    'school', 'university', 'college', 'kindergarten', 'library',
+    // Health
+    'hospital', 'clinic', 'doctors', 'dentist', 'pharmacy',
+    // Food and drink — genuine all-day trip generators in a city
+    'restaurant', 'cafe', 'bar', 'pub', 'fast_food', 'food_court',
+    // Civic and cultural
+    'townhall', 'courthouse', 'post_office', 'police', 'community_centre',
+    'place_of_worship', 'theatre', 'cinema', 'arts_centre', 'museum',
+    'conference_centre', 'social_facility',
+    // Money and markets
+    'bank', 'marketplace',
+  ],
 };
 
 export const DEMAND = {

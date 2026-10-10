@@ -8,7 +8,7 @@
  * id/lat/lon and nothing else.
  */
 
-import { REGION, BUILD } from '../config.js';
+import { REGION, BUILD, POPULATION } from '../config.js';
 import { chunkBbox } from '../model/region.js';
 
 /** Road classes we keep. Service roads, tracks, footways and paths are not roads here. */
@@ -35,6 +35,8 @@ export function buildQuery(bbox) {
   // Overpass bbox order is south,west,north,east.
   const bb = `${south},${west},${north},${east}`;
   const roads = ROAD_CLASSES.join('|');
+  // Only amenities people actually travel to; see POPULATION.POI_AMENITIES.
+  const amenities = POPULATION.POI_AMENITIES.join('|');
 
   return `[out:json][timeout:180];
 (
@@ -44,7 +46,7 @@ export function buildQuery(bbox) {
   way["railway"="rail"](${bb});
   node["railway"~"^(station|halt)$"](${bb});
   node["shop"](${bb});
-  node["amenity"](${bb});
+  node["amenity"~"^(${amenities})$"](${bb});
 );
 out body;
 >;
@@ -186,7 +188,9 @@ export function parseResponses(responses) {
         seenNodes.add(el.id);
         if (tags.railway === 'station' || tags.railway === 'halt') {
           stationNodes.push(el);
-        } else if (tags.shop || tags.amenity) {
+        } else if (tags.shop || POPULATION.POI_AMENITIES.includes(tags.amenity)) {
+          // Mirrors the query filter, so a stray amenity arriving from a
+          // cached or hand-made response is rejected the same way.
           poiNodes.push(el);
         }
       } else if (el.type === 'way') {
