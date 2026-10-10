@@ -32,6 +32,17 @@ Elevation decoding. We fetch Terrarium PNGs and read their pixels, which only wo
 
 Second most likely: Overpass rejecting or timing out on a dense 15 km box. The code retries 429 and 504 with backoff ([data/overpass.js](data/overpass.js)), but a very dense city may need the 3×3 chunking raised to 4×4 (`REGION.OVERPASS_CHUNKS` in [config.js](config.js)).
 
+### The push didn't happen
+
+Committed locally on `main` (one commit, `origin` set to `https://github.com/alexandrosgavrilis/otomig.git`), but **not pushed** — this machine has no GitHub credentials. `~/.gitconfig` has a helper for GitLab only, and the generic `credential.helper = cache` is empty. So:
+
+```bash
+# create the repo once (any name — adjust the remote if you pick another)
+git push -u origin main
+```
+
+If you want me to push in future sessions, the simplest fix is installing `gh` and running `gh auth login`, or adding a GitHub entry to the credential helper the way GitLab already has one.
+
 ---
 
 ## Four decisions waiting on you
