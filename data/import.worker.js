@@ -1,7 +1,7 @@
 /**
  * The import worker. Everything slow happens here so the UI never freezes:
- * nine Overpass requests, a few hundred thousand buildings, elevation tile
- * decoding and marching-squares contours.
+ * a grid of Overpass requests, a few hundred thousand buildings, elevation
+ * tile decoding and marching-squares contours.
  *
  * Protocol — main thread posts one message:
  *   { lon, lat, sizeKm, name, season, difficulty, populationTotal }
@@ -12,7 +12,7 @@
  * Run as a module worker: new Worker(url, { type: 'module' }).
  */
 
-import { REGION } from '../config.js';
+import { overpassChunkCount } from '../config.js';
 import { LocalFrame, squareBbox, chunkBbox, serialiseRegion } from '../model/region.js';
 import { fetchChunkAdaptive, parseResponses, buildGraph, wayRing } from './overpass.js';
 import { buildHeightGrid, buildContours } from './terrain.js';
@@ -65,8 +65,9 @@ export async function importRegion(request, onProgress) {
   const bbox = squareBbox(lon, lat, sizeKm);
   const frame = new LocalFrame(bbox);
 
-  // 1. Overpass, as 3×3 chunks merged together.
-  const chunks = chunkBbox(bbox, REGION.OVERPASS_CHUNKS);
+  // 1. Overpass, as a grid of ~2.5 km tiles merged together. The tile count
+  // follows the region size so each request stays a size Overpass will serve.
+  const chunks = chunkBbox(bbox, overpassChunkCount(sizeKm));
   const responses = [];
   onProgress('roads', 0, chunks.length);
   for (let i = 0; i < chunks.length; i++) {

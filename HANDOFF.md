@@ -41,9 +41,9 @@ A third, found by the worker test: **`fetch` has no timeout**, so a silently dro
 
 **Nominatim is fine.** Returns results with `extratags` as expected.
 
-**Problem 1 — Overpass 406s a request with no `User-Agent`.** Browsers always send one, so the game is unaffected, but any Node-side test of the live API must set it.
+**Problem 1 — Overpass 406s a request with no `User-Agent`.** Browsers always send one, so the game is unaffected, but any Node-side test of the live API must set it. Note that the game cannot and does not set this header: `User-Agent` is a [forbidden header name](https://developer.mozilla.org/en-US/docs/Glossary/Forbidden_header_name), so `fetch` silently ignores any attempt. We identify to the OSM services via `Referer`, which the browser sends automatically — which is also why the app must be served over `http://` and never opened as a `file://` URL.
 
-**Problem 2 — a 5 km chunk of a dense city fails outright.** Measured against central Athens:
+**Problem 2 — Overpass fails on chunk AREA, and the chunk grid used to ignore that.** Measured against central Athens:
 
 | Box | Result |
 | --- | --- |
@@ -52,7 +52,20 @@ A third, found by the worker test: **`fetch` has no timeout**, so a silently dro
 | 3 km | **504** |
 | 5 km (our chunk size) | **504** |
 
-The public Overpass instance will not build a 5 km query there, and retrying the identical query — which is all the old code did — fails again. **Fixed**: `fetchChunkAdaptive` now splits a refused chunk into four and recurses, up to `REGION.OVERPASS_MAX_SUBDIVIDE` (3 levels, down to 625 m). Sparse regions never subdivide and pay nothing.
+The public instance will not build a 5 km query there, and retrying the identical query — which is all the old code did — fails again.
+
+**Two fixes.** `fetchChunkAdaptive` splits a refused chunk into four and recurses, up to `REGION.OVERPASS_MAX_SUBDIVIDE` (3 levels, down to 625 m); sparse regions never subdivide and pay nothing. And the chunk grid is now derived from a target tile *size* (`OVERPASS_CHUNK_TARGET_KM`, 2.5 km) rather than a fixed 3×3 count. Previously a 15 km region began with 5 km chunks — all nine guaranteed to fail, each burning a 2+4+8+16 s retry cycle before subdividing, roughly four wasted minutes before any real work. Now:
+
+| Region | Grid | Requests | Chunk |
+| --- | --- | --- | --- |
+| 5 km | 2×2 | 4 | 2.50 km |
+| **6 km** | **3×3** | **9** | **2.00 km** (unchanged) |
+| 10 km | 4×4 | 16 | 2.50 km |
+| 15 km | 6×6 | 36 | 2.50 km |
+
+36 requests for the largest region is inside Overpass's ~100/day guidance for a regular user.
+
+**The 504s are mostly transient, and the retry absorbs them.** Running the real `fetchChunkAdaptive` against the centre chunk of a 6 km Athens import: it 504'd, retried, and recovered in 4 seconds with no subdivision — 1,249 roads, 7,878 buildings, 4,336 POIs. The same 2 km box had succeeded outright earlier in the day. Overpass simply has bad minutes.
 
 **This means the Phase 1 acceptance criterion needs revising, and that is your call.** At the measured 1.87 MB/km², a dense 15×15 km city is roughly **200–400 MB and 10–20 minutes**, not "about two minutes". It is also far beyond Overpass's ~10 MB/day courtesy guidance for regular use. Options:
 

@@ -24,8 +24,26 @@ export const REGION = {
    */
   SIZE_KM_DEFAULT: 6,
 
-  /** Overpass is queried as CHUNKS×CHUNKS tiles and merged. [spec] */
-  OVERPASS_CHUNKS: 3,
+  /**
+   * Overpass is queried as a grid of tiles and merged. The grid is derived
+   * from a target TILE SIZE rather than a fixed tile count, so chunk size
+   * stays roughly constant whatever the region size.
+   *
+   * This matters because Overpass fails on area, not on region size. Measured
+   * over central Athens: a 2 km box succeeds (7.5 MB, 18 s) while a 5 km box
+   * returns 504 every time. With a fixed 3×3 grid a 15 km region would start
+   * with 5 km chunks — all nine guaranteed to fail, each burning a full
+   * 2+4+8+16 s retry cycle before subdividing, about four wasted minutes
+   * before any real work. Deriving the count from a size that is known to
+   * work avoids the whole pantomime.
+   *
+   * 2.5 km keeps a 6 km region at exactly 3×3 (unchanged), and takes a 15 km
+   * region to 6×6 = 36 requests, which is inside Overpass's ~100/day
+   * guidance for a regular user.
+   */
+  OVERPASS_CHUNK_TARGET_KM: 2.5,
+  /** Cap on grid side, so one import can never fire hundreds of requests. */
+  OVERPASS_CHUNKS_MAX: 8,
   /** Retry backoff for HTTP 429/504, ms. Doubles each attempt. [spec] */
   OVERPASS_RETRY_MS: 2000,
   OVERPASS_RETRY_MAX: 4,
@@ -557,6 +575,20 @@ export const ATTRIBUTION = {
 
 /** Pinned MapLibre version. v6 is ESM-only and breaks the no-build-step rule. [research] */
 export const MAPLIBRE_VERSION = '5.24.0';
+
+/**
+ * How many tiles per side to split a region into for Overpass.
+ *
+ * Derived from REGION.OVERPASS_CHUNK_TARGET_KM so chunk area stays near a
+ * size Overpass will actually serve, whatever the region size.
+ *
+ * @param {number} sizeKm region side length
+ * @returns {number} tiles per side; the import fires this squared requests
+ */
+export function overpassChunkCount(sizeKm) {
+  const wanted = Math.ceil(sizeKm / REGION.OVERPASS_CHUNK_TARGET_KM);
+  return Math.min(REGION.OVERPASS_CHUNKS_MAX, Math.max(1, wanted));
+}
 
 /**
  * Passengers represented by one dot, for a region of this many residents.

@@ -16,7 +16,7 @@ import { dirname, join } from 'node:path';
 
 import {
   CLOCK, COSTS, DIFFICULTY, MODES, VEHICLES, DEMAND, PATIENCE, LOANS,
-  passengersPerDot,
+  passengersPerDot, overpassChunkCount,
 } from '../config.js';
 import { LocalFrame, reviveRegion } from '../model/region.js';
 import { Network } from '../model/network.js';
@@ -574,6 +574,34 @@ export function runPhase2Tests(check, near) {
     check('the save stays small',
       JSON.stringify(snapshot).length < 20000,
       `${JSON.stringify(snapshot).length} bytes`);
+  }
+
+  // ─── Overpass chunking ──────────────────────────────────────────────────
+  {
+    // Chunk AREA is what Overpass chokes on, so the grid must follow the
+    // region size. Measured: a 2 km box of central Athens serves fine, a 5 km
+    // box 504s every time.
+    const sizeOf = (km) => km / overpassChunkCount(km);
+    check('a 6 km region still splits into 3x3 — no regression',
+      overpassChunkCount(6) === 3);
+    near('…which is the 2 km chunk measured to work', sizeOf(6), 2, 0.01);
+    check('a 15 km region no longer starts with 5 km chunks',
+      sizeOf(15) < 3, `${sizeOf(15).toFixed(2)} km chunks`);
+    check('no region size produces a chunk known to fail',
+      [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].every((km) => sizeOf(km) <= 2.5),
+      [5, 10, 15].map((km) => `${km}km->${sizeOf(km).toFixed(2)}`).join(' '));
+    check('one import never fires an unreasonable number of requests',
+      overpassChunkCount(15) ** 2 <= 64, `${overpassChunkCount(15) ** 2} requests at 15 km`);
+    check('the smallest region still splits', overpassChunkCount(5) >= 2);
+    check('the chunk count rises with region size', (() => {
+      let previous = 0;
+      for (let km = 5; km <= 15; km++) {
+        const n = overpassChunkCount(km);
+        if (n < previous) return false;
+        previous = n;
+      }
+      return true;
+    })());
   }
 
   // ─── Dot scale ──────────────────────────────────────────────────────────
