@@ -41,8 +41,8 @@ The default region is now 6 km, so the first import should take a few minutes ra
 ## 2. Testing
 
 ```bash
-npm test                            # 273 logic assertions, plain Node, no dependencies
-npm run test:browser                # 68 assertions in real Chromium via Playwright
+npm test                            # 270 logic assertions, plain Node, no dependencies
+npm run test:browser                # 75 assertions in real Chromium via Playwright
 npm run test:browser -- --headed    # ...and watch it
 npm run fixture                     # regenerate fixtures/test-region.json
 ```
@@ -105,7 +105,8 @@ The scale is fixed at import and never changes mid-game — a dot that silently 
 15. **A finished line is given one vehicle automatically** if affordable. A line with no vehicles carries nobody, and a player who draws one and sees nothing happen has no way to tell what is wrong.
 16. **Lifetime counters** (`game.totals`) alongside instantaneous state. On a sparse network the instant you look is usually between passengers.
 17. **Vehicles are spaced evenly in time, not distance.** Hops differ in length, so distance spacing still bunches vehicles where stops are close.
-18. **Only Bus is enabled**; Tram, Metro and Train buttons are present but disabled. A dead button that says "Tram" tells the player the plan; a missing one tells them nothing.
+18. **Buildings are drawn, and their outlines are kept.** The spec says neither — it discards footprints after rasterising and says buildings are not drawn. Reversed on Alex's instruction: seeing the city you are serving is the point of a real map, and from Phase 4 the "no track through buildings" rule must agree with what is on screen. Road colours were also darkened from the spec's `#DCD6CC`, which against `#F4F1EA` land is a few percent of luminance — drawn, but invisible.
+19. **Only Bus is enabled**; Tram, Metro and Train buttons are present but disabled. A dead button that says "Tram" tells the player the plan; a missing one tells them nothing.
 
 ---
 
@@ -152,9 +153,9 @@ At the measured **1.87 MB/km²** for central Athens, payload is the open problem
 
 Payload scales with feature *density*, not area — a rural 15 km box may be a few MB, so the slider reaching 15 is genuinely useful outside cities.
 
-### Building polygons: measured, and the query now splits
+### Building polygons: measured, split tried, then reverted
 
-Building polygons were the single biggest component. Measured over the same 1 km box:
+Building polygons are the single biggest component. Measured over the same 1 km box:
 
 | | |
 | --- | --- |
@@ -162,26 +163,13 @@ Building polygons were the single biggest component. Measured over the same 1 km
 | buildings, centroids only | 0.339 MB (1,835 elements) |
 | **difference** | **0.889 MB = 47% of the whole import** |
 
-1,835 buildings drag 9,228 geometry nodes behind them; that is the mass.
+1,835 buildings drag 9,228 geometry nodes behind them; that is the mass. Overpass can return tags plus a centre point without the corner nodes (`out tags center`), and it can do so in the *same* request via named sets, so the saving costs no extra round trips. It was implemented and then **reverted** — see git history if it is ever wanted back.
 
-**Applied.** `buildQuery` now splits the buildings in a *single* request — Overpass allows several `out` statements per query, so this costs no extra round trips:
+**Why reverted: buildings are now drawn.** The spec says "Buildings are not drawn" and "the polygons themselves are discarded after import", but Alex's intent was always to see the city he is serving — that is the point of putting the game on a real map. Beyond the drawing, Phase 4's rule that track may not cross a building uses the occupancy raster. While buildings were invisible, approximating one as a square of assumed area was defensible. Once the outline is on screen, a tram blocked by a building it does not visibly touch is a bug the player can point at. **The collision check has to agree with what is visible**, so the real footprints are needed either way.
 
-```
-.simpleBuildings out tags center;   ← residential: tags + a point, no nodes
-.points          out body;
-.needGeometry    out body;
-.needGeometry >; out skel qt;       ← geometry only for what needs it
-```
+`processBuildings` now returns `outlines` alongside the grids, rounded to 6 decimals (~10 cm, far finer than anything drawn, roughly half the bytes). They live on the region as `region.buildings` and are drawn by the `buildings` fill layer, under the roads, with the outline fading in past zoom 14. There is a toolbar toggle.
 
-Only ordinary residential buildings take the centroid path (`POPULATION.CENTROID_BUILDINGS`, plus `building=yes` with nothing commercial tagged). Everything else keeps its real polygon, because the tail is what matters: measured footprints run p10 106 m², median 220, mean 285, p90 514, p99 1,421 — only 4.8× across the bulk, but **the largest 10% of buildings hold 29% of all floor area**, and they are disproportionately the hospitals, universities and shopping centres whose attraction weight decides where passengers want to go. `building:levels` is a tag and arrives free either way, so the vertical half of the population model is untouched.
-
-`processBuildings` branches on whether a way has `nodes` or a `center`; a centroid building uses `POPULATION.ASSUMED_AREA_M2` and stamps a square of that size into the occupancy raster for Phase 4's collision check.
-
-**The fixture exercises both paths** — `make-fixture.js` applies the same split before running the pipeline, so 1,785 of its 1,971 buildings arrive as centroids exactly as a live import would.
-
-**Caveats.** The assumed areas are guesses, flagged as such in config. Switching the fixture to the split moved its population from 41,828 to 31,844, a 24% shift — but that measures assumed areas against the fixture's *synthetic* building sizes, not against real OSM, so do not read it as the real-world error. **The split query itself has not been run against live Overpass** — the server was 504ing every request by the time it was written. The syntax is standard Overpass QL and the key primitive (`out tags center`) was verified live, but the combined query needs one confirming run.
-
-**Still unsolved:** the remaining payload is roads and the non-residential buildings, both of which genuinely need their geometry. The last lever would be a vector-tile hybrid — rejected because tile schemas carry no building category at all, and attraction is floor area × category weight, so it would gut half the demand model.
+So the payload stays as it was. The default dropping to 6 km is the mitigation, and the remaining lever — a vector-tile hybrid — is now doubly rejected: tile schemas carry no building category (gutting attraction, which is floor area × category weight) *and* their geometry is clipped and simplified per tile, which would make the visible outline disagree with the collision check in a different way.
 
 ### The POI trim was worth 2.9%, not the 15–18% estimated
 
@@ -193,7 +181,7 @@ Measured A/B on the same 1 km box: 1,558 shop/amenity nodes become 1,334. Only 2
 
 ## 5. What works
 
-Verified by `npm test` (273) and `npm run test:browser` (68).
+Verified by `npm test` (270) and `npm run test:browser` (75).
 
 **Phase 1.** `LocalFrame` and the bbox/chunk maths; terrain height grid with bilinear interpolation (exact on a ramp); 200 m demand grid; 10 m occupancy bitset; Overpass parsing with road-class filtering, abandoned-rail rejection, chunk-overlap de-duplication and shared-node collapsing; Terrarium decode and tile resampling; marching-squares contours and sea polygons; the base-map GeoJSON. In the browser: the new-game screen, search firing no request while typing, MapLibre rendering real pixels, layer toggles, zoom revealing minor roads, `maxBounds`, IndexedDB round-trips, the module worker booting.
 
@@ -219,7 +207,7 @@ fixtures/ make-fixture.js  test-region.json               (npm run fixture)
 tests/   run.js  phase2.js  browser.js  screenshots/
 ```
 
-The fixture is a 6×6 km synthetic coast: a bay in the south-west, a lake, a river, a ridge with a notched valley (for Phase 4's tunnels and bridges), a motorway, a pedestrian street, a road tunnel and bridge, an existing railway with three stations, and an abandoned branch the parser must reject. **31,844 residents, ~885/km²** — a small town, so `passengersPerDot` is 1. Its buildings are split 1,785 centroids / 186 polygons, mirroring the real query.
+The fixture is a 6×6 km synthetic coast: a bay in the south-west, a lake, a river, a ridge with a notched valley (for Phase 4's tunnels and bridges), a motorway, a pedestrian street, a road tunnel and bridge, an existing railway with three stations, and an abandoned branch the parser must reject. **41,828 residents, ~1,162/km²** — a small town, so `passengersPerDot` is 1. It carries 1,971 building outlines.
 
 ---
 

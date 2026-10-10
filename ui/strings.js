@@ -123,6 +123,7 @@ export const STRINGS = {
     buildTrack: 'Build track',
     bulldoze: 'Bulldoze',
     heatMap: 'Demand',
+    buildings: 'Buildings',
     contours: 'Contours',
     underlay: 'Real map',
     finances: 'Finances',

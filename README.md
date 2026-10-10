@@ -20,8 +20,8 @@ Click **Use the test region** for a synthetic region that needs no network at al
 Serve it over `http://` — don't open `index.html` as a `file://` URL. ES modules, the import worker and the OSM services all need a real origin.
 
 ```bash
-npm test               # 273 logic assertions, plain Node, no framework, no dependencies
-npm run test:browser   # 68 assertions driving real Chromium (needs: npm install)
+npm test               # 270 logic assertions, plain Node, no framework, no dependencies
+npm run test:browser   # 75 assertions driving real Chromium (needs: npm install)
 npm run fixture        # regenerate fixtures/test-region.json
 ```
 

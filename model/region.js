@@ -10,6 +10,9 @@
  * @property {RegionMeta}  meta
  * @property {RoadGraph}   roads
  * @property {number[][][]} water     Polygon rings, [[ [lon,lat], ... ], ...]
+ * @property {number[][][]} buildings Footprint outlines, same shape. Drawn on
+ *                                    the map and used by the Phase 4 rule that
+ *                                    track may not cross a building.
  * @property {RoadGraph}   rail       Existing OSM rail (Phase 6). Edges carry no class.
  * @property {RailStation[]} stations Existing OSM stations and halts.
  * @property {Grid}        terrain    Height grid, metres above sea level.

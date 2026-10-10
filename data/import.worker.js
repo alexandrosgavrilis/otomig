@@ -95,7 +95,7 @@ export async function importRegion(request, onProgress) {
 
   // 3. Buildings → residents, attraction and the occupancy raster.
   onProgress('buildings', 0, 1);
-  const { demand, occupancy, residentsTotal } =
+  const { demand, occupancy, residentsTotal, outlines } =
     processBuildings(parsed.buildingWays, parsed.poiNodes, parsed.nodes, frame, populationTotal);
   onProgress('buildings', 1, 1);
 
@@ -124,6 +124,7 @@ export async function importRegion(request, onProgress) {
     rail,
     stations,
     water,
+    buildings: outlines,
     terrain,
     demand,
     occupancy,

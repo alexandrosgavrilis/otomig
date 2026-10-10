@@ -141,45 +141,6 @@ export const POPULATION = {
   POINT_ATTRACTION: 50,
 
   /**
-   * Building types fetched as a centroid instead of a full polygon.
-   *
-   * Building polygons are 47% of the whole import payload — measured over a
-   * 1 km box of central Athens, where 1,835 buildings drag 9,228 geometry
-   * nodes behind them. Overpass can return a way's centroid and tags without
-   * its corner nodes (`out tags center`), which removes almost all of that.
-   *
-   * The cost is footprint area, so only the homogeneous majority goes down
-   * this path. Measured spread in that sample: p10 106 m², median 220, mean
-   * 285, p90 514 — only 4.8× across the bulk, and at 200 m demand cells
-   * holding tens of buildings the error largely averages out. The tail is
-   * what matters: the largest 10% of buildings hold 29% of all floor area,
-   * and they are disproportionately the hospitals, universities and shopping
-   * centres whose attraction weight decides where passengers want to go. So
-   * anything not on this list keeps its real polygon.
-   *
-   * `building:levels` is a tag and still arrives free either way, so the
-   * vertical half of the population model is unaffected.
-   */
-  CENTROID_BUILDINGS: [
-    'house', 'apartments', 'residential', 'terrace', 'detached',
-    'semidetached_house', 'bungalow', 'dormitory',
-  ],
-
-  /**
-   * Assumed footprint for a centroid-only building, m², by `building` value.
-   *
-   * Guesses, not measurements — the point of the list above is that these are
-   * only applied where buildings are numerous and similar enough for the
-   * error to wash out. Retune against a real import.
-   */
-  ASSUMED_AREA_M2: {
-    house: 120, detached: 130, semidetached_house: 100, terrace: 90,
-    bungalow: 110, apartments: 320, residential: 260, dormitory: 400,
-    yes: 150,
-    default: 180,
-  },
-
-  /**
    * Which `amenity=*` nodes count as places people travel to.
    *
    * This is a CORRECTNESS filter, not a bandwidth one. Measured over a 1 km
@@ -547,8 +508,22 @@ export const INTERCITY = {
 export const COLORS = {
   land: '#F4F1EA',
   water: '#BFD9E8',
-  roadMajor: '#DCD6CC',
-  roadMinor: '#E8E3DA',
+  /**
+   * Roads are darker than the spec's #DCD6CC. At that value against #F4F1EA
+   * land the contrast is a few percent of luminance — technically drawn,
+   * effectively invisible, which rather defeats a game about buses following
+   * real streets. Still flat and calm, just actually legible.
+   */
+  roadMajor: '#CAC2B2',
+  roadMinor: '#DED7C9',
+
+  /**
+   * Buildings. The spec says not to draw them, but seeing the city you are
+   * serving is the point of putting the game on a real map — and from Phase 4
+   * the player needs to see what their track cannot cross.
+   */
+  building: '#E6E0D4',
+  buildingStroke: '#D8D1C2',
   contour: '#D8D0C2',
   contourMajor: '#C9BFAE',
 

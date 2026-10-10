@@ -46,6 +46,7 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
       <hr />
       <div class="group">
         <button type="button" id="t-heat">${STRINGS.toolbar.heatMap}</button>
+        <button type="button" id="t-buildings" class="on">${STRINGS.toolbar.buildings}</button>
         <button type="button" id="t-contours" class="on">${STRINGS.toolbar.contours}</button>
         <button type="button" id="t-underlay">${STRINGS.toolbar.underlay}</button>
       </div>
@@ -95,6 +96,7 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
 
   for (const [id, layers] of [
     ['t-heat', ['heat']],
+    ['t-buildings', ['buildings']],
     ['t-contours', ['contours-minor', 'contours-major']],
     ['t-underlay', ['osm-underlay']],
   ]) {

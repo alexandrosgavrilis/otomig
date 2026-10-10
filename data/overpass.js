@@ -24,22 +24,15 @@ const COMMERCIAL_TAGS = ['shop', 'office', 'amenity', 'tourism'];
 /**
  * Overpass QL for one chunk.
  *
- * Still ONE request. Overpass allows several `out` statements per query, each
- * emitting a different named set in a different mode, so splitting the
- * buildings by type costs no extra round trips.
+ * `out body` gives us tagged elements; `>;` recurses down to their nodes and
+ * `out skel qt` emits those as bare coordinates.
  *
- * Three groups:
- *
- *   geometry  roads, water, rail and the buildings whose exact footprint
- *             matters — `out body` plus `>; out skel qt` for their nodes
- *   centroid  ordinary residential buildings — `out tags center`, which
- *             returns tags and a centre point and NO corner nodes
- *   points    stations and POI nodes
- *
- * The split is what keeps a dense city affordable: building polygons are 47%
- * of the payload, and the residential majority does not need them. It should
- * also be lighter server-side, since recursing to node level over thousands
- * of buildings is the expensive part of the old query.
+ * Buildings are fetched with their full geometry. An earlier version asked for
+ * ordinary residential buildings as centroids only (`out tags center`), which
+ * measured 47% smaller — but building outlines are drawn on the map, and the
+ * Phase 4 rule that track cannot cross a building has to agree with what the
+ * player can see. An approximated square behind a visible outline is a bug
+ * they can point at. The payload is the price of an honest map.
  *
  * @param {[number,number,number,number]} bbox [west, south, east, north]
  */
@@ -50,35 +43,20 @@ export function buildQuery(bbox) {
   const roads = ROAD_CLASSES.join('|');
   // Only amenities people actually travel to; see POPULATION.POI_AMENITIES.
   const amenities = POPULATION.POI_AMENITIES.join('|');
-  const residential = POPULATION.CENTROID_BUILDINGS.join('|');
-
-  // `building=yes` is residential only when nothing commercial says otherwise,
-  // which mirrors classifyBuilding(). Tagged ones keep their real polygon.
-  const plainYes = COMMERCIAL_TAGS.map((tag) => `[!${tag}]`).join('');
 
   return `[out:json][timeout:180];
-way["building"](${bb})->.allBuildings;
-(
-  way.allBuildings["building"~"^(${residential})$"];
-  way.allBuildings["building"="yes"]${plainYes};
-)->.simpleBuildings;
-(.allBuildings; - .simpleBuildings;)->.shapedBuildings;
 (
   way["highway"~"^(${roads})$"](${bb});
+  way["building"](${bb});
   way["natural"="water"](${bb});
   way["railway"="rail"](${bb});
-  .shapedBuildings;
-)->.needGeometry;
-(
   node["railway"~"^(station|halt)$"](${bb});
   node["shop"](${bb});
   node["amenity"~"^(${amenities})$"](${bb});
-)->.points;
-
-.simpleBuildings out tags center;
-.points out body;
-.needGeometry out body;
-.needGeometry >; out skel qt;`;
+);
+out body;
+>;
+out skel qt;`;
 }
 
 /**

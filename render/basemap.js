@@ -58,6 +58,29 @@ export function roadsToGeoJSON(graph, which = 'all') {
   return { type: 'FeatureCollection', features };
 }
 
+/**
+ * Building outlines to GeoJSON polygons.
+ *
+ * One feature per building. A dense 6 km region is tens of thousands of small
+ * polygons, which MapLibre handles comfortably as a single GeoJSON source —
+ * it tiles and indexes them once at load.
+ */
+export function buildingsToGeoJSON(buildings) {
+  return {
+    type: 'FeatureCollection',
+    features: (buildings || []).map((ring) => {
+      const coords = ring.slice();
+      const first = coords[0], last = coords[coords.length - 1];
+      if (first[0] !== last[0] || first[1] !== last[1]) coords.push(first);
+      return {
+        type: 'Feature',
+        geometry: { type: 'Polygon', coordinates: [coords] },
+        properties: {},
+      };
+    }).filter((f) => f.geometry.coordinates[0].length >= 4),
+  };
+}
+
 /** Lake and river rings to GeoJSON polygons. */
 export function waterToGeoJSON(water) {
   return {
@@ -132,6 +155,7 @@ export function buildStyle(region, frame) {
   const sources = {
     sea: { type: 'geojson', data: buildSeaPolygons(region.terrain, frame) },
     water: { type: 'geojson', data: waterToGeoJSON(region.water) },
+    buildings: { type: 'geojson', data: buildingsToGeoJSON(region.buildings) },
     contours: { type: 'geojson', data: region.contours },
     roadsMajor: { type: 'geojson', data: roadsToGeoJSON(region.roads, 'major') },
     roadsMinor: { type: 'geojson', data: roadsToGeoJSON(region.roads, 'minor') },
@@ -167,6 +191,23 @@ export function buildStyle(region, frame) {
 
     { id: 'sea', type: 'fill', source: 'sea', paint: { 'fill-color': COLORS.water } },
     { id: 'water', type: 'fill', source: 'water', paint: { 'fill-color': COLORS.water } },
+
+    // Buildings sit under the roads, so a street always reads on top of the
+    // blocks it runs between. The outline only appears once zoomed in enough
+    // for individual buildings to be distinguishable.
+    {
+      id: 'buildings',
+      type: 'fill',
+      source: 'buildings',
+      paint: {
+        'fill-color': COLORS.building,
+        'fill-outline-color': [
+          'interpolate', ['linear'], ['zoom'],
+          14, COLORS.building,      // merge into the fill when far out
+          16, COLORS.buildingStroke,
+        ],
+      },
+    },
 
     // Contours: faint every 20 m, a touch stronger every 100 m.
     {

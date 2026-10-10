@@ -3,8 +3,12 @@
  * building occupancy raster used for track collision checks.
  *
  * Deliberately crude, as the spec asks: floor area divided by a constant gives
- * residents, floor area times a category weight gives attraction. The footprint
- * polygons are discarded once rasterised — the game only ever needs the bits.
+ * residents, floor area times a category weight gives attraction.
+ *
+ * The spec discards footprint polygons after rasterising them. We keep a
+ * simplified copy instead, because buildings are drawn on the map — seeing the
+ * city you are serving is the point — and because the Phase 4 rule that track
+ * cannot cross a building must agree with the outline on screen.
  */
 
 import { REGION, POPULATION } from '../config.js';
@@ -33,36 +37,25 @@ export function processBuildings(buildingWays, poiNodes, osmNodes, frame, popula
     attraction: new Array(cols * rows).fill(0),
   };
   const occupancy = makeOccupancy(frame);
+  /**
+   * Outlines kept for rendering. Coordinates are rounded to 6 decimals —
+   * about 10 cm, far finer than anything drawn — which roughly halves the
+   * stored size against raw OSM precision.
+   * @type {number[][][]}
+   */
+  const outlines = [];
 
   let residentsTotal = 0;
 
   for (const way of buildingWays) {
     const tags = way.tags || {};
 
-    /*
-     * A building arrives one of two ways. Most residential buildings come
-     * back from `out tags center` — tags and a centre point, no corner nodes
-     * — because their polygons are 47% of the import payload and their
-     * footprints are similar enough that an assumed area washes out across a
-     * 200 m demand cell. Everything whose exact shape matters still carries
-     * its full ring. See POPULATION.CENTROID_BUILDINGS.
-     */
     const ring = wayRing(way, osmNodes);
-    const hasShape = ring.length >= 3;
+    if (ring.length < 3) continue;
 
-    let areaM2;
-    let lon;
-    let lat;
-    if (hasShape) {
-      areaM2 = ringAreaM2(ring, frame);
-      [lon, lat] = ringCentroid(ring);
-    } else if (way.center) {
-      areaM2 = assumedArea(tags);
-      ({ lon, lat } = way.center);
-    } else {
-      continue; // Neither geometry nor a centre: nothing usable.
-    }
+    const areaM2 = ringAreaM2(ring, frame);
     if (areaM2 < 10) continue; // Noise, or a mis-tagged node cluster.
+    const [lon, lat] = ringCentroid(ring);
 
     const levels = parseLevels(tags) ?? POPULATION.DEFAULT_LEVELS;
     const floorArea = areaM2 * levels;
@@ -90,8 +83,8 @@ export function processBuildings(buildingWays, poiNodes, osmNodes, frame, popula
     // burnt exactly; a centroid-only building is approximated by a square of
     // the assumed area, which at 10 m cells is close enough for a collision
     // check on the kind of building that takes this path.
-    if (hasShape) rasteriseRing(ring, frame, occupancy);
-    else rasteriseSquare(x, y, Math.sqrt(areaM2), occupancy);
+    rasteriseRing(ring, frame, occupancy);
+    outlines.push(ring.map(([pLon, pLat]) => [round6(pLon), round6(pLat)]));
   }
 
   // Standalone shops and amenities with no building of their own.
@@ -110,7 +103,12 @@ export function processBuildings(buildingWays, poiNodes, osmNodes, frame, popula
     residentsTotal = populationTotal;
   }
 
-  return { demand, occupancy, residentsTotal };
+  return { demand, occupancy, residentsTotal, outlines };
+}
+
+/** ~10 cm precision. Finer than anything we draw, and half the bytes. */
+function round6(value) {
+  return Math.round(value * 1e6) / 1e6;
 }
 
 /**
@@ -124,28 +122,6 @@ function parseLevels(tags) {
   const value = parseFloat(String(raw).split(/[;,]/)[0]);
   if (!Number.isFinite(value) || value <= 0 || value > 200) return null;
   return value;
-}
-
-/**
- * Assumed footprint for a building that arrived as a centroid, m².
- * Keyed on the `building` value, falling back to a general default.
- */
-function assumedArea(tags) {
-  return POPULATION.ASSUMED_AREA_M2[tags.building]
-    ?? POPULATION.ASSUMED_AREA_M2.default;
-}
-
-/** Burn an axis-aligned square of side `sideM` centred on a local position. */
-function rasteriseSquare(x, y, sideM, occupancy) {
-  const { cellM, cols, rows } = occupancy;
-  const half = sideM / 2;
-  const fromCol = Math.max(0, Math.floor((x - half) / cellM));
-  const toCol = Math.min(cols - 1, Math.floor((x + half) / cellM));
-  const fromRow = Math.max(0, Math.floor((y - half) / cellM));
-  const toRow = Math.min(rows - 1, Math.floor((y + half) / cellM));
-  for (let row = fromRow; row <= toRow; row++) {
-    for (let col = fromCol; col <= toCol; col++) setOccupied(occupancy, col, row);
-  }
 }
 
 /**

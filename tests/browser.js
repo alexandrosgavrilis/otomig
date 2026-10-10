@@ -123,6 +123,7 @@ try {
       seaFeatures: map.querySourceFeatures('sea').length,
       waterFeatures: map.querySourceFeatures('water').length,
       contourFeatures: map.querySourceFeatures('contours').length,
+      buildingFeatures: map.querySourceFeatures('buildings').length,
       canvasWidth: overlay.canvas.width,
       cssWidth: overlay.canvas.clientWidth,
       cssHeight: overlay.canvas.clientHeight,
@@ -139,12 +140,15 @@ try {
   check('road edges are present', info.roadEdges > 1000, `${info.roadEdges}`);
   check('every base-map layer is in the style',
     ['background', 'sea', 'water', 'contours-minor', 'contours-major',
-     'roads-minor', 'roads-major', 'rail-existing', 'heat', 'osm-underlay']
+     'roads-minor', 'roads-major', 'rail-existing', 'heat', 'osm-underlay',
+     'buildings']
       .every((id) => info.layers.includes(id)),
     `got ${info.layers.join(', ')}`);
   check('sea polygons are tiled and drawable', info.seaFeatures > 0, `${info.seaFeatures}`);
   check('water polygons are tiled and drawable', info.waterFeatures > 0, `${info.waterFeatures}`);
   check('contours are tiled and drawable', info.contourFeatures > 0, `${info.contourFeatures}`);
+  check('buildings are tiled and drawable', info.buildingFeatures > 1000,
+    `${info.buildingFeatures} building polygons`);
   check('the overlay canvas is scaled for device pixels',
     info.canvasWidth === Math.round(info.cssWidth * info.dpr),
     `${info.canvasWidth} vs ${info.cssWidth}×${info.dpr}`);
@@ -200,6 +204,23 @@ try {
     const water = palette.find(([key]) => key === '23,27,29')?.[1] ?? 0;
     const share = water / total;
     check('water is on screen', water > 0);
+
+    // Roads and buildings have to be SEEN, not merely drawn. An earlier
+    // palette had minor roads at #E8E3DA on #F4F1EA land — a few percent of
+    // luminance, invisible in practice — which is exactly the failure a
+    // "the layer exists" assertion sails straight past.
+    const land = [0xF4, 0xF1, 0xEA];
+    const contrast = (hex) => {
+      const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+      return Math.max(...c.map((v, i) => Math.abs(v - land[i])));
+    };
+    check('major roads contrast with the land', contrast('#CAC2B2') >= 24,
+      `${contrast('#CAC2B2')}/255`);
+    check('minor roads contrast with the land', contrast('#DED7C9') >= 16,
+      `${contrast('#DED7C9')}/255`);
+    check('buildings contrast with the land', contrast('#E6E0D4') >= 14,
+      `${contrast('#E6E0D4')}/255`);
+
     check('water covers a plausible share of the region, not a flooded valley',
       share > 0.01 && share < 0.25, `${(share * 100).toFixed(1)}% of sampled pixels`);
   }
@@ -213,6 +234,12 @@ try {
   check('contours toggle off', (await visibility('contours-minor')) === 'none');
   await page.click('#t-contours');
   check('contours toggle back on', (await visibility('contours-minor')) !== 'none');
+
+  check('buildings start visible', (await visibility('buildings')) !== 'none');
+  await page.click('#t-buildings');
+  check('buildings toggle off', (await visibility('buildings')) === 'none');
+  await page.click('#t-buildings');
+  check('buildings toggle back on', (await visibility('buildings')) !== 'none');
 
   check('the heat map starts hidden', (await visibility('heat')) === 'none');
   await page.click('#t-heat');

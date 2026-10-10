@@ -20,7 +20,9 @@ import {
 import { parseResponses, buildGraph, classifyBuilding, buildQuery } from '../data/overpass.js';
 import { processBuildings } from '../model/population.js';
 import { tileXY, tileNW, buildContours, buildSeaPolygons, sampleTilesToGrid } from '../data/terrain.js';
-import { roadsToGeoJSON, waterToGeoJSON, demandToGeoJSON } from '../render/basemap.js';
+import {
+  roadsToGeoJSON, waterToGeoJSON, demandToGeoJSON, buildingsToGeoJSON,
+} from '../render/basemap.js';
 import { runPhase2Tests } from './phase2.js';
 
 let passed = 0;
@@ -370,78 +372,65 @@ check('some contours are major', region.contours.features.some((f) => f.properti
     heat.features.some((f) => f.properties.intensity > 0.9));
 }
 
-// ─── the split building query ─────────────────────────────────────────────────
+// ─── buildings are kept and drawable ──────────────────────────────────────────
 
 {
   const query = buildQuery([23.72, 37.97, 23.73, 37.99]);
-  // One request, several out statements — that is what keeps the split free.
-  check('the query still fits in a single request',
+  check('buildings are fetched with their geometry',
+    query.includes('way["building"]') && query.includes('>;\nout skel qt;'));
+  check('the query is a single request',
     (query.match(/^\[out:json/gm) || []).length === 1);
-  check('residential buildings are asked for as centroids',
-    query.includes('.simpleBuildings out tags center;'));
-  check('everything else keeps full geometry',
-    query.includes('.needGeometry out body;') && query.includes('.needGeometry >; out skel qt;'));
-  check('the two building sets are a true partition',
-    query.includes('(.allBuildings; - .simpleBuildings;)->.shapedBuildings;'));
-  check('building=yes is only simple when nothing commercial is tagged',
-    ['shop', 'office', 'amenity', 'tourism'].every((t) => query.includes(`[!${t}]`)));
-  check('the centroid list comes from config, not a literal',
-    POPULATION.CENTROID_BUILDINGS.every((v) => query.includes(v)));
-  check('residential buildings are never also in the geometry set',
-    !query.includes('way["building"](37.97,23.72,37.99,23.73);\nout body'));
+  check('no centroid-only shortcut remains', !query.includes('out tags center'));
 }
 
 {
-  // A centroid-only building: tags and a centre, no nodes. This is exactly the
-  // shape `out tags center` returns, and the branch it feeds had no coverage
-  // until the fixture started producing them.
+  // Outlines must survive the import, because they are drawn and because the
+  // Phase 4 "no track through buildings" rule has to agree with what is
+  // visible on screen.
   const frame = new LocalFrame(squareBbox(23.6, 37.95, 2));
-  // Deliberately off a 200 m cell boundary: a point sitting exactly on one
-  // round-trips through lon/lat a hair low and lands in the neighbouring
-  // cell, which is harmless in the game and confusing in a test.
-  const [lon, lat] = frame.toLonLat(1100, 1100);
-  const centroidWay = {
-    type: 'way', id: 1,
+  const square = [[0, 0], [20, 0], [20, 20], [0, 20]].map(([x, y]) =>
+    frame.toLonLat(1100 + x, 1100 + y));
+  const osmNodes = new Map(square.map((c, i) => [i + 1, c]));
+  const way = {
+    type: 'way', id: 1, nodes: [1, 2, 3, 4],
     tags: { building: 'apartments', 'building:levels': '4' },
-    center: { lat, lon },
   };
-  const { demand, occupancy, residentsTotal } =
-    processBuildings([centroidWay], [], new Map(), frame, 0);
+  const { outlines, residentsTotal, occupancy } =
+    processBuildings([way], [], osmNodes, frame, 0);
 
-  const expected = POPULATION.ASSUMED_AREA_M2.apartments * 4 / POPULATION.M2_PER_RESIDENT;
-  near('a centroid building houses people using its assumed area',
-    residentsTotal, expected, 1e-9);
-  check('its residents land in the right demand cell',
-    demand.residents[cellIndex(demand, 1100, 1100)] > 0);
-  check('exactly one cell receives them',
-    demand.residents.filter((v) => v > 0).length === 1);
-  check('a centroid building still blocks track',
-    isOccupied(occupancy, 1100, 1100));
-  check('the occupancy square is about the assumed size', (() => {
-    const side = Math.sqrt(POPULATION.ASSUMED_AREA_M2.apartments); // ~17.9 m
-    return isOccupied(occupancy, 1100 + side / 4, 1100) &&
-      !isOccupied(occupancy, 1100 + side * 3, 1100);
-  })());
-
-  // Assumed area must vary by building type, or a house and a block of flats
-  // would house the same number of people.
-  const houseWay = { ...centroidWay, tags: { building: 'house', 'building:levels': '4' } };
-  const house = processBuildings([houseWay], [], new Map(), frame, 0);
-  check('a house is assumed smaller than a block of flats',
-    house.residentsTotal < residentsTotal,
-    `${house.residentsTotal.toFixed(0)} vs ${residentsTotal.toFixed(0)}`);
-
-  const oddWay = { ...centroidWay, tags: { building: 'something_odd' } };
-  check('an unknown building type falls back to a default area',
-    processBuildings([oddWay], [], new Map(), frame, 0).residentsTotal > 0);
-
-  check('a way with neither geometry nor a centre is skipped',
-    processBuildings([{ type: 'way', id: 2, tags: { building: 'house' } }],
-      [], new Map(), frame, 0).residentsTotal === 0);
+  check('an outline is kept for every building', outlines.length === 1);
+  check('the outline is a ring of lon/lat pairs',
+    outlines[0].length === 4 && outlines[0].every((c) => c.length === 2));
+  check('outline coordinates are rounded, not raw',
+    outlines[0].every(([lon, lat]) =>
+      Math.abs(lon * 1e6 - Math.round(lon * 1e6)) < 1e-9 &&
+      Math.abs(lat * 1e6 - Math.round(lat * 1e6)) < 1e-9));
+  near('residents come from the real footprint, not an assumption',
+    residentsTotal, 20 * 20 * 4 / POPULATION.M2_PER_RESIDENT, 0.5);
+  check('the real footprint is burnt into the occupancy grid',
+    isOccupied(occupancy, 1110, 1110) && !isOccupied(occupancy, 1200, 1200));
 }
 
-check('the fixture exercises the centroid path',
-  region.meta.populationTotal > 0);
+{
+  const buildings = buildingsToGeoJSON(region.buildings);
+  check('the fixture carries building outlines',
+    Array.isArray(region.buildings) && region.buildings.length > 1000,
+    `${region.buildings?.length} outlines`);
+  check('every building becomes a drawable polygon',
+    buildings.features.length === region.buildings.length);
+  check('building rings are closed for GeoJSON',
+    buildings.features.every((f) => {
+      const ring = f.geometry.coordinates[0];
+      return ring.length >= 4 &&
+        ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1];
+    }));
+  check('buildings sit inside the region',
+    buildings.features.every((f) => f.geometry.coordinates[0].every(([lon, lat]) =>
+      lon >= region.meta.bbox[0] && lon <= region.meta.bbox[2] &&
+      lat >= region.meta.bbox[1] && lat <= region.meta.bbox[3])));
+  check('buildingsToGeoJSON tolerates a region with none',
+    buildingsToGeoJSON(undefined).features.length === 0);
+}
 
 // ─── Phase 2: the core loop ───────────────────────────────────────────────────
 

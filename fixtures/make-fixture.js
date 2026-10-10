@@ -22,7 +22,7 @@ import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-import { REGION, POPULATION } from '../config.js';
+import { REGION } from '../config.js';
 import { LocalFrame, squareBbox, serialiseRegion } from '../model/region.js';
 import { parseResponses, buildGraph, wayRing } from '../data/overpass.js';
 import { buildContours } from '../data/terrain.js';
@@ -327,36 +327,6 @@ for (const [x, name, halt] of [[900, 'Harbour West', true], [3000, 'Central', fa
 way([[3000, 1500], [3000, 900], [3000, 400]],
   { railway: 'rail', abandoned: 'yes', name: 'Old Quarry Branch' });
 
-// ─── Mimic Overpass's split output ────────────────────────────────────────────
-
-/**
- * The real query asks for ordinary residential buildings with `out tags
- * center`, which returns tags and a centre point and NO corner nodes. Apply
- * the same split here, so the fixture exercises both code paths in
- * processBuildings exactly as a live import would — otherwise the centroid
- * branch would never be tested against the data it was written for.
- */
-const COMMERCIAL = ['shop', 'office', 'amenity', 'tourism'];
-const isSimple = (tags) =>
-  POPULATION.CENTROID_BUILDINGS.includes(tags.building) ||
-  (tags.building === 'yes' && !COMMERCIAL.some((t) => tags[t]));
-
-let centroidCount = 0;
-for (const el of elements) {
-  if (el.type !== 'way' || !el.tags?.building || !isSimple(el.tags)) continue;
-  // Centre of the way's bounding box, which is what Overpass returns.
-  let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
-  for (const ref of el.nodes) {
-    const node = elements.find((n) => n.type === 'node' && n.id === ref);
-    if (!node) continue;
-    minLon = Math.min(minLon, node.lon); maxLon = Math.max(maxLon, node.lon);
-    minLat = Math.min(minLat, node.lat); maxLat = Math.max(maxLat, node.lat);
-  }
-  el.center = { lat: (minLat + maxLat) / 2, lon: (minLon + maxLon) / 2 };
-  delete el.nodes; // Overpass would never have sent these.
-  centroidCount++;
-}
-
 // ─── Run the real pipeline ────────────────────────────────────────────────────
 
 const parsed = parseResponses([{ elements }]);
@@ -370,7 +340,7 @@ const stations = parsed.stationNodes.map((node) => ({
   name: node.tags?.name || 'Station',
   halt: node.tags?.railway === 'halt',
 }));
-const { demand, occupancy, residentsTotal } =
+const { demand, occupancy, residentsTotal, outlines } =
   processBuildings(parsed.buildingWays, parsed.poiNodes, parsed.nodes, frame, 0);
 const contours = buildContours(terrain, frame);
 
@@ -387,7 +357,7 @@ const region = serialiseRegion({
     hasOsmRail: rail.edges.length > 0,
     synthetic: true,
   },
-  roads, rail, stations, water, terrain, demand, occupancy, contours,
+  roads, rail, stations, water, buildings: outlines, terrain, demand, occupancy, contours,
 });
 
 const outPath = join(dirname(fileURLToPath(import.meta.url)), 'test-region.json');
@@ -408,7 +378,7 @@ console.log(`fixtures/test-region.json written
   rail edges        ${rail.edges.length}  (abandoned branch correctly rejected: ${rail.edges.length < 40})
   stations          ${stations.length}
   water polygons    ${water.length}
-  buildings parsed  ${parsed.buildingWays.length} (${centroidCount} as centroids, ${parsed.buildingWays.length - centroidCount} with polygons)
+  buildings parsed  ${parsed.buildingWays.length}  (${outlines.length} outlines kept for drawing)
   POI nodes         ${parsed.poiNodes.length}
   residents         ${Math.round(residentsTotal).toLocaleString()}
   demand grid       ${demand.cols}x${demand.rows} @ ${demand.cellM}m
