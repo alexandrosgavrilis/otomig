@@ -58,20 +58,26 @@ The public Overpass instance will not build a 5 km query there, and retrying the
 
 - Accept slower imports for dense cities and restate the criterion (simplest; the data is cached forever afterwards).
 - Lower `REGION.SIZE_KM_DEFAULT` so the default is a 5–8 km box and 15 km is an explicit "this will take a while" choice.
-- Trim the query — dropping standalone `node["shop"]`/`node["amenity"]` would cut a lot in a city centre, at the cost of the small attraction bonus they contribute.
+- Trim the query further — but note the POI trim already done was worth only 2.9%; the weight is in buildings, at 49%.
 
 **Both applied.** `REGION.SIZE_KM_DEFAULT` is now **6 km** (the slider still reaches 15), and the POI query is trimmed — `node[amenity]` was unfiltered, which in a city means every bench, bin, postbox, parking space and drinking fountain arriving with a full tag dictionary, 18% of the payload. It now matches `POPULATION.POI_AMENITIES`, a 30-entry list of places people actually travel to. Every `shop` is still kept, and buildings are untouched: a school building is still classified as a school because it comes from `way[building]` with all its tags.
 
-A caveat on the saving: I could not re-measure it, because Overpass started refusing queries and I stopped rather than keep hitting it. The trim removes the obvious noise, but a dense centre is full of cafés, restaurants and bars — which are in the keep list — so expect the gain to be modest downtown and larger in suburbs, where parking and street furniture dominate. **Worth re-measuring on your machine**, where the one-line check is:
+**Now measured, and I was wrong about the size of it.** I estimated 15–18%; the real figure is **2.9%**. Over a 1 km box of central Athens, 1,558 shop/amenity nodes become 1,334 — only 224 dropped, because nearly all POI nodes in a city centre are cafés, restaurants, shops and banks, which the list keeps. My 18% figure was the share of *all* POI nodes in the payload, and we keep 86% of them.
 
-```js
-// in the browser console on the new-game screen
-const { buildQuery } = await import('/data/overpass.js');
-const { squareBbox } = await import('/model/region.js');
-const r = await fetch('https://overpass-api.de/api/interpreter',
-  { method: 'POST', body: buildQuery(squareBbox(23.7275, 37.9838, 1)) });
-console.log(((await r.text()).length / 1048576).toFixed(2), 'MB');  // was 1.88
-```
+| dropped | count |
+| --- | --- |
+| waste_basket | 43 |
+| bench | 34 |
+| recycling | 22 |
+| telephone | 18 |
+| atm | 17 |
+| money_transfer | 12 |
+| parking_entrance / parking | 18 |
+| post_box, charging_station, toilets, … | the rest |
+
+**Keep the filter anyway — it is a correctness fix, not a bandwidth one.** Every POI node contributes `POINT_ATTRACTION`, so before this a park bench generated as much trip attraction as a bakery, and about 14% of all point attraction in that sample was street furniture. In a suburb, where benches and parking outnumber shops, the distortion is worse.
+
+**The payload problem is unsolved and lives in buildings** — 49% of it. The only real levers there are the smaller default box (applied) or the vector-tile hybrid discussed above (not applied; it would cost the attraction categories).
 
 ## What still needs your machine
 

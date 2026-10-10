@@ -122,16 +122,23 @@ export const POPULATION = {
   /**
    * Which `amenity=*` nodes count as places people travel to.
    *
-   * `node[amenity]` unfiltered is one of the most expensive things in the
-   * import — 18% of the payload over central Athens — because OSM tags
-   * benches, bins, bicycle parking, postboxes, drinking fountains and parking
-   * spaces as amenities. None of those generate a transit trip, and each one
-   * arrives with a full tag dictionary.
+   * This is a CORRECTNESS filter, not a bandwidth one. Measured over a 1 km
+   * box of central Athens: of 1,558 shop/amenity nodes, only 224 are dropped
+   * — benches (34), waste baskets (43), recycling points (22), telephones,
+   * ATMs, postboxes, parking entrances. That is just 2.9% of the import
+   * payload, because the great majority of POI nodes in a city centre are
+   * cafés, restaurants, shops and banks, which are all kept.
    *
-   * Every shop is kept (a shop really is somewhere people go); amenities are
-   * restricted to this list. Buildings are unaffected — they are fetched by
-   * `way[building]` with all their tags, so a school building is still
-   * classified as a school whether or not `school` appears here.
+   * The reason to do it is the demand model. Every POI node contributes
+   * POINT_ATTRACTION, so before this filter a park bench generated as much
+   * trip attraction as a bakery, and roughly 14% of all point attraction in
+   * that sample was street furniture. In a suburb, where benches and parking
+   * outnumber shops, the distortion is worse.
+   *
+   * Every shop is kept (a shop really is somewhere people go). Buildings are
+   * unaffected — they come from `way[building]` with all their tags, so a
+   * school building is still classified as a school whether or not `school`
+   * appears here.
    */
   POI_AMENITIES: [
     // Education
