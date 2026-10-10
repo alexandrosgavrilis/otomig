@@ -14,7 +14,7 @@
 
 import { REGION } from '../config.js';
 import { LocalFrame, squareBbox, chunkBbox, serialiseRegion } from '../model/region.js';
-import { fetchChunk, parseResponses, buildGraph, wayRing } from './overpass.js';
+import { fetchChunkAdaptive, parseResponses, buildGraph, wayRing } from './overpass.js';
 import { buildHeightGrid, buildContours } from './terrain.js';
 import { processBuildings } from '../model/population.js';
 
@@ -70,7 +70,8 @@ export async function importRegion(request, onProgress) {
   const responses = [];
   onProgress('roads', 0, chunks.length);
   for (let i = 0; i < chunks.length; i++) {
-    responses.push(await fetchChunk(chunks[i], (msg) => onProgress('roads', i, chunks.length, msg)));
+    responses.push(...await fetchChunkAdaptive(chunks[i],
+      (msg) => onProgress('roads', i, chunks.length, msg)));
     onProgress('roads', i + 1, chunks.length, `Fetching map data (${i + 1}/${chunks.length})`);
   }
 

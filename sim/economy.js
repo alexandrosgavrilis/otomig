@@ -23,8 +23,10 @@ export class Economy {
    * @param {string} difficulty key into DIFFICULTY
    * @param {number} residents region population, for starting capital
    */
-  constructor(difficulty, residents) {
+  constructor(difficulty, residents, passengersPerDot = 10) {
     this.difficulty = difficulty;
+    /** Passengers one dot stands for. Scales with the region; see config.js. */
+    this.passengersPerDot = passengersPerDot;
     const rules = DIFFICULTY[difficulty];
 
     this.unlimited = rules.unlimitedMoney;
@@ -91,7 +93,8 @@ export class Economy {
    * @param {boolean} hasOsmRail drives the 25% rail maintenance discount
    */
   endDay(network, coverageFraction, hasOsmRail) {
-    const dotsToPassengers = (dots) => dots * 10; // One dot is ten passengers.
+    // Dots are the unit the simulation counts in; money is owed per person.
+    const dotsToPassengers = (dots) => dots * this.passengersPerDot;
 
     // Tickets: one per trip, charged at first boarding. On Hard a slice of
     // riders evade the fare — but advertising is paid by everyone anyway.
@@ -184,7 +187,8 @@ export class Economy {
 
   toJSON() {
     return {
-      difficulty: this.difficulty, balance: this.balance,
+      difficulty: this.difficulty, passengersPerDot: this.passengersPerDot,
+      balance: this.balance,
       startingCapital: this.startingCapital, today: this.today,
       month: this.month, lastMonth: this.lastMonth, transported: this.transported,
       negativeMonths: this.negativeMonths, gameOver: this.gameOver,
@@ -193,7 +197,7 @@ export class Economy {
   }
 
   static fromJSON(data) {
-    const economy = new Economy(data.difficulty, 0);
+    const economy = new Economy(data.difficulty, 0, data.passengersPerDot ?? 10);
     Object.assign(economy, data);
     economy.unlimited = DIFFICULTY[data.difficulty].unlimitedMoney;
     return economy;

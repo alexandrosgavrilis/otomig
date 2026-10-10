@@ -33,9 +33,38 @@ Both would have met you as a blank or wrong map:
 
 A third, found by the worker test: **`fetch` has no timeout**, so a silently dropped connection would hang an import forever behind a frozen progress bar. Overpass and terrain requests are now aborted and retried ([`fetchWithTimeout`](data/overpass.js)).
 
+## Live endpoints — tested, and two real problems found
+
+**Correction to my earlier note: this sandbox CAN reach Overpass, Nominatim, the elevation bucket and the OSM tile server.** The spec said it could not and I took that on trust instead of checking. Having now tested them directly:
+
+**Elevation is fine.** `Access-Control-Allow-Origin: *` is present on GET (not on HEAD, which is what made it look missing at first), so there is no tainted-canvas problem. The decode formula is confirmed against live tiles: London reads −5…30 m, Athens −3…263 m, Mont Blanc 1,719…**4,790 m** against a true summit of 4,806 m. `tileXY` is correct.
+
+**Nominatim is fine.** Returns results with `extratags` as expected.
+
+**Problem 1 — Overpass 406s a request with no `User-Agent`.** Browsers always send one, so the game is unaffected, but any Node-side test of the live API must set it.
+
+**Problem 2 — a 5 km chunk of a dense city fails outright.** Measured against central Athens:
+
+| Box | Result |
+| --- | --- |
+| 1 km | 200, 1.9 MB, 6.5 s |
+| 2 km | 200, 7.5 MB, 18.4 s |
+| 3 km | **504** |
+| 5 km (our chunk size) | **504** |
+
+The public Overpass instance will not build a 5 km query there, and retrying the identical query — which is all the old code did — fails again. **Fixed**: `fetchChunkAdaptive` now splits a refused chunk into four and recurses, up to `REGION.OVERPASS_MAX_SUBDIVIDE` (3 levels, down to 625 m). Sparse regions never subdivide and pay nothing.
+
+**This means the Phase 1 acceptance criterion needs revising, and that is your call.** At the measured 1.87 MB/km², a dense 15×15 km city is roughly **200–400 MB and 10–20 minutes**, not "about two minutes". It is also far beyond Overpass's ~10 MB/day courtesy guidance for regular use. Options:
+
+- Accept slower imports for dense cities and restate the criterion (simplest; the data is cached forever afterwards).
+- Lower `REGION.SIZE_KM_DEFAULT` so the default is a 5–8 km box and 15 km is an explicit "this will take a while" choice.
+- Trim the query — dropping standalone `node["shop"]`/`node["amenity"]` would cut a lot in a city centre, at the cost of the small attraction bonus they contribute.
+
+My suggestion: restate the criterion and default to a smaller box. A 15 km square of Athens is genuinely a lot of the world.
+
 ## What still needs your machine
 
-Everything above was verified against the fixture, which needs no network. **The live import path has still never run** — this sandbox cannot reach Overpass, Nominatim or the elevation bucket. Please do this once:
+The import path has now been exercised piece by piece, but **never end to end in a browser**. Please do this once:
 
 ```bash
 npm start      # then open http://localhost:8000
@@ -47,7 +76,7 @@ Never open `index.html` as a `file://` URL. Nominatim's policy requires requests
 2. **Reload it.** It must come back instantly from IndexedDB without refetching.
 3. **Time a dense 15 km city.** The acceptance criterion is about two minutes or less. If it's slower, trim the Overpass building query first.
 
-**Most likely to break: elevation decoding.** We read pixels out of Terrarium PNGs, which needs the S3 bucket to send CORS headers, and I could not reach it to check. [data/terrain.js](data/terrain.js) already uses the safer `fetch()` → `createImageBitmap()` route rather than `<img>` + `drawImage`, which would taint the canvas — but if "Fetching elevation" fails, that is this. **Second: Overpass** rejecting a dense 15 km box; try raising `REGION.OVERPASS_CHUNKS` from 3 to 4.
+Both former risks are now resolved — elevation CORS is confirmed present, and dense-city 504s are handled by subdivision. What remains unverified is only the assembly: worker → IndexedDB → playable map, on a real region, in a real browser. Start with a **5 km box** rather than 15, so the first live import takes a minute rather than twenty.
 
 ### The push didn't happen
 
@@ -71,6 +100,10 @@ Applied in [config.js](config.js); reasoning and sources in [RESEARCH.md](RESEAR
 | **C1** | Tram on-street stays **€15M/km**; the Eno citation is replaced with German project reporting, which is what actually supports the number. |
 | **C2 + C3** | **Metro and train tunnel costs swapped: metro €80M/km, train €120M/km.** Fixes both complaints at once — heavy-rail bores genuinely cost more than metro bores, and €80M/km keeps metro reachable instead of loan-only. Knowingly below the efficient-European band, for playability. |
 | **C4** | Loans are now **3/6/12 years at 4/6/9%**, down from 5/10/20 at 3/5/8. |
+
+### One spec amendment, needs your nod
+
+**One dot no longer always means ten passengers.** It now scales with the region: `passengersPerDot(residents)` in [config.js](config.js), which is 1 for anything up to ~150,000 residents, 10 at a million, capped at 50. The reason is arithmetic, not taste — the visible dot count is roughly `(trips/day × journey length ÷ 18 h) ÷ dot size`, so a town of 40,000 showed about one dot at a time and a village showed none. That was not a bug: a village really does have about four people on its buses at any moment, and four people is less than half a dot. The scale is fixed at import and never changes mid-game, because a dot that silently changed meaning would make every count lie. Every dot↔people conversion now reads one value; there were four hardcoded `× 10`s, including one in the ticket income, which would have silently desynced the money.
 
 Good news from the same research: **the spec's cruise speeds and capacities are right.** They look wrong against real commercial speeds until you work the dwell through — bus at 25 km/h cruise with a 20 s dwell and 400 m spacing comes out at 18.5 km/h door to door, which is exactly real. All four modes land in the real range, and all four capacities are a consistent ~60% of crush capacity. `tests/run.js` now guards those numbers so a future retune can't silently break the match.
 

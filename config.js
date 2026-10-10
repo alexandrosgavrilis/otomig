@@ -30,6 +30,17 @@ export const REGION = {
    * progress bar. An aborted chunk is retried like any other failure.
    */
   OVERPASS_TIMEOUT_MS: 180000,
+  /**
+   * How many times a chunk may be split when Overpass refuses it.
+   *
+   * Measured against the live API: a 5 km chunk of central Athens returns
+   * HTTP 504 every time — the public instance simply will not build it — while
+   * a 2 km box of the same place succeeds in 18 s and 7.5 MB. A fixed chunk
+   * count therefore cannot serve both a dense city and a quiet island, so a
+   * chunk that fails is split into four and retried. Three levels takes a
+   * 5 km chunk down to 625 m, which is far below anything observed to fail.
+   */
+  OVERPASS_MAX_SUBDIVIDE: 3,
   /** Same, for an elevation tile. Tiles are small, so this is generous. */
   TERRAIN_TIMEOUT_MS: 30000,
 
@@ -117,8 +128,31 @@ export const DEMAND = {
   /** Fare elasticity: demand scales by (price multiplier) ^ FARE_EXPONENT. [spec] */
   FARE_EXPONENT: -0.3,
 
-  /** Passengers per spawned dot. One dot = 10 passengers. [spec] */
-  PASSENGERS_PER_DOT: 10,
+  /**
+   * How many real passengers one visible dot stands for.
+   *
+   * The spec fixes this at 10, which is right for a big city and wrong
+   * everywhere else. The number of dots visible at any moment is
+   *
+   *   dots ≈ (trips per day × average journey length ÷ service hours) ÷ dot size
+   *
+   * so it falls with the square of a region's smallness: fewer residents make
+   * fewer trips AND a smaller network captures a smaller share of them. At 10
+   * passengers per dot a town of 40,000 shows about one or two dots at a time
+   * and a village shows none at all — not because the model is wrong, but
+   * because a village really does have about four people on its buses at any
+   * moment, and four people is less than half a dot.
+   *
+   * So the dot size scales with the region: one dot = one passenger in towns,
+   * rising to 50 in a metropolis where thousands would be unreadable. It is
+   * fixed once at import and never changes during a game — a dot that
+   * silently changed meaning while you played would make every count lie.
+   *
+   * [spec, amended — see HANDOFF.md]
+   */
+  RESIDENTS_PER_DOT_STEP: 100000,
+  PASSENGERS_PER_DOT_MIN: 1,
+  PASSENGERS_PER_DOT_MAX: 50,
 
   /** Walking speed between stops in an interchange, m/s. [spec] */
   WALK_SPEED_MS: 1.2,
@@ -481,3 +515,19 @@ export const ATTRIBUTION = {
 
 /** Pinned MapLibre version. v6 is ESM-only and breaks the no-build-step rule. [research] */
 export const MAPLIBRE_VERSION = '5.24.0';
+
+/**
+ * Passengers represented by one dot, for a region of this many residents.
+ *
+ * Rounded to a whole number because a dot has to mean an integer of people for
+ * the ticket maths to stay honest, and clamped so a village still shows its
+ * handful of passengers and a metropolis does not drown in them.
+ *
+ * @param {number} residents
+ * @returns {number}
+ */
+export function passengersPerDot(residents) {
+  const raw = Math.round((residents || 0) / DEMAND.RESIDENTS_PER_DOT_STEP);
+  return Math.min(DEMAND.PASSENGERS_PER_DOT_MAX,
+    Math.max(DEMAND.PASSENGERS_PER_DOT_MIN, raw));
+}

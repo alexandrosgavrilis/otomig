@@ -6,7 +6,7 @@
  * one thing to pass around and exactly one thing to serialise.
  */
 
-import { CLOCK, COSTS, MODES } from '../config.js';
+import { CLOCK, COSTS, MODES, passengersPerDot } from '../config.js';
 import { LocalFrame } from '../model/region.js';
 import { Network, Stop, Line } from '../model/network.js';
 import { RoadIndex } from '../build/road-routing.js';
@@ -29,7 +29,13 @@ export class Game {
     this.clock = new Clock();
     this.router = new Router(this.network);
     this.demand = new DemandModel(region, this.frame, this.network);
-    this.economy = new Economy(this.difficulty, region.meta.populationTotal);
+    /**
+     * Passengers one dot stands for, scaled to the region and fixed for the
+     * whole game. Every dot↔people conversion reads this; nothing hardcodes 10.
+     */
+    this.passengersPerDot = passengersPerDot(region.meta.populationTotal);
+    this.economy = new Economy(this.difficulty, region.meta.populationTotal,
+      this.passengersPerDot);
 
     /** Currently selected object (stop or line), for the right-hand panel. */
     this.selection = null;
@@ -121,7 +127,7 @@ export class Game {
 
       // Roll each line's daily ridership so the panel has a stable figure.
       for (const line of this.network.lines.values()) {
-        line.ridersPerDay = line.ridersToday * 10 * CLOCK.DAILY_SCALE;
+        line.ridersPerDay = line.ridersToday * this.passengersPerDot * CLOCK.DAILY_SCALE;
         line.ridersToday = 0;
       }
     }
@@ -236,7 +242,7 @@ export class Game {
     return {
       balance: this.economy.balance,
       transported: this.economy.transported,
-      onNetwork: this.network.passengersOnNetwork * 10,
+      onNetwork: this.network.passengersOnNetwork * this.passengersPerDot,
       lastMonthNet: this.economy.lastMonthNet,
       negativeMonths: this.economy.negativeMonths,
       gameOver: this.economy.gameOver,

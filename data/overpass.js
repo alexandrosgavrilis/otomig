@@ -9,6 +9,7 @@
  */
 
 import { REGION, BUILD } from '../config.js';
+import { chunkBbox } from '../model/region.js';
 
 /** Road classes we keep. Service roads, tracks, footways and paths are not roads here. */
 const ROAD_CLASSES = [
@@ -116,6 +117,41 @@ export async function fetchWithTimeout(url, options, timeoutMs) {
     throw error;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/**
+ * Fetch a chunk, splitting it into four and recursing if Overpass refuses.
+ *
+ * This is what lets one chunk count serve both a dense city and an empty
+ * island. A 504 means the server gave up building the result, and retrying the
+ * identical query just fails again — the only thing that helps is asking for
+ * less. Sparse regions never subdivide and pay nothing for this.
+ *
+ * @param {[number,number,number,number]} bbox
+ * @param {(msg:string)=>void} [log]
+ * @param {number} [depth]
+ * @returns {Promise<Object[]>} one or more raw Overpass responses
+ */
+export async function fetchChunkAdaptive(bbox, log, depth = 0) {
+  try {
+    return [await fetchChunk(bbox, log)];
+  } catch (error) {
+    if (depth >= REGION.OVERPASS_MAX_SUBDIVIDE) throw error;
+
+    const message = String(error?.message || error);
+    // 504 and timeouts mean "too much to build". A 400 means our query is
+    // wrong and splitting it would just fail four times as slowly.
+    const tooHeavy = message.includes('504') || message.includes('timed out') ||
+      message.includes('unreachable');
+    if (!tooHeavy) throw error;
+
+    log?.('Area too dense for one query — splitting it');
+    const responses = [];
+    for (const quarter of chunkBbox(bbox, 2)) {
+      responses.push(...await fetchChunkAdaptive(quarter, log, depth + 1));
+    }
+    return responses;
   }
 }
 

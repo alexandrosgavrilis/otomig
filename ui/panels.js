@@ -115,7 +115,7 @@ function lineHtml(game, line) {
       <div class="row"><span>${STRINGS.panel.stops}</span>
         <span>${line.stops.length}${line.loop ? ` · ${STRINGS.panel.loop}` : ''}</span></div>
       <div class="row"><span>${STRINGS.panel.ridersNow}</span>
-        <span>${(line.ridersNow * 10).toLocaleString()} / ${(line.vehicles.length * capacity).toLocaleString()}</span></div>
+        <span>${(line.ridersNow * game.passengersPerDot).toLocaleString()} / ${(line.vehicles.length * capacity).toLocaleString()}</span></div>
       <div class="row"><span>${STRINGS.panel.ridersPerDay}</span>
         <span>${Math.round(line.ridersPerDay).toLocaleString()}</span></div>
     </div>
@@ -146,7 +146,7 @@ function stopHtml(game, stop) {
 
     <div class="rows">
       <div class="row"><span>${STRINGS.panel.waiting}</span>
-        <span>${(stop.waiting.length * 10).toLocaleString()}</span></div>
+        <span>${(stop.waiting.length * game.passengersPerDot).toLocaleString()}</span></div>
       <div class="row"><span>${STRINGS.panel.longestWait}</span>
         <span>${Math.round(longestWait / 60)} min</span></div>
       <div class="row"><span>${STRINGS.panel.residents}</span>

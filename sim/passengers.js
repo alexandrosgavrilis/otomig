@@ -1,9 +1,10 @@
 /**
  * Passengers: waiting, boarding, transferring, arriving, and giving up.
  *
- * One dot is ten passengers. A dot waits at its boarding stop, takes the first
- * vehicle of its line heading the right way that has room, walks at transfers,
- * and vanishes when it arrives.
+ * A dot stands for several real passengers — how many depends on the region's
+ * size, see `passengersPerDot` in config.js. A dot waits at its boarding stop,
+ * takes the first vehicle of its line heading the right way that has room,
+ * walks at transfers, and vanishes when it arrives.
  *
  * The patience rule is the one that gives the game its slow, visible failure:
  * past 15 sim minutes (12 on Hard, 20 on Easy) a dot gives up, the pair's
@@ -13,7 +14,7 @@
  * near-misses and the game feels unfair rather than demanding.
  */
 
-import { DEMAND, PATIENCE, DIFFICULTY } from '../config.js';
+import { PATIENCE, DIFFICULTY } from '../config.js';
 import { secondsToStop } from './vehicles.js';
 
 let nextDotId = 1;
@@ -43,7 +44,6 @@ export class Dot {
 
   /** @returns {import('./routing.js').Leg|undefined} */
   get leg() { return this.route.legs[this.legIndex]; }
-  get passengers() { return DEMAND.PASSENGERS_PER_DOT; }
 }
 
 /**

@@ -12,7 +12,7 @@
  * directly rather than just redistributing it.
  */
 
-import { DEMAND, PATIENCE, CLOCK, SEASON_PROFILES } from '../config.js';
+import { DEMAND, PATIENCE, CLOCK, SEASON_PROFILES, passengersPerDot } from '../config.js';
 import { Clock } from './clock.js';
 
 export class DemandModel {
@@ -25,6 +25,11 @@ export class DemandModel {
     this.region = region;
     this.frame = frame;
     this.network = network;
+    /**
+     * Passengers per dot, fixed for this region at import. Everything that
+     * converts between dots and people reads this one value.
+     */
+    this.passengersPerDot = passengersPerDot(region.meta.populationTotal);
 
     /** Cell index → stop id, for cells inside some catchment. @type {Map<number,string>} */
     this.catchment = new Map();
@@ -284,12 +289,12 @@ export class DemandModel {
     for (const [key, rate] of this.pairRate) {
       if (rate <= 0) continue;
       const accumulated = (this.pairAccumulator.get(key) ?? 0) + rate * simSeconds;
-      if (accumulated < DEMAND.PASSENGERS_PER_DOT) {
+      if (accumulated < this.passengersPerDot) {
         this.pairAccumulator.set(key, accumulated);
         continue;
       }
-      const dots = Math.floor(accumulated / DEMAND.PASSENGERS_PER_DOT);
-      this.pairAccumulator.set(key, accumulated - dots * DEMAND.PASSENGERS_PER_DOT);
+      const dots = Math.floor(accumulated / this.passengersPerDot);
+      this.pairAccumulator.set(key, accumulated - dots * this.passengersPerDot);
       const [fromId, toId] = key.split('|');
       for (let i = 0; i < dots; i++) born.push({ fromId, toId });
     }

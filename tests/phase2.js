@@ -14,7 +14,10 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-import { CLOCK, COSTS, DIFFICULTY, MODES, VEHICLES, DEMAND, PATIENCE, LOANS } from '../config.js';
+import {
+  CLOCK, COSTS, DIFFICULTY, MODES, VEHICLES, DEMAND, PATIENCE, LOANS,
+  passengersPerDot,
+} from '../config.js';
 import { LocalFrame, reviveRegion } from '../model/region.js';
 import { Network } from '../model/network.js';
 import { RoadIndex } from '../build/road-routing.js';
@@ -571,6 +574,64 @@ export function runPhase2Tests(check, near) {
     check('the save stays small',
       JSON.stringify(snapshot).length < 20000,
       `${JSON.stringify(snapshot).length} bytes`);
+  }
+
+  // ─── Dot scale ──────────────────────────────────────────────────────────
+  {
+    // A dot must mean a whole number of people, and that number has to suit
+    // the region: 10 everywhere makes a town show nothing and a metropolis
+    // show an unreadable swarm.
+    check('a village or town shows one passenger per dot',
+      passengersPerDot(2000) === 1 && passengersPerDot(40000) === 1);
+    check('a small city still shows one per dot', passengersPerDot(120000) === 1);
+    check('a large city scales up', passengersPerDot(500000) === 5);
+    check('a million-person region matches the spec\'s original 10',
+      passengersPerDot(1000000) === 10);
+    check('a metropolis is capped so dots stay readable',
+      passengersPerDot(50000000) === DEMAND.PASSENGERS_PER_DOT_MAX);
+    check('the scale is never zero or fractional', [0, 1, 999, 1e9].every((r) => {
+      const p = passengersPerDot(r);
+      return Number.isInteger(p) && p >= 1;
+    }));
+    check('the scale rises monotonically with residents', (() => {
+      let previous = 0;
+      for (let r = 0; r <= 6e6; r += 50000) {
+        const p = passengersPerDot(r);
+        if (p < previous) return false;
+        previous = p;
+      }
+      return true;
+    })());
+
+    // The whole point: a town must actually produce visible dots.
+    const town = newGame('creative');
+    check('the fixture town uses one passenger per dot',
+      town.passengersPerDot === 1, `${town.passengersPerDot}`);
+    buildLine(town, [
+      at(town, 1600, 2800), at(town, 2600, 2800), at(town, 3400, 2800),
+    ]);
+    town.invalidate();
+    run(town, 60, 3);
+    check('a town-sized region produces visible dots',
+      town.totals.spawned > 5, `${town.totals.spawned} dots in ~24 in-game days`);
+
+    // Money must follow the scale, not a hardcoded 10. Same network, same
+    // time, dot scale forced to 10: the euros per passenger must be identical.
+    const perPassenger = (game) => {
+      const tickets = game.economy.month.tickets + game.economy.lastMonth.tickets;
+      return tickets / Math.max(1, game.economy.transported);
+    };
+    const scaled = newGame('creative');
+    scaled.passengersPerDot = 10;
+    scaled.economy.passengersPerDot = 10;
+    scaled.demand.passengersPerDot = 10;
+    buildLine(scaled, [
+      at(scaled, 1600, 2800), at(scaled, 2600, 2800), at(scaled, 3400, 2800),
+    ]);
+    scaled.invalidate();
+    run(scaled, 60, 3);
+    near('fare per passenger is independent of the dot scale',
+      perPassenger(town), perPassenger(scaled), 0.01);
   }
 
   // ─── Render helpers ─────────────────────────────────────────────────────
