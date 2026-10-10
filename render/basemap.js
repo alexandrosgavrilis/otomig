@@ -190,25 +190,29 @@ export function buildStyle(region, frame) {
       type: 'line',
       source: 'roadsMinor',
       minzoom: RENDER.MINOR_ROAD_MIN_ZOOM,
+      layout: { 'line-cap': 'round' },
       paint: {
         'line-color': COLORS.roadMinor,
         'line-width': ['interpolate', ['linear'], ['zoom'], 14, 1, 17, 3],
-        'line-cap': 'round',
       },
     },
     {
       id: 'roads-major',
       type: 'line',
       source: 'roadsMajor',
+      layout: { 'line-cap': 'round' },
       paint: {
         'line-color': COLORS.roadMajor,
         // Scale the per-class width with zoom so the map reads at every scale.
+        // `zoom` is only legal as the direct input of a top-level interpolate,
+        // so the per-feature multiply has to live inside each stop rather than
+        // wrapping the interpolate.
         'line-width': [
-          '*',
-          ['get', 'width'],
-          ['interpolate', ['linear'], ['zoom'], 11, 0.5, 13, 1, 16, 2.2],
+          'interpolate', ['linear'], ['zoom'],
+          11, ['*', ['get', 'width'], 0.5],
+          13, ['*', ['get', 'width'], 1.0],
+          16, ['*', ['get', 'width'], 2.2],
         ],
-        'line-cap': 'round',
       },
     },
 

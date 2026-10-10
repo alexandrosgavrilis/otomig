@@ -88,8 +88,13 @@ function heightAtLocal(x, y) {
   const acrossRidge = (ky - kx - 1.2) / Math.SQRT2;
   const ridge = 180 * Math.exp(-(acrossRidge ** 2) / 0.6);
 
-  // Valley: a Gaussian trough crossing the ridge, along x = 3.6 km.
-  const valley = -120 * Math.exp(-(((kx - 3.6) / 0.45) ** 2));
+  // Valley: a notch cut through the ridge along x = 3.6 km. It scales with the
+  // ridge rather than subtracting a flat amount, so it carves a gap where
+  // there is a ridge and does nothing on the open plain. Subtracting a
+  // constant instead would drive a wide area below zero and — once clamped —
+  // leave a plateau of exact zeros, which the sea tracer would read as water.
+  const notch = Math.exp(-(((kx - 3.6) / 0.45) ** 2));
+  const ridgeCut = ridge * (1 - 0.92 * notch);
 
   // Coastal plain rising inland, plus a little texture.
   const plain = 12 * Math.min(fromCorner, 3);
@@ -97,7 +102,8 @@ function heightAtLocal(x, y) {
     6 * Math.sin(kx * 2.3) * Math.cos(ky * 1.9) +
     3 * Math.sin(kx * 5.1 + 1.3) * Math.sin(ky * 4.7);
 
-  const land = Math.max(0, plain + ridge + Math.min(0, valley) + noise);
+  // Land never sits at exactly 0 m: that is the sea tracer's boundary value.
+  const land = Math.max(1.5, plain + ridgeCut + noise);
   return bay < 0 ? bay : land;
 }
 

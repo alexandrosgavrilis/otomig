@@ -63,22 +63,60 @@ export async function fetchChunk(bbox, log) {
   let delay = REGION.OVERPASS_RETRY_MS;
 
   for (let attempt = 0; attempt <= REGION.OVERPASS_RETRY_MAX; attempt++) {
-    const response = await fetch(REGION.OVERPASS_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain' },
-      body,
-    });
+    const lastAttempt = attempt === REGION.OVERPASS_RETRY_MAX;
+    let response;
+    try {
+      response = await fetchWithTimeout(REGION.OVERPASS_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body,
+      }, REGION.OVERPASS_TIMEOUT_MS);
+    } catch (error) {
+      // A dropped or timed-out connection is as retryable as a 504, and is
+      // what a blocked network looks like from inside the browser.
+      if (lastAttempt) {
+        throw new Error(`Overpass unreachable: ${error?.message || error}`);
+      }
+      log?.(`Overpass did not answer, retrying in ${delay / 1000}s`);
+      await new Promise((r) => setTimeout(r, delay));
+      delay *= 2;
+      continue;
+    }
+
     if (response.ok) return response.json();
 
     const retryable = response.status === 429 || response.status === 504;
-    if (!retryable || attempt === REGION.OVERPASS_RETRY_MAX) {
-      throw new Error(`Overpass HTTP ${response.status}`);
-    }
+    if (!retryable || lastAttempt) throw new Error(`Overpass HTTP ${response.status}`);
+
     log?.(`Overpass ${response.status}, retrying in ${delay / 1000}s`);
     await new Promise((r) => setTimeout(r, delay));
     delay *= 2;
   }
   throw new Error('unreachable');
+}
+
+/**
+ * `fetch` with a deadline. Without one, a connection that is silently dropped
+ * — a firewall, a captive portal, a sandbox with no route out — never settles,
+ * and the import hangs behind a progress bar that will never move again.
+ *
+ * @param {string|URL} url
+ * @param {RequestInit} options
+ * @param {number} timeoutMs
+ */
+export async function fetchWithTimeout(url, options, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error(`timed out after ${Math.round(timeoutMs / 1000)}s`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**

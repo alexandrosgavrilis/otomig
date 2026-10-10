@@ -7,6 +7,7 @@
  */
 
 import { REGION } from '../config.js';
+import { fetchWithTimeout } from './overpass.js';
 
 /** Slippy-map tile x/y for a lon/lat at a zoom. @returns {[number,number]} */
 export function tileXY(lon, lat, z) {
@@ -37,7 +38,7 @@ export function tileNW(x, y, z) {
  * @returns {Promise<Float32Array>} 256*256 heights in metres
  */
 export async function fetchTerrariumTile(url) {
-  const response = await fetch(url);
+  const response = await fetchWithTimeout(url, {}, REGION.TERRAIN_TIMEOUT_MS);
   if (!response.ok) throw new Error(`terrain tile ${url}: HTTP ${response.status}`);
   const bitmap = await createImageBitmap(await response.blob());
 
@@ -197,8 +198,13 @@ export function buildSeaPolygons(terrain, frame) {
     }
   }
 
-  // Trace at just above sea level: cells below 0 m are the sea side.
-  const rings = traceLevel(padded, pc, pr, REGION.SEA_LEVEL_M);
+  // Trace half a metre BELOW sea level, not at it. Marching squares treats a
+  // corner exactly equal to the level as being on the low side, so tracing at
+  // 0 m would paint any land sitting at exactly 0 m as sea — which is not a
+  // hypothetical: reclaimed coast and polder read as a plateau of exact zeros
+  // in elevation data, and a flat valley floor does the same. Offsetting the
+  // trace makes "exactly sea level" count as land.
+  const rings = traceLevel(padded, pc, pr, REGION.SEA_LEVEL_M - 0.5);
   const features = [];
 
   for (const ring of rings) {

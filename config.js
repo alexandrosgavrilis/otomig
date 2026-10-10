@@ -24,6 +24,14 @@ export const REGION = {
   OVERPASS_RETRY_MS: 2000,
   OVERPASS_RETRY_MAX: 4,
   OVERPASS_ENDPOINT: 'https://overpass-api.de/api/interpreter',
+  /**
+   * Abort a chunk that never answers. `fetch` has no timeout of its own, so a
+   * silently-dropped connection would hang the import forever behind a frozen
+   * progress bar. An aborted chunk is retried like any other failure.
+   */
+  OVERPASS_TIMEOUT_MS: 180000,
+  /** Same, for an elevation tile. Tiles are small, so this is generous. */
+  TERRAIN_TIMEOUT_MS: 30000,
 
   /**
    * Terrarium elevation tile zoom. [research]

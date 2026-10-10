@@ -7,10 +7,14 @@
   "scripts": {
     "start": "python3 -m http.server 8000",
     "fixture": "node fixtures/make-fixture.js",
-    "test": "node tests/run.js"
+    "test": "node tests/run.js",
+    "test:browser": "node tests/browser.js"
   },
   "comment": "There is no build step and no runtime dependency. MapLibre is vendored into vendor/ from the pinned version below; see RESEARCH.md section 5 for why v5 and not v6.",
   "vendored": {
     "maplibre-gl": "5.24.0"
+  },
+  "devDependencies": {
+    "playwright": "^1.64.0"
   }
 }

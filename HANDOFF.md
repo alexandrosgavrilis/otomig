@@ -2,35 +2,46 @@
 
 Read this first in every session. Update it last.
 
-**Current state:** Phase 0 complete. Phase 1 code complete, **not yet verified in a browser.**
+**Current state:** Phase 0 complete. Phase 1 complete and **verified in a real browser**, except the live network path.
 **Last session:** Oct 10, 2026 — Phase 0 (research) and Phase 1 (region and map).
-**Next session:** verify Phase 1 in Alex's browser, then Phase 2 (buses and passengers).
+**Next session:** confirm a live import works, then Phase 2 (buses and passengers).
 
----
-
-## What Alex needs to do before Phase 2
-
-Phase 1's acceptance criteria are all things only a real browser with real network can show, and this sandbox has neither. **I could not verify any of the three.** Please run through this list — it is about ten minutes:
+## Testing
 
 ```bash
-cd "OTOMIG v0.1.0"
-npm start                 # python3 -m http.server 8000
-# open http://localhost:8000
+npm test            # 113 logic assertions, plain Node, no dependencies
+npm run test:browser    # 36 assertions driving real Chromium via Playwright
+npm run test:browser -- --headed    # ...and watch it
 ```
 
-Never open `index.html` as a `file://` URL. Nominatim's usage policy requires requests to identify themselves, and a browser cannot set `User-Agent` — we satisfy it via the `Referer` header, which the browser only sends over `http://`. Modules and the worker also need a real origin.
+The browser suite serves the project on **port 4001**, loads the fixture, and checks that MapLibre really renders (by sampling pixels from a screenshot, not just trusting the `load` event), that the toggles work, that pan/zoom and `maxBounds` behave, that IndexedDB round-trips, and that the module worker resolves its import graph. Screenshots land in `tests/screenshots/` — look at them, they catch things assertions don't.
 
-1. **Click "Use the test region".** This needs no network at all. You should get a calm off-white map: a bay in the south-west, a lake, a river, a street grid, faint contour lines, an existing railway. If this works, rendering and the data contract are sound.
-2. **Toggle all three buttons** (Demand, Contours, Real map). The Real map one needs internet and disables itself if the tile server refuses localhost — that is intended behaviour, not a bug.
-3. **Import a real region.** Search a place, place the square, pick season and difficulty, Import. Watch the progress bar. **This is the first time the live Overpass and elevation code has ever run** — see the risks below.
-4. **Reload the same region.** It must come back instantly from IndexedDB without refetching.
-5. **Time a dense 15 km city.** The acceptance criterion is about two minutes or less. I have no idea whether we hit it; if not, the first thing to try is trimming the Overpass building query.
+Playwright is a devDependency. `npm test` stays dependency-free.
 
-### The one thing most likely to break
+### Two bugs the browser suite caught immediately
 
-Elevation decoding. We fetch Terrarium PNGs and read their pixels, which only works if the S3 bucket sends CORS headers. I could not reach the bucket to check. [data/terrain.js](data/terrain.js) already uses the safer route — `fetch()` → `createImageBitmap()` → `OffscreenCanvas`, which does not taint the canvas the way `<img>` + `drawImage` would — but if you see a `SecurityError` or an opaque network failure during "Fetching elevation", that is this. Tell me and I will add a proxy-free fallback.
+Both would have met you as a blank or wrong map:
 
-Second most likely: Overpass rejecting or timing out on a dense 15 km box. The code retries 429 and 504 with backoff ([data/overpass.js](data/overpass.js)), but a very dense city may need the 3×3 chunking raised to 4×4 (`REGION.OVERPASS_CHUNKS` in [config.js](config.js)).
+1. **The MapLibre style was invalid**, so `load` never fired and the map stayed empty. `line-cap` is a *layout* property, not paint; and a `zoom` expression may only be the direct input of a top-level `interpolate`, so wrapping one in a `['*', ...]` is rejected. Fixed in [render/basemap.js](render/basemap.js).
+2. **Land at exactly 0 m was painted as sea.** Marching squares treats a corner equal to the trace level as being on the low side, so a flat zero-height area read as water — in the fixture, a whole valley floor appeared as a blue tower. [data/terrain.js](data/terrain.js) now traces half a metre *below* sea level, so "exactly sea level" counts as land. This was never a fixture-only quirk: reclaimed coast and polder are plateaux of exact zeros in real elevation data.
+
+A third, found by the worker test: **`fetch` has no timeout**, so a silently dropped connection would hang an import forever behind a frozen progress bar. Overpass and terrain requests are now aborted and retried ([`fetchWithTimeout`](data/overpass.js)).
+
+## What still needs your machine
+
+Everything above was verified against the fixture, which needs no network. **The live import path has still never run** — this sandbox cannot reach Overpass, Nominatim or the elevation bucket. Please do this once:
+
+```bash
+npm start      # then open http://localhost:8000
+```
+
+Never open `index.html` as a `file://` URL. Nominatim's policy requires requests to identify themselves; a browser cannot set `User-Agent`, so we rely on `Referer`, which is only sent over `http://`.
+
+1. **Import a real region** — search a place, place the square, Import.
+2. **Reload it.** It must come back instantly from IndexedDB without refetching.
+3. **Time a dense 15 km city.** The acceptance criterion is about two minutes or less. If it's slower, trim the Overpass building query first.
+
+**Most likely to break: elevation decoding.** We read pixels out of Terrarium PNGs, which needs the S3 bucket to send CORS headers, and I could not reach it to check. [data/terrain.js](data/terrain.js) already uses the safer `fetch()` → `createImageBitmap()` route rather than `<img>` + `drawImage`, which would taint the canvas — but if "Fetching elevation" fails, that is this. **Second: Overpass** rejecting a dense 15 km box; try raising `REGION.OVERPASS_CHUNKS` from 3 to 4.
 
 ### The push didn't happen
 
@@ -62,7 +73,7 @@ Good news from the same research: **the spec's cruise speeds and capacities are 
 
 ## What works
 
-Verified by `npm test` — 113 assertions, all passing, no dependencies:
+Verified by `npm test` (113 logic assertions) and `npm run test:browser` (36 in real Chromium):
 
 - **Geometry.** `LocalFrame` (lon/lat ↔ local metres), `squareBbox`, `chunkBbox` tiles a bbox with no gaps or drift, ring area and point-in-ring.
 - **Grids.** Terrain height grid with bilinear interpolation (exact on a linear ramp), 200 m demand grid, 10 m building occupancy bitset, 30 m height grid.
@@ -71,7 +82,9 @@ Verified by `npm test` — 113 assertions, all passing, no dependencies:
 - **The fixture.** Every field of the data contract, cross-checked — including regenerating the contours from the stored terrain and confirming they match, which proves the fixture came out of the real pipeline.
 - **Base map GeoJSON.** Major/minor road partition, closed water rings, normalised heat map.
 
-Written but **unverifiable here** (no browser, no network to Overpass/S3/Nominatim): live import, the module worker, IndexedDB, MapLibre rendering, the canvas overlay, the new-game screen.
+- **In the browser.** The new-game screen mounts with all four seasons and difficulties; typing in the search box fires no Nominatim request (the policy forbids autocomplete); the fixture loads; MapLibre renders real pixels in the right colours; contour and heat-map toggles work; zoom reveals minor roads; `maxBounds` keeps the player inside the region; IndexedDB round-trips a region; the module worker boots and reports progress; no console or page errors.
+
+Still **unverified** — needs network this sandbox doesn't have: live Overpass import, Nominatim search results, Terrarium elevation decoding.
 
 ## Layout
 
@@ -83,7 +96,7 @@ render/  basemap.js (MapLibre style)  overlay.js (Canvas 2D)
 ui/      new-game.js  strings.js
 vendor/  maplibre-gl.js  maplibre-gl.css  LICENSE.txt     (v5.24.0, UMD)
 fixtures/ make-fixture.js  test-region.json              (npm run fixture)
-tests/   run.js                                          (npm test)
+tests/   run.js (npm test)  browser.js (npm run test:browser)  screenshots/
 ```
 
 Not yet created, and deliberately so: `build/`, `sim/`, `ui/hud.js`, `ui/toolbar.js`, `ui/panels.js`, `model/network.js`, `model/save.js`, `render/shapes.js`. They arrive with the phase that needs them.
