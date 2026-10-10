@@ -19,25 +19,17 @@ The reason Phase R was ordered before Phase 3 was that a data-layer rewrite woul
 
 ---
 
-## 1. Two things only Alex can do
+## 1. Pushing, and the live import
 
-### Push — nine commits are waiting
+### Push — resolved, and `gh` is authenticated
 
-Committed on `main`, `origin` set to `https://github.com/alexandrosgavrilis/otomig.git`, **not pushed**. GitHub removed password auth for git over HTTPS in 2021, and signing in with Google never creates a git password, so the credential prompt is unanswerable as-is.
+`https://github.com/alexandrosgavrilis/otomig` exists and `main` tracks it. `gh` 2.102.0 at `~/.local/bin/gh` is logged in as `alexandrosgavrilis` with the token in the keyring, which also configured git's credential helper — so `git push` works in later sessions with no prompt. The 2021 password-auth problem recorded here before is gone.
 
-`gh` 2.102.0 is installed at `~/.local/bin/gh` (already on PATH via `.profile`):
-
-```bash
-gh auth login          # GitHub.com → HTTPS → Yes → Login with a web browser
-gh repo create otomig --private
-git push -u origin main
-```
-
-That also configures the git credential helper permanently, so later sessions can push without asking.
+**The repo is PUBLIC**, deliberately. The earlier instruction in this file said `--private`; Alex's decision on Oct 10 2026 was to leave it public, because nothing in the project needs to be secret. There are no API keys anywhere — Overpass, Nominatim and the elevation tiles all work keyless, and that is a property worth keeping. Say so in any future README edit rather than re-raising it.
 
 ### Run one live import
 
-Everything is verified against the fixture, which needs no network. The assembly — worker → Overpass → elevation → IndexedDB → playable map — has never run as a whole.
+Everything is verified against the fixture, which needs no network. The assembly — worker → Overpass → elevation → IndexedDB → playable map — had never run as a whole.
 
 ```bash
 npm start      # then open http://localhost:8000
@@ -45,7 +37,7 @@ npm start      # then open http://localhost:8000
 
 **Never open `index.html` as a `file://` URL.** `User-Agent` is a forbidden header name, so a browser silently ignores any attempt to set it; we identify to the OSM services via `Referer`, which is only sent over `http://`.
 
-The default region is now 6 km, so the first import should take a few minutes rather than twenty. Then reload the same region and confirm it comes back instantly from IndexedDB.
+**This no longer needs a human.** Phase 0 recorded that the sandbox could not reach the OSM endpoints, which was false — Phase R exercised all of them directly. So the live import can be driven by Playwright like the rest of the browser suite, and `npm run test:live` does exactly that. See §2.
 
 ---
 
