@@ -12,17 +12,28 @@
  * Run as a module worker: new Worker(url, { type: 'module' }).
  */
 
-import { overpassChunkCount } from '../config.js';
+import { buildingChunkCount } from '../config.js';
 import { LocalFrame, squareBbox, chunkBbox, serialiseRegion } from '../model/region.js';
-import { fetchChunkAdaptive, parseResponses, buildGraph, wayRing } from './overpass.js';
+import {
+  fetchChunkAdaptive, parseResponses, buildGraph, wayRing,
+  buildMainQuery, buildBuildingQuery,
+} from './overpass.js';
 import { buildHeightGrid, buildContours } from './terrain.js';
 import { processBuildings } from '../model/population.js';
 
-/** The steps, in order, with the share of the progress bar each gets. */
+/**
+ * The steps, in order, with the share of the progress bar each gets.
+ *
+ * `roads` and `footprints` are two separate Overpass queries rather than one
+ * grid of chunks — see RESEARCH_TILES.md §8. Roads, rail, water and POIs come
+ * back in a single request for the whole region; buildings are the only part
+ * heavy enough to need chunking, so they get the larger share of the bar.
+ */
 const STEPS = [
-  { key: 'roads', label: 'Fetching map data', weight: 0.45 },
+  { key: 'roads', label: 'Fetching roads and places', weight: 0.15 },
+  { key: 'footprints', label: 'Fetching buildings', weight: 0.35 },
   { key: 'graph', label: 'Building road graph', weight: 0.05 },
-  { key: 'buildings', label: 'Processing buildings', weight: 0.2 },
+  { key: 'buildings', label: 'Processing buildings', weight: 0.15 },
   { key: 'terrain', label: 'Fetching elevation', weight: 0.2 },
   { key: 'contours', label: 'Tracing contours', weight: 0.1 },
 ];
@@ -65,15 +76,25 @@ export async function importRegion(request, onProgress) {
   const bbox = squareBbox(lon, lat, sizeKm);
   const frame = new LocalFrame(bbox);
 
-  // 1. Overpass, as a grid of ~2.5 km tiles merged together. The tile count
-  // follows the region size so each request stays a size Overpass will serve.
-  const chunks = chunkBbox(bbox, overpassChunkCount(sizeKm));
-  const responses = [];
-  onProgress('roads', 0, chunks.length);
+  // 1a. Roads, rail, water, stations and POI nodes — one request for the whole
+  // region. These need `>;` node recursion so the road graph keeps real OSM
+  // node ids, but they drag few nodes behind them, so even a 15 km box serves
+  // in one go: Phase R measured 4.71 MB and 13.5 s (RESEARCH_TILES.md §3).
+  onProgress('roads', 0, 1);
+  const responses = await fetchChunkAdaptive(bbox,
+    (msg) => onProgress('roads', 0, 1, msg), 0, buildMainQuery);
+  onProgress('roads', 1, 1);
+
+  // 1b. Buildings, as inline geometry and chunked. This is the only heavy part
+  // of the import — and the `>;` recursion over building nodes, not the box
+  // area, is what used to make every chunk 504.
+  const chunks = chunkBbox(bbox, buildingChunkCount(sizeKm));
+  onProgress('footprints', 0, chunks.length);
   for (let i = 0; i < chunks.length; i++) {
     responses.push(...await fetchChunkAdaptive(chunks[i],
-      (msg) => onProgress('roads', i, chunks.length, msg)));
-    onProgress('roads', i + 1, chunks.length, `Fetching map data (${i + 1}/${chunks.length})`);
+      (msg) => onProgress('footprints', i, chunks.length, msg), 0, buildBuildingQuery));
+    onProgress('footprints', i + 1, chunks.length,
+      chunks.length > 1 ? `Fetching buildings (${i + 1}/${chunks.length})` : undefined);
   }
 
   const parsed = parseResponses(responses);

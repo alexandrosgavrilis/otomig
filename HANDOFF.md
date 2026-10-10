@@ -9,13 +9,21 @@ Read this first in every session. Update it last.
 
 The payload crisis that reordered the roadmap was a measurement error. `1.87 MB/km²` is Overpass's **decoded JSON**; it gzips 7.3–7.8× and browsers always ask for gzip, so a 6 km dense import is **6.8 MB on the wire, not 66**. And the 504s were never about chunk area — they were the `>;` recursion over building geometry nodes. Drop buildings and a whole **15 km** box of roads, rail, water and every POI node serves in **one request, 4.71 MB, 13.5 s**.
 
+**Phase Q is done too.** The query is now two requests: everything-but-buildings for the whole region, then buildings as `out geom`, chunked. Measured against the live API, before and after:
+
+| region | before | after |
+| --- | --- | --- |
+| 5 km | 5–10 requests, 49–120 s | **2 requests, 22 s** |
+| 10 km | 22 requests, 289 s | **6 requests, 123 s** |
+
+The region comes out identical — same 51,700 buildings and 502,376 residents for central Athens — and the fixture regenerates byte-for-byte, so nothing downstream moved.
+
 | | |
 | --- | --- |
-| **Next** | **Phase Q — restructure the Overpass query.** Two requests replace nine to thirty-six. One file, no new dependency, model bit-identical. Scope in [RESEARCH_TILES.md](RESEARCH_TILES.md) §8. |
-| Then | Phase 3 — trams. **No longer blocked.** |
-| Shelved | Vector tiles for building geometry. Viable and fully costed (§8), purely additive, worth it only if dense 15 km imports become the priority. |
+| **Next** | **Phase 3 — trams.** Nothing blocks it. §9. |
+| Shelved | Vector tiles for building geometry. Viable and fully costed ([RESEARCH_TILES.md](RESEARCH_TILES.md) §8), purely additive, worth it only if dense 15 km imports become the priority. |
 
-The reason Phase R was ordered before Phase 3 was that a data-layer rewrite would change the occupancy raster's provenance. It no longer does, so trams can follow Phase Q immediately — or precede it.
+The reason Phase R was ordered before Phase 3 was that a data-layer rewrite would change the occupancy raster's provenance. It never happened, so the raster is exactly what it was.
 
 ---
 
@@ -139,7 +147,8 @@ The scale is fixed at import and never changes mid-game — a dot that silently 
 16. **Lifetime counters** (`game.totals`) alongside instantaneous state. On a sparse network the instant you look is usually between passengers.
 17. **Vehicles are spaced evenly in time, not distance.** Hops differ in length, so distance spacing still bunches vehicles where stops are close.
 18. **Buildings are drawn, and their outlines are kept.** The spec says neither — it discards footprints after rasterising and says buildings are not drawn. Reversed on Alex's instruction: seeing the city you are serving is the point of a real map, and from Phase 4 the "no track through buildings" rule must agree with what is on screen. Road colours were also darkened from the spec's `#DCD6CC`, which against `#F4F1EA` land is a few percent of luminance — drawn, but invisible.
-19. **Only Bus is enabled**; Tram, Metro and Train buttons are present but disabled. A dead button that says "Tram" tells the player the plan; a missing one tells them nothing.
+19. **Two kinds of Overpass failure get opposite treatment.** A 429 or a dropped connection means "not now", so it keeps the full retry ladder. A 504, or a 200 carrying a `remark`, means "this query is too big for me" — re-sending it unchanged mostly fails the same way, and the only real fix is `fetchChunkAdaptive` subdividing the box. Those get `OVERPASS_HEAVY_RETRY_MAX` (1) retries and then give up so the split can happen. Measured: a 10 km import cost **22 Overpass requests and 289 s** on the full ladder, and **6 requests and 123 s** with the small budget. The old code's comment already said retrying an identical 504 was useless while the code did it four times.
+20. **Only Bus is enabled**; Tram, Metro and Train buttons are present but disabled. A dead button that says "Tram" tells the player the plan; a missing one tells them nothing.
 
 ---
 

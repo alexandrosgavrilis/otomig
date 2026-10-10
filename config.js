@@ -44,12 +44,25 @@ export const REGION = {
    * region to 6×6 = 36 requests, which is inside Overpass's ~100/day
    * guidance for a regular user.
    */
-  OVERPASS_CHUNK_TARGET_KM: 2.5,
+  OVERPASS_CHUNK_TARGET_KM: 6,
   /** Cap on grid side, so one import can never fire hundreds of requests. */
   OVERPASS_CHUNKS_MAX: 8,
   /** Retry backoff for HTTP 429/504, ms. Doubles each attempt. [spec] */
   OVERPASS_RETRY_MS: 2000,
   OVERPASS_RETRY_MAX: 4,
+
+  /**
+   * How many times to re-send a query Overpass called *too heavy* (504, or a
+   * 200 carrying a `remark`) before giving up so `fetchChunkAdaptive` can
+   * subdivide the box instead.
+   *
+   * Deliberately much smaller than OVERPASS_RETRY_MAX. Re-sending an identical
+   * too-big query mostly fails identically — asking for less is the only real
+   * fix — but a 504 often is transient, so one retry is worth it. Measured: a
+   * 10 km dense import cost 22 Overpass requests on the full ladder against an
+   * ideal of 5.
+   */
+  OVERPASS_HEAVY_RETRY_MAX: 1,
   OVERPASS_ENDPOINT: 'https://overpass-api.de/api/interpreter',
   /**
    * Abort a chunk that never answers. `fetch` has no timeout of its own, so a
@@ -594,15 +607,24 @@ export const ATTRIBUTION = {
 export const MAPLIBRE_VERSION = '5.24.0';
 
 /**
- * How many tiles per side to split a region into for Overpass.
+ * How many tiles per side to split the **building** query into.
  *
- * Derived from REGION.OVERPASS_CHUNK_TARGET_KM so chunk area stays near a
- * size Overpass will actually serve, whatever the region size.
+ * Only buildings are chunked. Roads, rail, water and POI nodes come back in a
+ * single request for the whole region, because the thing that made Overpass
+ * refuse large boxes was the `>;` recursion over building geometry nodes, not
+ * the box area (RESEARCH_TILES.md §3).
+ *
+ * The 6 km target is measured, not guessed: a 6 km box of central Athens
+ * serves `way["building"]; out geom;` in 12.2 s on the first attempt, while a
+ * 15 km box needs several retries. So the default 6 km region is one request
+ * and the 15 km maximum is nine of 5 km. Overshooting is expensive — a chunk
+ * Overpass refuses burns the full retry ladder before `fetchChunkAdaptive`
+ * subdivides it.
  *
  * @param {number} sizeKm region side length
  * @returns {number} tiles per side; the import fires this squared requests
  */
-export function overpassChunkCount(sizeKm) {
+export function buildingChunkCount(sizeKm) {
   const wanted = Math.ceil(sizeKm / REGION.OVERPASS_CHUNK_TARGET_KM);
   return Math.min(REGION.OVERPASS_CHUNKS_MAX, Math.max(1, wanted));
 }

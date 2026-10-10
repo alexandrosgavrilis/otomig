@@ -305,7 +305,19 @@ try {
   }
   const overpassCalls = byHost.get('overpass-api.de') || 0;
   check('Overpass was called', overpassCalls > 0, `${overpassCalls} requests`);
-  console.log(`\n  (Phase Q should cut the Overpass count to 1 + building chunks)`);
+
+  // Phase Q: one request for roads/water/rail/POIs over the whole region, plus
+  // one per building chunk. Retries push the real count up, and Overpass is
+  // genuinely flaky, so allow headroom — the point is that it is a handful and
+  // not the 9-to-36 chunk grid this replaced.
+  const chunksPerSide = Math.max(1, Math.ceil(SIZE_KM / 6));
+  const ideal = 1 + chunksPerSide ** 2;
+  check(`Overpass requests stayed near the ideal ${ideal} for ${SIZE_KM} km`,
+    overpassCalls <= ideal * 3,
+    `${overpassCalls} sent, ideal ${ideal} (retries allowed)`);
+  console.log(`  ideal for ${SIZE_KM} km is ${ideal} requests ` +
+    `(1 main + ${chunksPerSide}x${chunksPerSide} building chunks); ` +
+    `${overpassCalls} were sent`);
 
   check('no uncaught page errors', pageErrors.length === 0,
     pageErrors.slice(0, 3).join(' | '));

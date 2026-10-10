@@ -1,11 +1,24 @@
 /**
- * Overpass: build the queries, fetch the chunks, parse the response.
+ * Overpass: build the queries, fetch them, parse the responses.
  *
- * Payload size is the thing to watch. The Overpass usage policy asks regular
- * users to stay under ~10 MB/day, and a dense 15 km building query can exceed
- * that alone (RESEARCH.md §4). So: never `out meta`, fetch tags only for the
- * ways we keep, and get node geometry with `out skel qt`, which emits bare
- * id/lat/lon and nothing else.
+ * **Two queries, not one grid of chunks.** Phase R established that the thing
+ * making Overpass refuse large boxes was never the box area — it was the `>;`
+ * recursion over building geometry nodes, which a dense city supplies at about
+ * 9,000 per km². Split on that line and the picture inverts:
+ *
+ *   - `buildMainQuery` — roads, rail, water, stations and POI nodes, with the
+ *     recursion, because shared OSM node ids are what the routing graph is
+ *     built from. One request covers a whole 15 km region in ~13 s.
+ *   - `buildBuildingQuery` — buildings as `out geom`, no recursion. The only
+ *     part heavy enough to need chunking at all.
+ *
+ * Payload turned out not to be the constraint it was thought to be: Overpass
+ * gzips its JSON about 7.5×, so a dense 6 km import is ~7 MB on the wire rather
+ * than the ~66 MB that decoded-size measurements suggested. The old caution
+ * still applies though, and costs nothing: never `out meta`, and get node
+ * geometry with `out skel qt`, which emits bare id/lat/lon and nothing else.
+ *
+ * Numbers and method: RESEARCH_TILES.md §3 and §8.
  */
 
 import { REGION, BUILD, POPULATION } from '../config.js';
@@ -21,33 +34,35 @@ const ROAD_CLASSES = [
 /** Tags that make a building non-residential, used when `building=yes`. */
 const COMMERCIAL_TAGS = ['shop', 'office', 'amenity', 'tourism'];
 
+/** Overpass bbox order is south,west,north,east, unlike ours. */
+function bboxQL([west, south, east, north]) {
+  return `${south},${west},${north},${east}`;
+}
+
 /**
- * Overpass QL for one chunk.
+ * Everything except buildings, for one box.
  *
  * `out body` gives us tagged elements; `>;` recurses down to their nodes and
- * `out skel qt` emits those as bare coordinates.
+ * `out skel qt` emits those as bare coordinates. Roads and rail genuinely need
+ * that recursion — shared OSM node ids are what let the routing graph cross way
+ * boundaries without stitching — but it is cheap here, because roads drag far
+ * fewer nodes behind them than buildings do.
  *
- * Buildings are fetched with their full geometry. An earlier version asked for
- * ordinary residential buildings as centroids only (`out tags center`), which
- * measured 47% smaller — but building outlines are drawn on the map, and the
- * Phase 4 rule that track cannot cross a building has to agree with what the
- * player can see. An approximated square behind a visible outline is a bug
- * they can point at. The payload is the price of an honest map.
+ * This is deliberately one query for the whole region rather than a grid of
+ * chunks. Phase R measured a 15 km box of central Athens served in a single
+ * request: 4.71 MB on the wire, 13.5 s. See RESEARCH_TILES.md §3.
  *
  * @param {[number,number,number,number]} bbox [west, south, east, north]
  */
-export function buildQuery(bbox) {
-  const [west, south, east, north] = bbox;
-  // Overpass bbox order is south,west,north,east.
-  const bb = `${south},${west},${north},${east}`;
+export function buildMainQuery(bbox) {
+  const bb = bboxQL(bbox);
   const roads = ROAD_CLASSES.join('|');
   // Only amenities people actually travel to; see POPULATION.POI_AMENITIES.
   const amenities = POPULATION.POI_AMENITIES.join('|');
 
-  return `[out:json][timeout:180];
+  return `[out:json][timeout:${Math.round(REGION.OVERPASS_TIMEOUT_MS / 1000)}];
 (
   way["highway"~"^(${roads})$"](${bb});
-  way["building"](${bb});
   way["natural"="water"](${bb});
   way["railway"="rail"](${bb});
   node["railway"~"^(station|halt)$"](${bb});
@@ -60,6 +75,32 @@ out skel qt;`;
 }
 
 /**
+ * Buildings for one box, as inline geometry.
+ *
+ * `out geom` attaches each way's coordinates directly instead of emitting the
+ * nodes separately, which means **no `>;` recursion**. That recursion was the
+ * whole problem: a dense box drags ~9,000 building geometry nodes per km²
+ * through it, and it — not the box area — is what made Overpass return 504 on
+ * every 5 km chunk. Without it the same server happily builds a 15 km box
+ * (RESEARCH_TILES.md §3).
+ *
+ * Buildings need no node ids. Nothing joins them to anything; they become
+ * rings, a floor-area estimate and an occupancy raster. Roads are the only
+ * thing whose topology matters, and they keep `out body` above.
+ *
+ * Full geometry rather than centroids, because outlines are drawn on the map
+ * and Phase 4's "track cannot cross a building" rule has to agree with what the
+ * player can see.
+ *
+ * @param {[number,number,number,number]} bbox [west, south, east, north]
+ */
+export function buildBuildingQuery(bbox) {
+  return `[out:json][timeout:${Math.round(REGION.OVERPASS_TIMEOUT_MS / 1000)}];
+way["building"](${bboxQL(bbox)});
+out geom;`;
+}
+
+/**
  * Fetch one chunk, retrying with backoff on 429 (rate limited) and 504
  * (gateway timeout) — the two failures Overpass actually returns under load.
  *
@@ -67,9 +108,25 @@ out skel qt;`;
  * @param {(msg:string)=>void} [log]
  * @returns {Promise<Object>} the raw Overpass JSON
  */
-export async function fetchChunk(bbox, log) {
-  const body = buildQuery(bbox);
+export async function fetchChunk(bbox, log, buildBody = buildMainQuery) {
+  const body = buildBody(bbox);
   let delay = REGION.OVERPASS_RETRY_MS;
+
+  // Two different failures wear the same retry loop, and they want opposite
+  // treatment:
+  //
+  //   429 and dropped connections mean "not now" — waiting genuinely helps, so
+  //   these get the full ladder.
+  //
+  //   504 and a `remark` mean "this query is too big for me". Re-sending the
+  //   identical query mostly fails identically; what helps is asking for less,
+  //   which only `fetchChunkAdaptive` can do by subdividing. Burning the full
+  //   ladder first just delays the fix — measured at 22 Overpass requests for a
+  //   10 km import that should cost 5. They get one retry, because Phase R
+  //   showed a 504 often is transient, and then we give up so the box can be
+  //   split.
+  const heavyBudget = Math.min(REGION.OVERPASS_HEAVY_RETRY_MAX, REGION.OVERPASS_RETRY_MAX);
+  let heavyAttempts = 0;
 
   for (let attempt = 0; attempt <= REGION.OVERPASS_RETRY_MAX; attempt++) {
     const lastAttempt = attempt === REGION.OVERPASS_RETRY_MAX;
@@ -102,7 +159,10 @@ export async function fetchChunk(bbox, log) {
       // error — exactly what the first live imports produced. Treat it as the
       // failure it is, and let the retry and subdivision logic handle it.
       if (json.remark) {
-        if (lastAttempt) throw new Error(`Overpass: ${json.remark}`);
+        if (lastAttempt || heavyAttempts >= heavyBudget) {
+          throw new Error(`Overpass: ${json.remark}`);
+        }
+        heavyAttempts++;
         log?.(`Overpass could not finish the query, retrying in ${delay / 1000}s`);
         await new Promise((r) => setTimeout(r, delay));
         delay *= 2;
@@ -112,7 +172,12 @@ export async function fetchChunk(bbox, log) {
     }
 
     const retryable = response.status === 429 || response.status === 504;
-    if (!retryable || lastAttempt) throw new Error(`Overpass HTTP ${response.status}`);
+    // A 504 is the "too big" signal; 429 is pure rate limiting.
+    if (response.status === 504) heavyAttempts++;
+    const outOfBudget = response.status === 504 && heavyAttempts > heavyBudget;
+    if (!retryable || lastAttempt || outOfBudget) {
+      throw new Error(`Overpass HTTP ${response.status}`);
+    }
 
     log?.(`Overpass ${response.status}, retrying in ${delay / 1000}s`);
     await new Promise((r) => setTimeout(r, delay));
@@ -158,9 +223,9 @@ export async function fetchWithTimeout(url, options, timeoutMs) {
  * @param {number} [depth]
  * @returns {Promise<Object[]>} one or more raw Overpass responses
  */
-export async function fetchChunkAdaptive(bbox, log, depth = 0) {
+export async function fetchChunkAdaptive(bbox, log, depth = 0, buildBody = buildMainQuery) {
   try {
-    return [await fetchChunk(bbox, log)];
+    return [await fetchChunk(bbox, log, buildBody)];
   } catch (error) {
     if (depth >= REGION.OVERPASS_MAX_SUBDIVIDE) throw error;
 
@@ -178,7 +243,7 @@ export async function fetchChunkAdaptive(bbox, log, depth = 0) {
     log?.('Area too dense for one query — splitting it');
     const responses = [];
     for (const quarter of chunkBbox(bbox, 2)) {
-      responses.push(...await fetchChunkAdaptive(quarter, log, depth + 1));
+      responses.push(...await fetchChunkAdaptive(quarter, log, depth + 1, buildBody));
     }
     return responses;
   }
@@ -287,11 +352,32 @@ export function buildGraph(ways, osmNodes, frame) {
   return { nodes, edges };
 }
 
-/** Way nodes → a lon/lat ring. Used for buildings and water. */
+/**
+ * A way → a lon/lat ring. Used for buildings and water.
+ *
+ * Handles both Overpass output modes, because the import uses both: water
+ * arrives from `out body` + `>;` as node references to look up, and buildings
+ * arrive from `out geom` with their coordinates attached. Preferring the inline
+ * geometry keeps the building path independent of the node map entirely.
+ *
+ * @param {Object} way
+ * @param {Map<number,[number,number]>} [osmNodes] only needed for `out body` ways
+ * @returns {Array<[number,number]>}
+ */
 export function wayRing(way, osmNodes) {
+  if (Array.isArray(way.geometry)) {
+    const ring = [];
+    // Overpass emits `null` for a point outside the queried box when a way is
+    // clipped; skipping them would silently reshape the building.
+    for (const point of way.geometry) {
+      if (point) ring.push([point.lon, point.lat]);
+    }
+    return ring;
+  }
+
   const ring = [];
   for (const ref of way.nodes || []) {
-    const coord = osmNodes.get(ref);
+    const coord = osmNodes?.get(ref);
     if (coord) ring.push(coord);
   }
   return ring;

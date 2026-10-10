@@ -57,12 +57,39 @@ function nodeAt(x, y) {
   return existing;
 }
 
-/** Add a way through a list of local-metre points. */
+/**
+ * Add a way through a list of local-metre points, in the shape Overpass's
+ * `out body` + `>;` + `out skel qt` emits: node references, resolved against
+ * the separately-emitted node elements. Roads, rail and water take this path,
+ * because their shared node ids are what the routing graph is built from.
+ */
 function way(points, tags) {
   elements.push({
     type: 'way',
     id: id(),
     nodes: points.map(([x, y]) => nodeAt(x, y)),
+    tags,
+  });
+}
+
+/**
+ * Add a building in the shape Overpass's `out geom` emits: coordinates inline,
+ * no node references and no separate node elements.
+ *
+ * Buildings really do arrive this way now (RESEARCH_TILES.md §8), and the
+ * fixture is built by running synthetic Overpass JSON through the real
+ * `parseResponses` → `processBuildings` pipeline specifically so its shape
+ * cannot drift from real imported data. Emitting buildings as node references
+ * here would quietly stop exercising the path the game actually uses.
+ */
+function buildingWay(points, tags) {
+  elements.push({
+    type: 'way',
+    id: id(),
+    geometry: points.map(([x, y]) => {
+      const [lon, lat] = frame.toLonLat(x, y);
+      return { lon, lat };
+    }),
     tags,
   });
 }
@@ -257,17 +284,17 @@ for (let bx = BLOCK; bx < W - BLOCK; bx += BLOCK) {
             'building:levels': String(levels) }
         : { building: random() < 0.35 ? 'apartments' : 'house',
             'building:levels': String(levels) };
-      way(footprint(cx, cy, w, h), tags);
+      buildingWay(footprint(cx, cy, w, h), tags);
     }
   }
 }
 
 // Named attractions, so the attraction weights have something distinct to bite on.
-way(footprint(2400, 3400, 120, 80), { building: 'university', amenity: 'university', 'building:levels': '3', name: 'Coast University' });
-way(footprint(3800, 3600, 90, 70), { building: 'hospital', amenity: 'hospital', 'building:levels': '5', name: 'Regional Hospital' });
-way(footprint(2900, 2500, 60, 40), { building: 'school', amenity: 'school', 'building:levels': '2', name: 'Harbour School' });
-way(footprint(3100, 1900, 70, 50), { building: 'hotel', tourism: 'hotel', 'building:levels': '6', name: 'Bay Hotel' });
-way(footprint(2600, 2900, 100, 60), { building: 'office', office: 'company', 'building:levels': '8', name: 'Exchange House' });
+buildingWay(footprint(2400, 3400, 120, 80), { building: 'university', amenity: 'university', 'building:levels': '3', name: 'Coast University' });
+buildingWay(footprint(3800, 3600, 90, 70), { building: 'hospital', amenity: 'hospital', 'building:levels': '5', name: 'Regional Hospital' });
+buildingWay(footprint(2900, 2500, 60, 40), { building: 'school', amenity: 'school', 'building:levels': '2', name: 'Harbour School' });
+buildingWay(footprint(3100, 1900, 70, 50), { building: 'hotel', tourism: 'hotel', 'building:levels': '6', name: 'Bay Hotel' });
+buildingWay(footprint(2600, 2900, 100, 60), { building: 'office', office: 'company', 'building:levels': '8', name: 'Exchange House' });
 
 // Standalone shops and amenities with no building of their own.
 for (let i = 0; i < 40; i++) {

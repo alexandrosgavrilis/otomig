@@ -354,7 +354,18 @@ follows.
 
 ---
 
-## 8. Recommendation
+## 8. Recommendation — **implemented, Oct 10 2026**
+
+Built and verified against the live API the same day. Measured before and after,
+central Athens: **5 km went from 5–10 requests and 49–120 s to 2 requests and
+22 s; 10 km from 22 requests and 289 s to 6 requests and 123 s.** The region is
+identical and the fixture regenerates unchanged.
+
+One thing this document did not anticipate: the retry ladder was fighting the
+subdivision logic. `fetchChunk` re-sent a 504'd query four times before
+`fetchChunkAdaptive` was ever allowed to split the box, which is most of where
+those 22 requests went. 504s now get one retry and then give up so the split can
+happen. See HANDOFF.md §3 decision 19.
 
 ### Keep one data source. Restructure the query.
 

@@ -4,7 +4,7 @@ A transit sandbox with Mini Metro's look and drawing feel and Cities: Skylines' 
 
 You draw bus, tram, metro and train lines. Passengers appear where people live and want to go. Money comes from tickets, coverage subsidies and advertising. There is no win condition — a good network settles into balance. Some places can only ever support a bus line or two, and that is fine.
 
-**Status:** Phases 0–2 of 7 done — region import, base map, and the bus core loop (lines, passengers, transfers, money, save/load). The data architecture is settled: Overpass stays, with a two-request query restructure next — see [RESEARCH_TILES.md](RESEARCH_TILES.md) and [HANDOFF.md](HANDOFF.md).
+**Status:** Phases 0–2 of 7 done — region import, base map, and the bus core loop (lines, passengers, transfers, money, save/load). The data architecture is settled and the import is verified against live OpenStreetMap data: a 5 km slice of central Athens imports in about 20 seconds and two Overpass requests. Trams are next — see [HANDOFF.md](HANDOFF.md).
 
 ## Running it
 
@@ -15,17 +15,20 @@ npm start          # python3 -m http.server 8000
 # then open http://localhost:8000
 ```
 
-Click **Use the test region** for a synthetic region that needs no network at all, or search a real place and import it. Regions default to 6 × 6 km; the slider reaches 15 km, which is comfortable for rural areas and slow for dense cities — a dense 6 km import downloads about 7 MB and a 15 km one about 34 MB, but Overpass's own query time dominates, and it is variable.
+Click **Use the test region** for a synthetic region that needs no network at all, or search a real place and import it. Regions default to 6 × 6 km; the slider reaches 15 km. A dense 5 km import takes about 20 seconds and two Overpass requests, a 10 km one about two minutes; rural areas are much faster. Overpass's own query time dominates and is variable, so an occasional retry in the progress text is normal.
 
 Serve it over `http://` — don't open `index.html` as a `file://` URL. ES modules, the import worker and the OSM services all need a real origin.
 
 ```bash
-npm test               # 270 logic assertions, plain Node, no framework, no dependencies
+npm test               # 290 logic assertions, plain Node, no framework, no dependencies
 npm run test:browser   # 75 assertions driving real Chromium (needs: npm install)
+npm run test:live      # 25 assertions against a REAL import — hits live OSM services
 npm run fixture        # regenerate fixtures/test-region.json
 ```
 
 The browser suite serves the project on port 4001, loads the fixture and checks that the map genuinely renders — by sampling pixels, not by trusting MapLibre's `load` event. Screenshots land in `tests/screenshots/`. Playwright is a devDependency; `npm test` needs nothing installed.
+
+`test:live` imports a real region from the live OSM services and is deliberately separate from the other two. It found two bugs the fixture never could — one that rendered every map as open sea, and one where Overpass reports failure as HTTP 200. Run it when the import path changes; don't loop it.
 
 ## How it is built
 

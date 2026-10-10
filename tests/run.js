@@ -17,7 +17,10 @@ import {
   heightAt, isOccupied, setOccupied, makeOccupancy, ringAreaM2, pointInRing,
   reviveRegion,
 } from '../model/region.js';
-import { parseResponses, buildGraph, classifyBuilding, buildQuery, fetchChunk } from '../data/overpass.js';
+import {
+  parseResponses, buildGraph, classifyBuilding, fetchChunk, wayRing,
+  buildMainQuery, buildBuildingQuery,
+} from '../data/overpass.js';
 import { processBuildings } from '../model/population.js';
 import { tileXY, tileNW, buildContours, buildSeaPolygons, sampleTilesToGrid } from '../data/terrain.js';
 import {
@@ -204,6 +207,53 @@ for (const [mode, [spacingM, lowKmh, highKmh]] of Object.entries(EFFECTIVE)) {
   check('an Overpass 200 carrying a remark is rejected, not imported as empty',
     message.includes('Query timed out'), `got "${message}"`);
   check('...and it was retried before giving up', calls > 1, `${calls} attempts`);
+  // A "too heavy" answer gets a small budget, not the full ladder: re-sending
+  // the same oversized query mostly fails the same way, and only subdividing
+  // helps. Measured cost of getting this wrong: 22 Overpass requests for a
+  // 10 km import that should cost 5.
+  check('...but only a couple of times, so the box can be subdivided instead',
+    calls <= REGION.OVERPASS_HEAVY_RETRY_MAX + 1,
+    `${calls} attempts for a heavy query, budget ${REGION.OVERPASS_HEAVY_RETRY_MAX + 1}`);
+}
+
+{
+  // A 429 is rate limiting, not size — waiting genuinely helps, so it must
+  // keep the full retry ladder rather than the small "too heavy" budget.
+  const realFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return { ok: false, status: 429, json: async () => ({}) };
+  };
+  try {
+    await fetchChunk([23.7, 37.9, 23.8, 38.0]);
+  } catch { /* expected */ } finally {
+    globalThis.fetch = realFetch;
+  }
+  check('a 429 keeps the full retry ladder — waiting is the right response',
+    calls === REGION.OVERPASS_RETRY_MAX + 1,
+    `${calls} attempts, expected ${REGION.OVERPASS_RETRY_MAX + 1}`);
+}
+
+{
+  // A 504 means "too big for me". Give up quickly so fetchChunkAdaptive can
+  // subdivide, rather than re-asking for the same oversized box four times.
+  const realFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return { ok: false, status: 504, json: async () => ({}) };
+  };
+  try {
+    await fetchChunk([23.7, 37.9, 23.8, 38.0]);
+  } catch { /* expected */ } finally {
+    globalThis.fetch = realFetch;
+  }
+  check('a 504 gives up quickly so the box gets subdivided instead',
+    calls <= REGION.OVERPASS_HEAVY_RETRY_MAX + 1,
+    `${calls} attempts, budget ${REGION.OVERPASS_HEAVY_RETRY_MAX + 1}`);
+  check('...but is still retried at least once, since 504s are often transient',
+    calls >= 2, `${calls} attempts`);
 }
 
 // ─── Overpass parsing ─────────────────────────────────────────────────────────
@@ -418,12 +468,60 @@ check('some contours are major', region.contours.features.some((f) => f.properti
 // ─── buildings are kept and drawable ──────────────────────────────────────────
 
 {
-  const query = buildQuery([23.72, 37.97, 23.73, 37.99]);
-  check('buildings are fetched with their geometry',
-    query.includes('way["building"]') && query.includes('>;\nout skel qt;'));
-  check('the query is a single request',
-    (query.match(/^\[out:json/gm) || []).length === 1);
-  check('no centroid-only shortcut remains', !query.includes('out tags center'));
+  const box = [23.72, 37.97, 23.73, 37.99];
+  const main = buildMainQuery(box);
+  const buildings = buildBuildingQuery(box);
+
+  // The split is the whole point of Phase Q. Roads keep `>;` because the
+  // routing graph is built from shared OSM node ids; buildings must NOT have
+  // it, because recursing over ~9,000 building geometry nodes per km² is what
+  // made Overpass 504 on every chunk (RESEARCH_TILES.md §3).
+  check('roads still recurse to their nodes, keeping real OSM node ids',
+    main.includes('>;') && main.includes('out skel qt;'));
+  check('the main query no longer asks for buildings', !main.includes('way["building"]'));
+  check('the main query still carries roads, water, rail, stations and POIs',
+    main.includes('"highway"') && main.includes('"natural"="water"') &&
+    main.includes('"railway"="rail"') && main.includes('node["shop"]'));
+
+  check('buildings are fetched with inline geometry',
+    buildings.includes('way["building"]') && buildings.includes('out geom;'));
+  check('the building query does NOT recurse to nodes — this is the 504 fix',
+    !buildings.includes('>;') && !buildings.includes('out skel qt'));
+  check('no centroid-only shortcut remains', !buildings.includes('out tags center'));
+
+  for (const [label, query] of [['main', main], ['building', buildings]]) {
+    check(`the ${label} query is a single request`,
+      (query.match(/^\[out:json/gm) || []).length === 1);
+  }
+}
+
+{
+  // `out geom` ways carry coordinates inline instead of node references, and
+  // the whole building path now depends on wayRing reading that shape.
+  const geomWay = {
+    type: 'way', id: 7, tags: { building: 'house' },
+    geometry: [{ lon: 1, lat: 2 }, { lon: 3, lat: 4 }, { lon: 5, lat: 6 }],
+  };
+  const ring = wayRing(geomWay);
+  check('wayRing reads inline out-geom coordinates',
+    ring.length === 3 && ring[0][0] === 1 && ring[0][1] === 2);
+  check('wayRing needs no node map for an out-geom way', Array.isArray(ring));
+
+  // Overpass emits null for a point outside the queried box on a clipped way.
+  const clipped = { type: 'way', id: 8, geometry: [{ lon: 1, lat: 2 }, null, { lon: 5, lat: 6 }] };
+  check('wayRing skips the nulls Overpass emits for clipped ways',
+    wayRing(clipped).length === 2);
+
+  // The old shape must keep working: water still arrives as node references.
+  const refWay = { type: 'way', id: 9, nodes: [1, 2, 3] };
+  const nodes = new Map([[1, [10, 20]], [2, [30, 40]], [3, [50, 60]]]);
+  check('wayRing still resolves node references for out-body ways',
+    wayRing(refWay, nodes).length === 3);
+
+  // parseResponses must file an out-geom building as a building.
+  const parsed = parseResponses([{ elements: [geomWay] }]);
+  check('parseResponses files an out-geom way as a building',
+    parsed.buildingWays.length === 1);
 }
 
 {

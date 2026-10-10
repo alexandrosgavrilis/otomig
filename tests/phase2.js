@@ -16,7 +16,7 @@ import { dirname, join } from 'node:path';
 
 import {
   CLOCK, COSTS, DIFFICULTY, MODES, VEHICLES, DEMAND, PATIENCE, LOANS,
-  passengersPerDot, overpassChunkCount,
+  passengersPerDot, buildingChunkCount,
 } from '../config.js';
 import { LocalFrame, reviveRegion } from '../model/region.js';
 import { Network } from '../model/network.js';
@@ -578,25 +578,35 @@ export function runPhase2Tests(check, near) {
 
   // ─── Overpass chunking ──────────────────────────────────────────────────
   {
-    // Chunk AREA is what Overpass chokes on, so the grid must follow the
-    // region size. Measured: a 2 km box of central Athens serves fine, a 5 km
-    // box 504s every time.
-    const sizeOf = (km) => km / overpassChunkCount(km);
-    check('a 6 km region still splits into 3x3 — no regression',
-      overpassChunkCount(6) === 3);
-    near('…which is the 2 km chunk measured to work', sizeOf(6), 2, 0.01);
-    check('a 15 km region no longer starts with 5 km chunks',
-      sizeOf(15) < 3, `${sizeOf(15).toFixed(2)} km chunks`);
-    check('no region size produces a chunk known to fail',
-      [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].every((km) => sizeOf(km) <= 2.5),
+    // Only BUILDINGS are chunked now. Phase R established that chunk area was
+    // never the problem — the `>;` recursion over building geometry nodes was —
+    // so roads, water, rail and POIs come back in one request for the whole
+    // region and this count applies to the building query alone.
+    const sizeOf = (km) => km / buildingChunkCount(km);
+    check('the default 6 km region needs ONE building request',
+      buildingChunkCount(6) === 1, `${buildingChunkCount(6) ** 2} requests`);
+    near('…covering the whole region, which was measured to serve in 12 s',
+      sizeOf(6), 6, 0.01);
+    check('the 5 km minimum is also one request', buildingChunkCount(5) === 1);
+    check('a 15 km region splits into 5 km chunks',
+      sizeOf(15) <= 5.01, `${sizeOf(15).toFixed(2)} km chunks`);
+    check('no region size exceeds the 6 km chunk measured to serve first try',
+      [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].every((km) => sizeOf(km) <= 6.01),
       [5, 10, 15].map((km) => `${km}km->${sizeOf(km).toFixed(2)}`).join(' '));
-    check('one import never fires an unreasonable number of requests',
-      overpassChunkCount(15) ** 2 <= 64, `${overpassChunkCount(15) ** 2} requests at 15 km`);
-    check('the smallest region still splits', overpassChunkCount(5) >= 2);
+
+    // The headline of Phase Q: total requests, main query included.
+    const totalRequests = (km) => 1 + buildingChunkCount(km) ** 2;
+    check('the default region costs 2 Overpass requests, down from 9',
+      totalRequests(6) === 2, `${totalRequests(6)}`);
+    check('the largest region costs 10, down from 36',
+      totalRequests(15) === 10, `${totalRequests(15)}`);
+    check('every region size stays well inside casual Overpass use',
+      [5, 6, 10, 15].every((km) => totalRequests(km) <= 10));
+
     check('the chunk count rises with region size', (() => {
       let previous = 0;
       for (let km = 5; km <= 15; km++) {
-        const n = overpassChunkCount(km);
+        const n = buildingChunkCount(km);
         if (n < previous) return false;
         previous = n;
       }
