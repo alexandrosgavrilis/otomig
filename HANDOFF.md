@@ -2,8 +2,8 @@
 
 Read this first in every session. Update it last.
 
-**State:** Phases 0, 1, 2 and R complete. Verified in a real browser against the fixture **and against a real live import of central Athens**, which found two bugs no fixture could have (§1).
-**Last session:** Oct 10, 2026 — Phase 0 (research), Phase 1 (region and map), Phase 2 (buses and passengers), Phase R (data architecture), first live import.
+**State:** Phases 0, 1, 2, R, Q and 3 complete. Verified in a real browser against the fixture **and against a real live import of central Athens**, which found two bugs no fixture could have (§1).
+**Last session:** Oct 10, 2026 — Phase 0 (research), Phase 1 (region and map), Phase 2 (buses and passengers), Phase R (data architecture), first live import, Phase Q (query restructure), Phase 3 (trams).
 
 **Phase R is done, and it cancelled Phase D.** See [RESEARCH_TILES.md](RESEARCH_TILES.md).
 
@@ -20,7 +20,7 @@ The region comes out identical — same 51,700 buildings and 502,376 residents f
 
 | | |
 | --- | --- |
-| **Next** | **Phase 3 — trams.** Nothing blocks it. §9. |
+| **Next** | **Phase 4 — rail.** Track building with the Build track tool, metro and train lines, stations, the profile strip. Most of the hard geometry already exists — see §10. |
 | Shelved | Vector tiles for building geometry. Viable and fully costed ([RESEARCH_TILES.md](RESEARCH_TILES.md) §8), purely additive, worth it only if dense 15 km imports become the priority. |
 
 The reason Phase R was ordered before Phase 3 was that a data-layer rewrite would change the occupancy raster's provenance. It never happened, so the raster is exactly what it was.
@@ -78,8 +78,8 @@ Both would have reached Alex as a broken screen, and both were invisible to 272 
 ## 2. Testing
 
 ```bash
-npm test                            # 274 logic assertions, plain Node, no dependencies
-npm run test:browser                # 75 assertions in real Chromium via Playwright
+npm test                            # 359 logic assertions, plain Node, no dependencies
+npm run test:browser                # 88 assertions in real Chromium via Playwright
 npm run test:browser -- --headed    # ...and watch it
 npm run test:live                   # 24 assertions against a REAL import — hits live OSM services
 npm run test:live -- --km 5         # ...at a given size (default 5, the slider minimum)
@@ -92,7 +92,7 @@ The browser suite serves on **port 4001**, loads the fixture, and checks that Ma
 
 Playwright is a devDependency. `npm test` stays dependency-free.
 
-Phase 2's acceptance criteria live in `tests/phase2.js` marked `ACCEPTANCE:`, so they stay checked rather than being verified once by hand.
+Each phase's acceptance criteria live in `tests/phase2.js` and `tests/phase3.js` marked `ACCEPTANCE:`, so they stay checked rather than being verified once by hand. Phase 3's drag gesture is additionally driven through real mouse events in `tests/browser.js`, because MapLibre's own handling is the thing most likely to break it.
 
 ### Four bugs the browser suite caught
 
@@ -338,9 +338,9 @@ The fixture is a 6×6 km synthetic coast: a bay in the south-west, a lake, a riv
 
 ## 8. Known gaps
 
-- **Dragging to shape a route is not implemented.** The spec's via-points (drag between two stops to force a different road route) are not wired to the mouse, though `RoadIndex.pathThrough` supports them. Belongs with tram off-road dragging in Phase 3 — same gesture.
+- **A drag always wins over a click near a line.** Pressing within 10 px of a segment starts a drag, so selecting a line by clicking it is harder than it was. A press that never moves is treated as a click and does nothing, but the interaction deserves a second look when the Edit stops tool is finished.
 - **Edit stops is select-only.** Dragging a stop to move it and clicking a segment to insert one are unwired; `Network.insertStop` and `removeStopFromLine` exist and are tested.
-- **No cost preview follows the cursor** while building.
+- **A cost preview follows the cursor only while dragging a segment**, not while placing stops. The drag is the gesture that can spend tens of millions without placing anything, so it was the one that needed it most; stop placement still gives no running total.
 - **Water from multipolygon relations is not imported.** Only `way[natural=water]`. Big lakes and most coastal water in OSM are relations, so a region with one will be missing it. The sea mask comes from elevation and is unaffected.
 - **A land island inside a sea area is painted as sea** — the tracer returns it as its own ring, not a hole. Rare; fix is ring-containment tests.
 - **Save slots are one slot** in the UI. `model/save.js` supports any number.
@@ -353,22 +353,40 @@ The fixture is a 6×6 km synthetic coast: a bay in the south-west, a lake, a riv
 
 ---
 
-## 9. Phase 3 — trams (no longer blocked)
+## 9. Phase 3 — trams. Done.
 
-Phase R settled the data architecture without a rewrite, so the occupancy raster's provenance does not change and this no longer waits on anything.
+Tram is enabled, on-street track is built and charged with the line, and dragging a segment pulls it off the road into dedicated track with the grade rule applied. The acceptance criteria are asserted in [tests/phase3.js](tests/phase3.js) marked `ACCEPTANCE:` and again through a real mouse drag in [tests/browser.js](tests/browser.js), so they stay checked rather than being verified once by hand.
 
-One finding from Phase R lands squarely here, and it is worth knowing before the grade rule is written: **about a quarter of buildings in a dense city come within 3 m of a road centreline in OSM itself** — 23.7% measured, against a 26.9% same-source control, worst case 8 cm. So "track may not cross a building" will block on-street alignments routinely, no matter where the footprints came from. On-street tram track follows roads and is meant to be exempt, but the exemption has to be real rather than incidental. See [RESEARCH_TILES.md](RESEARCH_TILES.md) §5.1.
+Measured on the fixture, between two stops either side of the ridge:
 
-Tram-road snapping, on-street track, off-road dragging, the grade rule for off-road segments, tram visuals.
+| | |
+| --- | --- |
+| on-street, following the road | 1,400 m, **€21M** |
+| dragged off-road through one via-point | 1,878 m, **€101M** — 37 samples at grade, 29 bridge, 29 tunnel |
 
-**Accept when:** a tram line follows only allowed roads, a dragged segment leaves the road at a higher price, and a steep off-road segment gets a tunnel by itself.
+**The grade rule, since the spec asks for the method to be documented.** Build the highest grade-feasible profile that stays at or below the terrain, build the lowest that stays at or above it, average the two. Both envelopes are feasible by construction, and the average of two profiles whose steps are each within ±g has steps within ±g too — so it is feasible in one pass, with no iteration and no convergence test. The lower envelope alone would cut through every hill and never bridge a valley; the upper would bridge everything and never tunnel. Averaging gives tunnels through hills and bridges over valleys. See `smoothProfile` in [build/track-geometry.js](build/track-geometry.js).
 
-Most of the scaffolding exists:
+### Decisions worth not relitigating
 
-1. **Road restriction is done.** `BUILD.TRAM_ROADS` and `RoadIndex.snap(lon, lat, 'tram')` already limit trams to trunk/primary/secondary/tertiary (+links) and pedestrian streets. The fixture has a pedestrian street ("Market Walk") and plenty of residential roads to prove both sides of the rule.
-2. **Tram visuals are done.** The dotted-circle line pattern and rounded-end vehicle shape are in [render/shapes.js](render/shapes.js) and selected by mode, so enabling Tram should just work.
-3. **Enable `'tram'` in `PHASE_2_MODES`** in [ui/toolbar.js](ui/toolbar.js) — and rename that constant.
-4. **The new work is `build/track-geometry.js`**: the spline for dragged off-road segments, the grade rule, and structure classification. [model/region.js](model/region.js) already provides `heightAt` (bilinear, tested exact on a ramp) and `isOccupied` for the building collision check. The fixture's ridge and notched valley exist specifically so tunnels and bridges have something to find.
-5. **Dragging is the shared gesture.** Implementing off-road tram drags also gives bus via-points for free — do them together.
+1. **The ends are pinned.** An off-road segment runs between two stops that sit on the street, so the profile is constrained to the cone reachable from both ends before the envelopes are built. Without it a segment over a ridge started 36 m in the air — the tram left the stop on a bridge going nowhere. If the two ends are further apart in height than the grade can climb over the segment's length, no profile exists and the drag is refused as `tooSteep`.
+2. **Via-points are keyed by the stop pair, not the segment index.** An index shifts the moment a stop is inserted or removed, which would silently move a drag to a different part of the line. With a pair key, inserting a stop breaks the pair and the via is dropped — the segment reverts to its road route, which is predictable and visible.
+3. **`BUILD.OFF_ROAD_STREET_LEAD_M` (25 m) exempts each end from the building-collision rule.** This is the Phase R finding landing exactly where it was predicted to: 23.7% of buildings in central Athens come within 3 m of a road centreline in OSM itself. An off-road segment starts and ends at stops on road centrelines, so without the exemption almost every drag in a real city would be blocked by a building sitting on the street it leaves from. The spec exempts on-street tram track; this makes that exemption real at the point where the track leaves and rejoins the street rather than leaving it to luck.
+4. **Track maintenance was missing and is now charged.** `maintenancePerYear` only counted stops. A tram line's track is worth tens of millions a kilometre against half a million a stop, so leaving it out would have made trams nearly free to keep — exactly backwards. Bus lines contribute nothing, having no track.
+5. **The drag is one gesture with two meanings.** For a bus it forces a different road route through the dragged point; for a tram it pulls the segment off the road entirely. Implementing one gave the other for free, which is why the spec's bus via-points ship here rather than in Phase 2.
+6. **MapLibre's drag-pan is suspended for the duration of a drag** and restored on mouseup *and* on the canvas's `mouseleave`. Releasing outside the canvas would otherwise leave the map permanently un-pannable. The browser suite asserts `dragPan.isEnabled()` after the gesture.
 
-Watch out for: the grade rule samples every 20 m (`BUILD.SAMPLE_M`) against a ~30 m height grid, which is why `heightAt` interpolates rather than snapping. Don't change that to nearest-cell or the smoothed profile will step.
+---
+
+## 10. Phase 4 — rail (next)
+
+Track building with smooth splines, the full grade rule with tunnels and bridges, metro and train lines, stations, track compatibility, the profile strip.
+
+**Accept when:** track can be drawn as a smooth curve through waypoints, the grade rule gives it tunnels and bridges without the player choosing, metro and train lines run on compatible track, and the height-profile strip shows what is being built.
+
+**Most of the geometry is already done and tested**, because Phase 3 built it generically rather than for trams specifically:
+
+1. **[build/track-geometry.js](build/track-geometry.js) is mode-agnostic.** `splinePoints`, `smoothProfile`, `classifyStructures`, `blockedSamples` and `trackCost` all take a mode and read `BUILD.MAX_GRADE`, so metro at 4.5% and train at 2.5% already work — `tests/phase3.js` asserts every mode honours its own limit. Metro's `METRO_DEPTH_M` default-underground behaviour is already in `desiredProfile`.
+2. **Structure rendering is done.** `drawTrackStructure` in [render/shapes.js](render/shapes.js) draws tunnels muted and bridges with a deck casing, and `drawDragPreview` handles the provisional dashed state with red for blocked.
+3. **What is genuinely new:** the Build track tool (waypoint clicks, Enter/double-click to finish, Esc to cancel), track as a first-class object separate from lines, junctions where track meets track, stations snapped to track, shortest-path routing *on track* rather than on roads, and the height-profile strip.
+4. **The rail-and-roads rules are unimplemented and not trivial**: crossing angle ≥ 45°, no running within a road corridor for more than 40 m, level crossings at €0.3M, and motorway/trunk crossings forcing a 7 m bridge or 8 m tunnel into the profile. `BUILD` already carries every constant for these; none of the logic exists.
+5. **Watch out for:** the grade rule samples every 20 m (`BUILD.SAMPLE_M`) against a ~30 m height grid, which is why `heightAt` interpolates rather than snapping. Don't change that to nearest-cell or the smoothed profile will step.

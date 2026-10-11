@@ -304,3 +304,87 @@ export function offsetPolyline(points, offset) {
   }
   return out;
 }
+
+/**
+ * Draw an off-road track segment coloured by structure.
+ *
+ * The spec's rule is that the player never chooses where a tunnel or a bridge
+ * goes — the terrain decides — so the drawing has to make that decision
+ * legible without a legend:
+ *
+ *   - **tunnel** — the line darkens toward black (`RENDER.TUNNEL_DARKEN`) and
+ *     thins, because it is under the ground the player is looking at.
+ *   - **bridge** — a pale casing is laid under the line, so it reads as a deck
+ *     carrying the track over whatever is below.
+ *   - **at grade** — the plain line.
+ *
+ * `points` and `kinds` are parallel: the grade rule samples every
+ * `BUILD.SAMPLE_M`, and each sample carries its own classification.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {Array<[number,number]>} points screen coordinates
+ * @param {string[]} kinds one of 'atGrade' | 'tunnel' | 'bridge' per point
+ * @param {string} color the line colour
+ * @param {number} width
+ */
+export function drawTrackStructure(ctx, points, kinds, color, width) {
+  if (points.length < 2) return;
+  if (!kinds || kinds.length !== points.length) {
+    strokePath(ctx, points, color, width);
+    return;
+  }
+
+  // Bridge casings go down first, as one pass under everything, so a deck
+  // never paints over the track of the run next to it.
+  ctx.save();
+  for (const run of contiguousRuns(kinds)) {
+    if (run.kind !== 'bridge') continue;
+    const slice = points.slice(run.start, run.end + 2);
+    strokePath(ctx, slice, shade(color, 0.72), width * 2.1);
+    strokePath(ctx, slice, '#FFFFFF', width * 1.5);
+  }
+
+  for (const run of contiguousRuns(kinds)) {
+    // Overlap by one point so consecutive runs join without a seam.
+    const slice = points.slice(run.start, run.end + 2);
+    if (run.kind === 'tunnel') {
+      ctx.globalAlpha = 0.55;
+      strokePath(ctx, slice, shade(color, -RENDER.TUNNEL_DARKEN), width * 0.8);
+      ctx.globalAlpha = 1;
+    } else {
+      strokePath(ctx, slice, color, width);
+    }
+  }
+  ctx.restore();
+}
+
+/** Contiguous runs of equal values, as {kind, start, end} inclusive. */
+function contiguousRuns(kinds) {
+  const runs = [];
+  for (let i = 0; i < kinds.length; i++) {
+    if (i === 0 || kinds[i] !== kinds[i - 1]) runs.push({ kind: kinds[i], start: i, end: i });
+    else runs.at(-1).end = i;
+  }
+  return runs;
+}
+
+/**
+ * The live preview of a segment being dragged, before it is paid for.
+ *
+ * Drawn dashed so it reads as provisional, and red wherever it is blocked —
+ * which is the spec's requirement that a blocked stretch shows red and cannot
+ * be confirmed until the player reroutes it.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {Array<[number,number]>} points screen coordinates
+ * @param {string} color
+ * @param {number} width
+ * @param {boolean} blocked
+ */
+export function drawDragPreview(ctx, points, color, width, blocked) {
+  if (points.length < 2) return;
+  ctx.save();
+  ctx.setLineDash([width * 1.6, width * 1.2]);
+  strokePath(ctx, points, blocked ? '#D14A3F' : color, width);
+  ctx.restore();
+}

@@ -4,7 +4,7 @@ A transit sandbox with Mini Metro's look and drawing feel and Cities: Skylines' 
 
 You draw bus, tram, metro and train lines. Passengers appear where people live and want to go. Money comes from tickets, coverage subsidies and advertising. There is no win condition — a good network settles into balance. Some places can only ever support a bus line or two, and that is fine.
 
-**Status:** Phases 0–2 of 7 done — region import, base map, and the bus core loop (lines, passengers, transfers, money, save/load). The data architecture is settled and the import is verified against live OpenStreetMap data: a 5 km slice of central Athens imports in about 20 seconds and two Overpass requests. Trams are next — see [HANDOFF.md](HANDOFF.md).
+**Status:** Phases 0–3 of 7 done — region import, base map, the bus core loop (lines, passengers, transfers, money, save/load) and trams with on-street track, off-road dragged segments and automatic tunnels and bridges. The import is verified against live OpenStreetMap data: a 5 km slice of central Athens imports in about 20 seconds and two Overpass requests. Rail is next — see [HANDOFF.md](HANDOFF.md).
 
 ## Running it
 
@@ -20,8 +20,8 @@ Click **Use the test region** for a synthetic region that needs no network at al
 Serve it over `http://` — don't open `index.html` as a `file://` URL. ES modules, the import worker and the OSM services all need a real origin.
 
 ```bash
-npm test               # 290 logic assertions, plain Node, no framework, no dependencies
-npm run test:browser   # 75 assertions driving real Chromium (needs: npm install)
+npm test               # 359 logic assertions, plain Node, no framework, no dependencies
+npm run test:browser   # 88 assertions driving real Chromium (needs: npm install)
 npm run test:live      # 25 assertions against a REAL import — hits live OSM services
 npm run fixture        # regenerate fixtures/test-region.json
 ```
@@ -37,6 +37,7 @@ Plain JavaScript ES modules with JSDoc types. No TypeScript, no bundler, no fram
 - **MapLibre** draws the calm static world — land, water, roads, contour lines, heat map — entirely from our own imported GeoJSON, so the map works offline once a region is imported.
 - **A Canvas 2D overlay**, synced to MapLibre's `render` event, draws everything that moves or that the player draws. Mini Metro's line patterns are far easier with a path and a stroke than with style rules.
 - **A Web Worker** runs the import: Overpass parsing, building processing, elevation decoding and contour tracing.
+- **The terrain decides where tunnels and bridges go**, not the player. Drag a tram line off the road and the grade rule smooths a profile the mode can actually climb, then classifies each 20 m sample as tunnel, bridge or at grade and prices it accordingly.
 - **IndexedDB** caches imported regions and autosaves. A region is fetched once and never again.
 
 ## Data and attribution

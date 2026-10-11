@@ -339,8 +339,11 @@ try {
   check('the toolbar mounted with Bus selected',
     await page.evaluate(() => document.querySelector('#tb-modes button[data-mode="bus"]')
       ?.classList.contains('on')) === true);
+  check('Tram is enabled now that Phase 3 has shipped',
+    await page.evaluate(() =>
+      document.querySelector('#tb-modes button[data-mode="tram"]')?.disabled) === false);
   check('later-phase modes are visibly disabled, not missing',
-    await page.evaluate(() => ['tram', 'metro', 'train'].every((m) =>
+    await page.evaluate(() => ['metro', 'train'].every((m) =>
       document.querySelector(`#tb-modes button[data-mode="${m}"]`)?.disabled)) === true);
 
   // Three stops along a street, clear of the fixture's bay.
@@ -548,6 +551,141 @@ try {
     Math.abs(roundTrip.balance - roundTrip.originalBalance) < 1);
   check('the reload restores the calendar',
     Math.abs(roundTrip.days - roundTrip.originalDays) < 1e-6);
+
+  // ─── Phase 3: trams, dragging and off-road track ──────────────────────────
+  // The drag gesture is the one thing no headless test can cover: it needs
+  // MapLibre's own mouse handling, and it has to suspend drag-pan without
+  // leaving the map stuck. Both have to be exercised through a real canvas.
+  {
+    await page.evaluate(() => {
+      const game = window.otomig.game;
+      // Clear the board so the tram line is the only thing on it.
+      for (const line of [...game.network.lines.values()]) game.network.deleteLine(line.id);
+      game.economy.balance = 1e11;
+      game.selection = null;
+    });
+
+    // Switch to Tram with the keyboard, which also proves the shortcut works.
+    await page.click('#tb-modes button[data-mode="tram"]');
+    check('clicking Tram selects it',
+      await page.evaluate(() => document.querySelector('#tb-modes button[data-mode="tram"]')
+        ?.classList.contains('on')) === true);
+
+    // Build a tram line through the model, then drag it through the canvas.
+    const built = await page.evaluate(() => {
+      const game = window.otomig.game;
+      const frame = game.frame;
+      const line = game.startLine('tram');
+      const a = game.extendDraft(...frame.toLonLat(2600, 3000));
+      const b = game.extendDraft(...frame.toLonLat(2600, 4400));
+      game.finishDraft();
+      return {
+        error: a.error || b.error || null,
+        stops: line.stops.length,
+        lineId: line.id,
+        onStreetCost: game.network.trackCostOf(line),
+        offRoad: line.segments.some((segment) => segment.offRoad),
+      };
+    });
+    check('a tram line builds in the browser', built.stops === 2 && !built.error,
+      `${built.error || ''} ${built.stops} stops`);
+    check('tram track on the street is charged', built.onStreetCost > 0);
+    check('an undragged tram segment is not off-road track', built.offRoad === false);
+
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: join(SHOTS, '8-tram-on-street.png') });
+
+    // Now the drag, through real mouse events on the canvas.
+    const dragPlan = await page.evaluate(() => {
+      const game = window.otomig.game;
+      const map = window.otomig.map;
+      const line = [...game.network.lines.values()][0];
+      const segment = line.segments[0];
+      const mid = segment.points[Math.floor(segment.points.length / 2)];
+      const start = map.project({ lng: mid[0], lat: mid[1] });
+      const target = game.frame.toLonLat(3200, 3700);
+      const end = map.project({ lng: target[0], lat: target[1] });
+      return { start: { x: start.x, y: start.y }, end: { x: end.x, y: end.y } };
+    });
+
+    await page.mouse.move(dragPlan.start.x, dragPlan.start.y);
+    await page.mouse.down();
+    // Several moves, so the preview is computed at least once mid-gesture.
+    for (let step = 1; step <= 4; step++) {
+      await page.mouse.move(
+        dragPlan.start.x + (dragPlan.end.x - dragPlan.start.x) * (step / 4),
+        dragPlan.start.y + (dragPlan.end.y - dragPlan.start.y) * (step / 4));
+      await page.waitForTimeout(40);
+    }
+    const midDrag = await page.evaluate(() => {
+      const drag = window.otomig.game.drag;
+      return drag ? { has: true, offRoad: Boolean(drag.preview?.offRoad),
+        costDelta: drag.costDelta ?? null } : { has: false };
+    });
+    check('a drag in progress previews an off-road segment', midDrag.has && midDrag.offRoad,
+      JSON.stringify(midDrag));
+    check('the preview carries a live cost', Number.isFinite(midDrag.costDelta),
+      `${midDrag.costDelta}`);
+    await page.screenshot({ path: join(SHOTS, '9-tram-drag-preview.png') });
+
+    await page.mouse.up();
+    await page.waitForTimeout(300);
+
+    const after = await page.evaluate(() => {
+      const game = window.otomig.game;
+      const line = [...game.network.lines.values()][0];
+      const segment = line.segments[0];
+      return {
+        dragCleared: game.drag === null,
+        dragPanEnabled: window.otomig.map.dragPan.isEnabled(),
+        offRoad: Boolean(segment.offRoad),
+        kinds: segment.kinds ? [...new Set(segment.kinds)] : [],
+        cost: segment.cost || 0,
+      };
+    });
+    after.onStreetCost = built.onStreetCost;
+
+    check('the drag ends cleanly', after.dragCleared);
+    check('dragging the map works again afterwards — drag-pan was restored',
+      after.dragPanEnabled);
+    check('ACCEPTANCE: dragging pulls the tram segment off the road',
+      after.offRoad === true);
+    check('ACCEPTANCE: the off-road segment costs more than the street route',
+      after.cost > after.onStreetCost,
+      `${Math.round(after.cost / 1e6)}M vs ${Math.round(after.onStreetCost / 1e6)}M`);
+    check('ACCEPTANCE: the terrain put a tunnel in it, unprompted',
+      after.kinds.includes('tunnel'), after.kinds.join(','));
+
+    await page.screenshot({ path: join(SHOTS, '10-tram-off-road.png') });
+
+    // Zoom in on the track itself. Structure has to be legible without a
+    // legend — that is the whole point of drawing tunnels and bridges
+    // differently — and only a close screenshot shows whether it is.
+    await page.evaluate(() => {
+      const line = [...window.otomig.game.network.lines.values()][0];
+      const points = line.segments[0].points;
+      const lons = points.map((p) => p[0]);
+      const lats = points.map((p) => p[1]);
+      window.otomig.map.fitBounds(
+        [[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]],
+        { padding: 120, duration: 0 });
+    });
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: join(SHOTS, '11-tram-structures.png') });
+
+    // The off-road track must actually be painted, by structure. Sample the
+    // overlay for the dark tunnel shade, which only appears on tunnel runs.
+    const painted = await page.evaluate(async () => {
+      const canvas = document.querySelector('#overlay');
+      const ctx = canvas.getContext('2d');
+      const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      let opaque = 0;
+      for (let i = 3; i < data.length; i += 4 * 37) if (data[i] > 20) opaque++;
+      return opaque;
+    });
+    check('the off-road track is actually drawn on the overlay', painted > 0,
+      `${painted} opaque samples`);
+  }
 
   // ─── Nothing threw ────────────────────────────────────────────────────────
   check('the style is valid — no MapLibre errors', mapErrors.length === 0,

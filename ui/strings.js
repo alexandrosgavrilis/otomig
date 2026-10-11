@@ -158,5 +158,14 @@ export const STRINGS = {
     crossingTooShallow: 'Crossing the road too shallowly.',
     alongRoad: 'Track cannot run along a road.',
     negativeBalance: 'Not while the balance is negative.',
+    tooSteep: 'Too steep between those stops, even with a tunnel.',
+  },
+
+  build: {
+    trackBuilt: 'Track built —',
+    onStreet: 'on street',
+    atGrade: 'at grade',
+    tunnel: 'tunnel',
+    bridge: 'bridge',
   },
 };

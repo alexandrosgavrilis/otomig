@@ -334,6 +334,23 @@ export const BUILD = {
   /** Structure runs shorter than this are merged into neighbours, m. [spec] */
   MIN_STRUCTURE_RUN_M: 60,
 
+  /**
+   * How much of each end of an off-road segment is still treated as street
+   * running, and so exempt from the "buildings block surface track" rule, m.
+   *
+   * Not in the spec. An off-road segment starts and ends at stops, which sit
+   * on road centrelines, and Phase R measured that **23.7% of buildings in
+   * central Athens come within 3 m of a road centreline in OSM itself** —
+   * against a 26.9% same-source control, so it is OSM's own geometry rather
+   * than any import artefact (RESEARCH_TILES.md §5.1). Without this, the first
+   * and last samples of nearly every off-road segment in a real city would sit
+   * inside a building and block track that visibly runs down the middle of a
+   * street. The spec exempts on-street tram track from the rule; this makes
+   * the exemption real at the point where the track leaves and rejoins the
+   * street, rather than leaving it to luck.
+   */
+  OFF_ROAD_STREET_LEAD_M: 25,
+
   /** An at-grade rail/road crossing must meet the road at this angle or more, degrees. [spec] */
   MIN_CROSSING_ANGLE_DEG: 45,
   /** More than this much continuous at-grade track inside a road corridor is blocked, m. [spec] */

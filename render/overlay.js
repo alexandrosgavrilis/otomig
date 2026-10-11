@@ -17,8 +17,11 @@
  */
 
 import { COLORS, RENDER, DIFFICULTY } from '../config.js';
+import { STRINGS } from '../ui/strings.js';
+import { formatMoney } from '../sim/economy.js';
 import {
   strokePath, drawLinePattern, drawVehicle, drawStop, drawInterchange,
+  drawTrackStructure, drawDragPreview,
   drawWaiting, drawWaitRing, offsetPolyline, shade,
 } from './shapes.js';
 
@@ -147,9 +150,23 @@ export function linesPainter(game) {
         const spread = (index - (bundle.length - 1) / 2) * RENDER.LINE_OFFSET_PX * zoomScale;
         const drawn = offsetPolyline(points, spread);
 
-        strokePath(ctx, drawn, line.color, width);
+        if (segment.offRoad) {
+          // Dedicated track: draw it by structure so the tunnels and bridges
+          // the terrain forced on the player are visible without a legend.
+          drawTrackStructure(ctx, drawn, segment.kinds, line.color, width);
+        } else {
+          strokePath(ctx, drawn, line.color, width);
+        }
         drawLinePattern(ctx, drawn, line.mode, line.color, width);
       });
+    }
+
+    // The segment currently being dragged, on top of everything, dashed.
+    const drag = game.drag;
+    if (drag?.preview?.points?.length >= 2) {
+      const points = drag.preview.points.map(([lon, lat]) => overlay.project(lon, lat));
+      drawDragPreview(ctx, points, drag.line.color, width, Boolean(drag.preview.blocked));
+      drawDragLabel(ctx, points.at(-1), drag);
     }
   };
 }
@@ -253,4 +270,46 @@ function segmentSignature(segment) {
   const backward = `${bLon.toFixed(6)},${bLat.toFixed(6)}|${aLon.toFixed(6)},${aLat.toFixed(6)}`;
   const ends = forward < backward ? forward : backward;
   return `${ends}@${Math.round(segment.lengthM)}`;
+}
+
+/**
+ * The cost (and structure) of the segment being dragged, beside the cursor.
+ *
+ * The spec asks for a cost preview that follows the cursor while building.
+ * A drag is the one gesture that can spend money without placing a stop, so
+ * it is the one that most needs saying out loud before the mouse is released.
+ */
+function drawDragLabel(ctx, at, drag) {
+  if (!at) return;
+  const preview = drag.preview;
+  let text;
+  if (preview.blocked) {
+    text = preview.tooSteep ? STRINGS.errors.tooSteep : STRINGS.errors.blockedByBuilding;
+  } else {
+    const delta = drag.costDelta || 0;
+    const money = `${delta >= 0 ? '+' : '−'}${formatMoney(Math.abs(delta))}`;
+    const parts = [money];
+    if (preview.offRoad && preview.kinds?.length) {
+      const kinds = new Set(preview.kinds);
+      for (const kind of ['tunnel', 'bridge']) {
+        if (kinds.has(kind)) parts.push(STRINGS.build[kind]);
+      }
+    }
+    text = parts.join(' · ');
+  }
+
+  ctx.save();
+  ctx.font = '600 12px ui-sans-serif, system-ui, sans-serif';
+  ctx.textBaseline = 'middle';
+  const padding = 6;
+  const metrics = ctx.measureText(text);
+  const x = at[0] + 12;
+  const y = at[1] - 14;
+  ctx.fillStyle = preview.blocked ? '#D14A3F' : 'rgba(31,31,31,0.88)';
+  ctx.beginPath();
+  ctx.roundRect(x, y - 10, metrics.width + padding * 2, 20, 4);
+  ctx.fill();
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillText(text, x + padding, y);
+  ctx.restore();
 }

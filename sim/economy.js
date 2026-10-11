@@ -173,6 +173,16 @@ export class Economy {
       const discount = isRail && hasOsmRail ? 1 - COSTS.OSM_RAIL_DISCOUNT : 1;
       total += stop.cost * COSTS.MAINTENANCE_RATE * discount;
     }
+    // Track, from Phase 3 onward. A tram line's track is worth far more than
+    // its stops — tens of millions a kilometre against half a million a stop —
+    // so leaving it out would make trams nearly free to keep, which is exactly
+    // backwards. A bus line has no track and contributes nothing here.
+    for (const line of network.lines.values()) {
+      if (!line.trackCost) continue;
+      const isRail = line.mode === 'metro' || line.mode === 'train';
+      const discount = isRail && hasOsmRail ? 1 - COSTS.OSM_RAIL_DISCOUNT : 1;
+      total += line.trackCost * COSTS.MAINTENANCE_RATE * discount;
+    }
     return total;
   }
 

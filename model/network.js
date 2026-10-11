@@ -10,6 +10,7 @@
  */
 
 import { MODES, DEMAND, COSTS, LINE_PALETTE, VEHICLES } from '../config.js';
+import { buildTrack, onStreetCost } from '../build/track-geometry.js';
 
 let nextId = 1;
 const newId = (prefix) => `${prefix}${nextId++}`;
@@ -66,6 +67,25 @@ export class Line {
      * @type {Array<{points:number[][], lengthM:number}>}
      */
     this.segments = [];
+    /**
+     * Via-points, one per segment that has been dragged off its default route,
+     * keyed `"fromStopId>toStopId"`.
+     *
+     * Keyed by the stop pair rather than by segment index because an index
+     * shifts the moment a stop is inserted or removed, which would silently
+     * move a drag from one part of the line to another. With a pair key, an
+     * inserted stop breaks the pair and the via is simply dropped — the
+     * segment reverts to its default route, which is predictable and visible.
+     *
+     * What a via means depends on the mode. For a bus it forces a different
+     * road route (`RoadIndex.pathThrough`). For a tram it pulls the segment
+     * off the road entirely into dedicated track, priced by structure and
+     * subject to the grade rule.
+     * @type {Map<string, [number, number]>}
+     */
+    this.vias = new Map();
+    /** What this line's track has cost so far, for refunds and maintenance. */
+    this.trackCost = 0;
     /** @type {import('../sim/vehicles.js').Vehicle[]} */
     this.vehicles = [];
     /** Cumulative counters, for the line panel. */
@@ -124,10 +144,13 @@ export class Network {
   /**
    * @param {import('../build/road-routing.js').RoadIndex} roadIndex
    * @param {import('./region.js').LocalFrame} frame
+   * @param {import('./region.js').Region} [region] needed for off-road track:
+   *   the grade rule reads the height grid and the building occupancy raster.
    */
-  constructor(roadIndex, frame) {
+  constructor(roadIndex, frame, region = null) {
     this.roadIndex = roadIndex;
     this.frame = frame;
+    this.region = region;
     /** @type {Map<string, Stop>} */
     this.stops = new Map();
     /** @type {Map<string, Line>} */
@@ -300,14 +323,84 @@ export class Network {
     this.touch();
   }
 
+  /** Key for a via-point on the segment between two stops. */
+  static viaKey(fromId, toId) { return `${fromId}>${toId}`; }
+
+  /** The via-point on this segment, if the player dragged it. */
+  viaFor(line, from, to) {
+    return line.vias?.get(Network.viaKey(from.id, to.id)) || null;
+  }
+
   /**
-   * Route one segment between two consecutive stops along the roads.
-   * @returns {{points:number[][], lengthM:number}|null}
+   * Route one segment between two consecutive stops.
+   *
+   * Three outcomes, in order of preference:
+   *
+   *   - **No via** — the shortest path along roads the mode may use. This is
+   *     every bus segment and every undragged tram segment, and it is free:
+   *     the road already exists. Tram track laid along it is charged per km as
+   *     on-street track, which is the cheap rate.
+   *   - **A via, bus** — still on roads, but forced through a third node, so
+   *     the player can push a route down the street they meant.
+   *   - **A via, tram** — the segment leaves the road entirely and becomes a
+   *     spline through the dragged point: dedicated track, priced by structure
+   *     and subject to the grade rule, so it can tunnel and bridge.
+   *
+   * @returns {{points:number[][], lengthM:number, offRoad?:boolean,
+   *            kinds?:string[], runs?:Object[], blocked?:boolean,
+   *            height?:number[], terrain?:number[], cost?:number}|null}
    */
   routeBetween(line, from, to) {
+    const via = this.viaFor(line, from, to);
+
+    if (via && line.mode === 'tram' && this.region) {
+      const track = buildTrack(
+        [this.roadIndex.nodeLonLat(from.node), via, this.roadIndex.nodeLonLat(to.node)],
+        this.region, this.frame, line.mode);
+      // A segment that cannot be built is not silently replaced by a road
+      // route — the player dragged it there deliberately and needs to see it
+      // refused. `blocked` carries the reason to the preview and the panel.
+      return track;
+    }
+
+    if (via) {
+      const viaNode = this.roadIndex.snap(via[0], via[1], line.mode);
+      if (viaNode) {
+        const path = this.roadIndex.pathThrough([from.node, viaNode.node, to.node], line.mode);
+        if (path) {
+          return { points: this.roadIndex.polyline(path.nodes), lengthM: path.lengthM };
+        }
+      }
+      // The drag landed somewhere unroutable; fall through to the plain route
+      // rather than breaking the line.
+    }
+
     const path = this.roadIndex.shortestPath(from.node, to.node, line.mode);
     if (!path) return null;
     return { points: this.roadIndex.polyline(path.nodes), lengthM: path.lengthM };
+  }
+
+  /**
+   * What a line's track costs to build.
+   *
+   * A bus pays nothing: it drives on roads that already exist. A tram pays the
+   * cheap on-street rate along its road-following segments and the structure
+   * rate for any segment the player dragged off the road.
+   */
+  trackCostOf(line) {
+    if (!COSTS.TRACK_PER_KM[line.mode]) return 0;
+    let total = 0;
+    for (const segment of line.segments) {
+      total += segment.offRoad
+        ? (segment.cost || 0)
+        : onStreetCost(segment.lengthM, line.mode);
+    }
+    return Math.round(total);
+  }
+
+  /** True when any segment is blocked — by a building, or too steep to build. */
+  hasBlockedSegment(line) {
+    return line.segments.some((segment) => segment.blocked);
   }
 
   /** Recompute every segment of a line after its stop list changed. */

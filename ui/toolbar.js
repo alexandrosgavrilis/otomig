@@ -1,14 +1,20 @@
 /**
  * The left toolbar and the map interaction it drives.
  *
- * Modes and tools are a small state machine: a mode (bus for now) plus a tool
- * decides what a click on the map does. Clicking a game object always selects
- * it instead of building, as the spec requires — so a misplaced click opens a
- * panel rather than silently extending a line.
+ * Modes and tools are a small state machine: a mode plus a tool decides what a
+ * click on the map does. Clicking a game object always selects it instead of
+ * building, as the spec requires — so a misplaced click opens a panel rather
+ * than silently extending a line.
  *
- * Phase 2 ships Bus only. The other three mode buttons are present but
- * disabled, because a dead button that says "Tram" tells the player the plan;
+ * Bus and Tram are enabled. Metro and Train are present but disabled until
+ * Phase 4, because a dead button that says "Metro" tells the player the plan;
  * a missing one tells them nothing.
+ *
+ * **Dragging a segment** is the one gesture that is not a click. Press on the
+ * line between two stops, drag, release: for a bus that forces a different
+ * road route through the dragged point, and for a tram it pulls the segment
+ * off the road entirely into dedicated track. Same gesture, different meaning
+ * by mode — which is why both arrive together.
  */
 
 import { STRINGS } from './strings.js';
@@ -17,7 +23,7 @@ import { formatMoney } from '../sim/economy.js';
 
 /** Tools available in Phase 2. Build track arrives with rail in Phase 4. */
 export const TOOLS = ['newLine', 'extendLine', 'editStops', 'bulldoze'];
-const PHASE_2_MODES = ['bus'];
+const ENABLED_MODES = ['bus', 'tram'];
 
 export function mountToolbar(root, game, { onChange, onToggleLayer }) {
   const state = {
@@ -32,7 +38,7 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
       <div class="group" id="tb-modes">
         ${['bus', 'tram', 'metro', 'train'].map((mode, index) => `
           <button type="button" data-mode="${mode}"
-            ${PHASE_2_MODES.includes(mode) ? '' : 'disabled title="Arrives in a later phase"'}
+            ${ENABLED_MODES.includes(mode) ? '' : 'disabled title="Arrives in a later phase"'}
             class="${mode === state.mode ? 'on' : ''}">
             <span class="key">${index + 1}</span> ${STRINGS.toolbar[mode]}
           </button>`).join('')}
@@ -69,7 +75,7 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
   });
 
   function setMode(mode) {
-    if (!PHASE_2_MODES.includes(mode)) return;
+    if (!ENABLED_MODES.includes(mode)) return;
     state.mode = mode;
     cancelDraft();
     for (const button of modes.querySelectorAll('button')) {
@@ -169,6 +175,80 @@ export function wireMapInteraction(map, game, toolbar, { onFeedback, onSelect })
     game.finishDraft();
     toolbar.state.extendTarget = null;
   });
+
+  // ─── Dragging a segment ───────────────────────────────────────────────────
+  // Press on a line between two stops and pull. For a bus this forces a
+  // different road route; for a tram it pulls the segment off the road into
+  // dedicated track. MapLibre's own drag-pan has to be suspended for the
+  // duration, or the map slides out from under the gesture.
+  map.on('mousedown', (event) => {
+    if (game.draft || state.tool === 'bulldoze') return;
+    const { lng: lon, lat } = event.lngLat;
+    const hit = segmentAt(game, lon, lat, pixelsToMetres(map, 10));
+    if (!hit) return;
+
+    event.preventDefault();
+    map.dragPan.disable();
+    game.drag = { ...hit, via: [lon, lat], preview: null };
+  });
+
+  map.on('mousemove', (event) => {
+    if (!game.drag) return;
+    const { lng: lon, lat } = event.lngLat;
+    game.drag.via = [lon, lat];
+    game.drag.preview = game.previewVia(
+      game.drag.line, game.drag.fromId, game.drag.toId, game.drag.via);
+    // What this drag would cost, live, so the bill is never a surprise. The
+    // spec asks for a cost preview that follows the cursor; this is it for the
+    // one gesture that can cost money without placing a stop.
+    game.drag.costDelta = game.dragCostDelta(
+      game.drag.line, game.drag.fromId, game.drag.toId, game.drag.preview);
+  });
+
+  const endDrag = (event) => {
+    const drag = game.drag;
+    if (!drag) return;
+    game.drag = null;
+    map.dragPan.enable();
+
+    // A press that never really moved is a click, not a drag — let it be.
+    if (!drag.preview) return;
+
+    const result = game.setVia(drag.line, drag.fromId, drag.toId, drag.via);
+    if (result.error) onFeedback?.(errorText(result.error), event?.point);
+    else if (result.cost > 0) {
+      onFeedback?.(`${STRINGS.build.trackBuilt} ${formatMoney(result.cost)}`, event?.point);
+    }
+  };
+  map.on('mouseup', endDrag);
+  // Releasing outside the canvas must not leave the map un-pannable.
+  map.getCanvas().addEventListener('mouseleave', () => { if (game.drag) endDrag(null); });
+}
+
+/**
+ * The line segment under a point, as the stop pair that defines it.
+ *
+ * Returns the stop ids rather than a segment index because a via is stored
+ * against the pair — see `Line.vias` for why an index would be the wrong key.
+ *
+ * @returns {{line:object, fromId:string, toId:string}|null}
+ */
+export function segmentAt(game, lon, lat, maxDistM) {
+  let best = null;
+  let bestDist = maxDistM;
+  for (const line of game.network.lines.values()) {
+    line.segments.forEach((segment, index) => {
+      // On a loop the final segment closes back to the first stop.
+      const fromId = line.stops[index];
+      const toId = line.stops[(index + 1) % line.stops.length];
+      if (!fromId || !toId || fromId === toId) return;
+      for (const [pLon, pLat] of segment.points) {
+        const distance = game.frame.distance(lon, lat, pLon, pLat);
+        if (distance < bestDist) { bestDist = distance; best = { line, fromId, toId }; }
+      }
+    });
+  }
+  return best;
 }
 
 /** Approximate ground metres for a screen-pixel radius at the current zoom. */
