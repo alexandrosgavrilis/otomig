@@ -18,6 +18,7 @@ node tools/probe-tiles.js          # provider survey
 node tools/probe-tile-region.js 6 versatiles
 node tools/probe-compare.js        # same-box comparison + the alignment control
 node tools/probe-idjoin.js         # the osm_id x 10 + type id scheme
+node tools/probe-railtest.js       # where to test Phase 4: live rail, few buildings
 node tools/probe-model-joined.js 4 # the demand grid, both sources
 ```
 

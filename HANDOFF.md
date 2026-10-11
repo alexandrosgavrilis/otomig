@@ -390,3 +390,24 @@ Track building with smooth splines, the full grade rule with tunnels and bridges
 3. **What is genuinely new:** the Build track tool (waypoint clicks, Enter/double-click to finish, Esc to cancel), track as a first-class object separate from lines, junctions where track meets track, stations snapped to track, shortest-path routing *on track* rather than on roads, and the height-profile strip.
 4. **The rail-and-roads rules are unimplemented and not trivial**: crossing angle ≥ 45°, no running within a road corridor for more than 40 m, level crossings at €0.3M, and motorway/trunk crossings forcing a 7 m bridge or 8 m tunnel into the profile. `BUILD` already carries every constant for these; none of the logic exists.
 5. **Watch out for:** the grade rule samples every 20 m (`BUILD.SAMPLE_M`) against a ~30 m height grid, which is why `heightAt` interpolates rather than snapping. Don't change that to nearest-cell or the smoothed profile will step.
+
+### Where to test it — not Athens
+
+**Alex's call, and the numbers back it.** Rail cannot cross buildings, so testing track building in a dense city means almost every alignment is blocked before the geometry is exercised at all. Surveyed with [tools/probe-railtest.js](tools/probe-railtest.js) over 5 km boxes:
+
+| site | usable rail ways | stations | buildings/km² |
+| --- | --- | --- | --- |
+| **Kiato** (22.748, 38.012) | 42 | 1 | **2** |
+| Aigio (22.085, 38.248) | 48 | 1 | 10 |
+| Diakopto (22.199, 38.196) | 30 | 1 | 13 |
+| Xylokastro (22.630, 38.078) | 59 | 0 | 16 |
+| Corinth (22.935, 37.940) | 49 | 1 | 224 |
+| *central Athens (control)* | 59 | 21 | **1,837** |
+
+**Use Kiato or Aigio for the geometry** — live standard-gauge Proastiakos track to connect to, a station, and effectively nothing in the way. **Use Corinth as the middle case**: a real town at 12% of Athens's building count, dense enough that the building rule genuinely bites without making every alignment impossible. Keep Athens as the stress test for the *import*, not for drawing track.
+
+Three traps, all measured rather than assumed:
+
+- **Most of the Peloponnese network is dead-tagged.** The system largely closed in 2011 and much of it is `railway=disused` or `abandoned`, which `isDeadRail` in [data/overpass.js](data/overpass.js) correctly rejects. "Near existing rail" on a map is not the same as rail the importer will keep — Zevgolatio (22.820, 37.970) looks railway-adjacent and returns **zero** usable rail ways. The north-coast Proastiakos line is the live one.
+- **`REGION.SIZE_KM_MIN` is 5, so a 1×1 km region is not currently possible.** The slider minimum would have to drop first. A 5 km rural box is already sparse enough to draw freely, so this is only worth changing if a tighter box is actually wanted for iteration speed. Note that `npm run test:live -- --km 1` would not silently lie about it: the HTML range input clamps to 5 and the test's `size set to N km` assertion fails, which is the right failure but a confusing message.
+- **Rural means almost no demand.** Kiato returns 45 buildings across 25 km², so residents and attraction will be close to nothing and no one will ride the line. That is fine for testing track geometry, the grade rule and crossings, and useless for testing whether a rail line earns money. Those need Corinth or Athens.
