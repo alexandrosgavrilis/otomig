@@ -209,19 +209,21 @@ export function buildStyle(region, frame) {
       },
     },
 
-    // Contours: faint every 20 m, a touch stronger every 100 m.
+    // Contours: faint every 20 m, a touch stronger every 100 m. Only above
+    // sea level — see `buildContours`. The filter repeats that rule for
+    // regions cached before it, which still carry a 0 m line.
     {
       id: 'contours-minor',
       type: 'line',
       source: 'contours',
-      filter: ['!', ['get', 'major']],
+      filter: ['all', ['!', ['get', 'major']], ['>', ['get', 'elevation'], REGION.SEA_LEVEL_M]],
       paint: { 'line-color': COLORS.contour, 'line-width': 0.7 },
     },
     {
       id: 'contours-major',
       type: 'line',
       source: 'contours',
-      filter: ['get', 'major'],
+      filter: ['all', ['get', 'major'], ['>', ['get', 'elevation'], REGION.SEA_LEVEL_M]],
       paint: { 'line-color': COLORS.contourMajor, 'line-width': 1.1 },
     },
 

@@ -13,6 +13,7 @@ import { createMap, setLayerVisible, setHeatMapData } from './render/basemap.js'
 import {
   Overlay, regionBoundaryPainter, linesPainter, interchangesPainter,
   stopsPainter, vehiclesPainter, draftPainter, tracksPainter, trackDraftPainter,
+  levelCrossingsPainter,
 } from './render/overlay.js';
 import { mountProfile } from './render/profile.js';
 import { Game } from './sim/game.js';
@@ -82,6 +83,7 @@ function startGame(region) {
       regionBoundaryPainter(region.meta.bbox),
       tracksPainter(game),
       linesPainter(game),
+      levelCrossingsPainter(game),
       interchangesPainter(game),
       stopsPainter(game),
       draftPainter(game),

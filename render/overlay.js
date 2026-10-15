@@ -173,8 +173,7 @@ export function linesPainter(game) {
 }
 
 /**
- * Built metro and train track, under the lines that run on it, with a marker
- * at every level crossing.
+ * Built metro and train track, under the lines that run on it.
  *
  * Every piece of track is drawn bare whether or not a line uses it: a line is
  * drawn on top and covers it, and where no line runs the player still sees
@@ -191,7 +190,17 @@ export function tracksPainter(game) {
       }
       drawBareTrack(ctx, points, track.kinds, track.mode, width);
     }
-    // Crossings last, so a later track never paints over an earlier marker.
+  };
+}
+
+/**
+ * A marker at every level crossing. Its own painter, pushed after the lines:
+ * drawn with the track, a line running on it covered the markers almost
+ * entirely, and the crossings are what a rail line costs the street.
+ */
+export function levelCrossingsPainter(game) {
+  return (ctx, overlay) => {
+    const zoomScale = Math.min(2, Math.max(0.6, overlay.map.getZoom() / 14));
     for (const track of game.network.tracks.values()) {
       for (const crossing of track.levelCrossings) {
         const [x, y] = overlay.project(crossing.lonLat[0], crossing.lonLat[1]);

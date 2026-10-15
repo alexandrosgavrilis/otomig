@@ -251,12 +251,71 @@ export function pointInRing(lon, lat, ring) {
   return inside;
 }
 
-/** Revive a region parsed from JSON: restore the typed array the shape expects. */
+/**
+ * Revive a region parsed from JSON: restore the typed array the shape expects,
+ * and settle where the open sea is.
+ *
+ * Settling the sea here rather than at import means regions already cached
+ * in IndexedDB are corrected on their next load, without re-importing.
+ */
 export function reviveRegion(region) {
   if (region.occupancy && !(region.occupancy.bits instanceof Uint8Array)) {
     region.occupancy.bits = new Uint8Array(region.occupancy.bits);
   }
+  if (region.terrain) settleSea(region.terrain);
   return region;
+}
+
+/**
+ * Mark open sea that the elevation data reports as exactly sea level.
+ *
+ * Where the tiles carry no bathymetry the sea is a flat plateau of 0 m, which
+ * on its own is indistinguishable from land at 0 m — and treating either as
+ * the other is a visible bug. Phase 1 met the land case (a flat valley floor
+ * painted as sea) and resolved it by calling exactly 0 m land. Kiato met the
+ * sea case: the Gulf of Corinth read as land.
+ *
+ * Connectivity tells them apart. Ground at or below sea level that is joined
+ * to the edge of the region, through ground also at or below sea level, is
+ * open sea and is lowered to `REGION.FLAT_SEA_DEPTH_M`. An enclosed plateau —
+ * a valley floor, a dry basin — touches no edge and stays land. Anything
+ * already below sea level is sea as before; this only adds to it.
+ *
+ * The one case it gets wrong is a flat plain at exactly 0 m that runs off the
+ * edge of the region, which is rare: a polder sits below sea level, not at it.
+ *
+ * Idempotent, so it is safe to run on every load.
+ *
+ * @param {Grid} terrain modified in place
+ * @returns {number} cells newly marked as sea
+ */
+export function settleSea(terrain) {
+  const { cols, rows, values } = terrain;
+  const level = REGION.SEA_LEVEL_M;
+  const seen = new Uint8Array(cols * rows);
+  const stack = [];
+  const visit = (index) => {
+    if (seen[index] || !(values[index] <= level)) return;
+    seen[index] = 1;
+    stack.push(index);
+  };
+  for (let col = 0; col < cols; col++) { visit(col); visit((rows - 1) * cols + col); }
+  for (let row = 0; row < rows; row++) { visit(row * cols); visit(row * cols + cols - 1); }
+
+  let marked = 0;
+  while (stack.length > 0) {
+    const index = stack.pop();
+    if (values[index] > REGION.FLAT_SEA_DEPTH_M) {
+      values[index] = REGION.FLAT_SEA_DEPTH_M;
+      marked++;
+    }
+    const col = index % cols;
+    if (col > 0) visit(index - 1);
+    if (col < cols - 1) visit(index + 1);
+    if (index >= cols) visit(index - cols);
+    if (index < (rows - 1) * cols) visit(index + cols);
+  }
+  return marked;
 }
 
 /** Make a region JSON-safe for saving or fixture export. */

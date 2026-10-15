@@ -107,6 +107,18 @@ export const REGION = {
 
   /** Sea is anything below this height. Terrarium includes bathymetry. [spec] */
   SEA_LEVEL_M: 0,
+  /**
+   * Depth given to open sea that the elevation tiles report as exactly 0 m.
+   *
+   * Terrarium does NOT always include bathymetry. Measured at Kiato, on the
+   * Gulf of Corinth: 10,327 of 27,889 cells — the whole gulf — are exactly
+   * 0.000 m, so the sea read as land and the grade rule would have run train
+   * track across it at grade. Ground at or below sea level that connects to
+   * the edge of the region is open sea; it is lowered to this so that the
+   * map, the grade rule and every other "is this sea?" test agree. Any depth
+   * below zero would do; it is never drawn or priced.
+   */
+  FLAT_SEA_DEPTH_M: -1,
 };
 
 /** Nominatim place search, region-selection screen only. [research] */

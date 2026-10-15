@@ -15,7 +15,7 @@ import { CLOCK, REGION, MODES, POPULATION } from '../config.js';
 import {
   LocalFrame, squareBbox, chunkBbox, makeGrid, cellIndex, cellCenter,
   heightAt, isOccupied, setOccupied, makeOccupancy, ringAreaM2, pointInRing,
-  reviveRegion,
+  reviveRegion, settleSea,
 } from '../model/region.js';
 import {
   parseResponses, buildGraph, classifyBuilding, fetchChunk, wayRing,
@@ -417,6 +417,42 @@ check('some contours are major', region.contours.features.some((f) => f.properti
   check('contours reproduce from the stored terrain',
     rebuilt.features.length === region.contours.features.length,
     `stored ${region.contours.features.length}, rebuilt ${rebuilt.features.length}`);
+}
+
+// ─── open sea at exactly 0 m ──────────────────────────────────────────────────
+
+{
+  // Kiato, on the Gulf of Corinth: the tiles report the whole gulf as exactly
+  // 0 m, with no bathymetry, and the sea was imported as land.
+  const grid = (rows) => ({
+    cols: rows[0].length, rows: rows.length, cellM: 30, values: rows.flat(),
+  });
+  const coast = grid([
+    [0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0],
+    [5, 3, 1, 0, 0],
+    [9, 7, 5, 2, 0],
+    [12, 9, 6, 4, 3],
+  ]);
+  const marked = settleSea(coast);
+  check('flat 0 m sea joined to the region edge becomes sea',
+    coast.values[0] < 0 && coast.values[8] < 0 && marked === 13, `${marked} marked`);
+  check('…and land beside it is untouched', coast.values[10] === 5 && coast.values[18] === 2);
+  check('settling the sea is idempotent', settleSea(coast) === 0);
+
+  const basin = grid([
+    [6, 6, 6, 6, 6],
+    [6, 0, 0, 0, 6],
+    [6, 0, 0, 0, 6],
+    [6, 6, 6, 6, 6],
+  ]);
+  settleSea(basin);
+  check('an enclosed 0 m plateau — a valley floor — stays land',
+    basin.values.every((h) => h >= 0));
+
+  const deep = grid([[3, -40, 3], [3, 3, 3]]);
+  settleSea(deep);
+  check('real bathymetry is left as it was', deep.values[1] === -40);
 }
 
 // ─── sea polygons ─────────────────────────────────────────────────────────────

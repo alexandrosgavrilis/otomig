@@ -108,6 +108,8 @@ try {
   // main.js sets window.otomig once MapLibre has fired 'load'.
   await page.waitForFunction(() => window.otomig?.map?.loaded?.(), null, { timeout: 30000 });
   check('the game screen mounts and MapLibre reports loaded', true);
+  check('no empty panel sits in the corner before anything is selected',
+    await page.evaluate(() => !document.querySelector('.panel')?.checkVisibility()));
 
   const info = await page.evaluate(() => {
     const { region, map, overlay } = window.otomig;

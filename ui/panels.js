@@ -91,6 +91,10 @@ export function mountPanels(root, game, { onChange }) {
     }
   }
 
+  // Start hidden. Until the first render the container had no `hidden`
+  // attribute, so an empty white box sat in the corner until something was
+  // selected.
+  render();
   return { render, showFinances, clear };
 }
 

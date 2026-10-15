@@ -22,7 +22,8 @@ The region comes out identical — same 51,700 buildings and 502,376 residents f
 | | |
 | --- | --- |
 | **Next** | **Phase 5 — full economy.** Loans, the fare slider, the finance panel, all four difficulties end to end, Hard's game over. Much of the plumbing already exists — see §11. |
-| **Untested live** | Phase 4 has only been run against the fixture. Rail is worth one real import before Phase 5: Kiato or Aigio for the geometry, Corinth for buildings (§10, "Where to test it live"). |
+| **Open question** | Clicking an existing stop with New line selects it, so a metro line cannot be *started* at a train station — only routed through one. Should a click on a stop of another mode start the new line there? (§10, "Tried on a real import") |
+| **Still to try live** | Rail has been tried on a real import at Kiato (§10). Corinth, the case where buildings bite, has not. `tools/import-region.js` snapshots a region once for offline testing. |
 | Shelved | Vector tiles for building geometry. Viable and fully costed ([RESEARCH_TILES.md](RESEARCH_TILES.md) §8), purely additive, worth it only if dense 15 km imports become the priority. |
 
 The reason Phase R was ordered before Phase 3 was that a data-layer rewrite would change the occupancy raster's provenance. It never happened, so the raster is exactly what it was.
@@ -80,8 +81,8 @@ Both would have reached Alex as a broken screen, and both were invisible to 272 
 ## 2. Testing
 
 ```bash
-npm test                            # 464 logic assertions, plain Node, no dependencies
-npm run test:browser                # 110 assertions in real Chromium via Playwright
+npm test                            # 469 logic assertions, plain Node, no dependencies
+npm run test:browser                # 111 assertions in real Chromium via Playwright
 npm run test:browser -- --headed    # ...and watch it
 npm run test:live                   # 24 assertions against a REAL import — hits live OSM services
 npm run test:live -- --km 5         # ...at a given size (default 5, the slider minimum)
@@ -104,7 +105,7 @@ All four would have met Alex as a broken screen:
 
 1. **The whole game layer rendered into a 300×150 box in the corner.** A `<canvas>` is a replaced element, so `position: absolute; inset: 0` does *not* stretch it — `width: auto` resolves to the intrinsic 300×150. Map, HUD, toolbar and panels all looked perfect; lines, stops and vehicles were invisible. Every assertion passed, because they asserted the *model* had a line, not that it could be seen. The suite now checks the overlay's CSS box against the viewport and samples it for the line's own colour.
 2. **The MapLibre style was invalid**, so `load` never fired and the map stayed blank. `line-cap` is a *layout* property, not paint; and a `zoom` expression may only be the direct input of a top-level `interpolate`, so wrapping one in `['*', …]` is rejected.
-3. **Land at exactly 0 m was painted as sea.** Marching squares puts a corner equal to the trace level on the low side, so flat zero-height ground read as water — a whole valley floor appeared as a blue tower. Now traced half a metre *below* sea level. Not a fixture quirk: reclaimed coast and polder are plateaux of exact zeros in real elevation data.
+3. **Land at exactly 0 m was painted as sea.** Marching squares puts a corner equal to the trace level on the low side, so flat zero-height ground read as water — a whole valley floor appeared as a blue tower. Now traced half a metre *below* sea level. **Superseded in part by Kiato (§10):** real elevation tiles without bathymetry report open sea as exactly 0 m too, which this rule turned into land. `settleSea` now tells the two apart by connectivity — 0 m ground joined to the region edge is sea, an enclosed 0 m plateau stays land — and the half-metre offset stays for the enclosed case.
 4. **`fetch` has no timeout**, so a dropped connection would hang an import forever behind a frozen progress bar. Overpass and terrain requests now abort and retry.
 
 ---
@@ -310,7 +311,7 @@ An escape hatch, not a default. [extract.bbbike.org](https://extract.bbbike.org)
 
 ## 6. What works
 
-Verified by `npm test` (464) and `npm run test:browser` (110). Phases 3 and 4 have their own sections, §9 and §10.
+Verified by `npm test` (469) and `npm run test:browser` (111). Phases 3 and 4 have their own sections, §9 and §10.
 
 **Phase 1.** `LocalFrame` and the bbox/chunk maths; terrain height grid with bilinear interpolation (exact on a ramp); 200 m demand grid; 10 m occupancy bitset; Overpass parsing with road-class filtering, abandoned-rail rejection, chunk-overlap de-duplication and shared-node collapsing; Terrarium decode and tile resampling; marching-squares contours and sea polygons; the base-map GeoJSON. In the browser: the new-game screen, search firing no request while typing, MapLibre rendering real pixels, layer toggles, zoom revealing minor roads, `maxBounds`, IndexedDB round-trips, the module worker booting.
 
@@ -416,7 +417,7 @@ Planning a track takes 1–6 ms (the road corridor index costs ~30 ms once, on f
 
 ### Decisions worth not relitigating
 
-1. **New metro track may join train track; new train track may join only train track.** The spec says "clicking existing track of the same type makes a junction". This reads that rule through compatibility: a junction is made wherever the new track's vehicles can carry on. Metro onto train track is useful (a metro line can continue onto it) and harmless; train onto metro track would lead nowhere a train may go.
+1. **New metro track may join train track; new train track may join only train track.** *Confirmed by Alex, Oct 15 2026: only metro crosses onto train track, never the other way round.* The spec says "clicking existing track of the same type makes a junction". This reads that rule through compatibility: a junction is made wherever the new track's vehicles can carry on. Metro onto train track is useful (a metro line can continue onto it) and harmless; train onto metro track would lead nowhere a train may go.
 2. **Free ends are pinned at their desired height**: a train terminus at grade, a metro terminus 15 m down. The alternative is a track that ends in mid-air or deep underground — the exact bug Phase 3 fixed for trams. The cost is that a short train track between two points too far apart in height is refused as too steep, and the player has to draw a longer way round. That is the spec's intent ("the only way to avoid them is to draw a better, usually longer, path"), and the profile strip shows why.
 3. **Water clearance is a hard floor for train track**, not a target. The spec puts "never lower than 8 m above any water surface" in the desired profile, but averaging the two envelopes then left a train about halfway up to it over a river. Over-water samples below the clearance are pinned to it. Metro is exempt, since it passes under water.
 4. **Motorway clearance tries the nearer side, then above, then below** before refusing. The spec says "whichever is nearer". A nearer side that cannot be reached within the grade would otherwise refuse a crossing that the other side could make.
@@ -447,6 +448,37 @@ Planning a track takes 1–6 ms (the road corridor index costs ~30 ms once, on f
 - **Existing OSM rail is not yet usable track**; that is Phase 6. The rail-and-roads rules also ignore it, so new track crossing OSM rail is not treated as a crossing.
 - **A track whose junction partner is bulldozed becomes a dead end there**, keeping its stored end height. Correct, but nothing tells the player.
 - **The fixture is a hard place to build rail**, and that is intended: of 1,753 straight probes across it, 63 are buildable. The rest are refused for buildings, for running along the 200 m street grid, or as too steep. The tests use alignments found by search, robust to ±10 m so that browser clicks reproduce them.
+
+### Tried on a real import: Kiato, Oct 15 2026
+
+5 km at (22.748, 38.012), through the real new-game screen and import worker. 110 s, two Overpass requests, no page errors. 6,026 road edges including the A8 motorway, 162 edges of live Proastiakos rail with Kiato station, terrain from sea level to 161 m — and only **45 buildings**, which is OSM, not the importer: the town is barely mapped.
+
+The region was saved once with [tools/import-region.js](tools/import-region.js) and everything after ran offline: the game logic in Node, and the real UI in Chromium with the saved region served in the fixture's place.
+
+**Found and fixed:**
+
+1. **The sea was land.** The tiles have no bathymetry for the Gulf of Corinth: 10,327 of 27,889 cells are exactly 0.000 m. Phase 1's rule that exactly 0 m is land (written for a synthetic valley floor) imported the whole gulf as land, and the grade rule would have run train track across it at grade. `settleSea` in [model/region.js](model/region.js) now lowers 0 m ground joined to the region edge to `REGION.FLAT_SEA_DEPTH_M`. It runs in `reviveRegion`, so regions already cached are corrected on their next load.
+2. **A staircase of rings along every flat coast** — the 0 m contour traced through centimetres of noise in that flat sea, drawn as a *major* contour because 0 is a multiple of 100. Contours now start above sea level, and the map filters out the 0 m line in regions cached before that.
+3. **An empty white panel at game start.** The panel was only ever hidden by its first render, which waited for a selection. Before today's `[hidden]` fix it was simply always on screen.
+4. **Level-crossing markers were drawn under the lines**, so on a line they were almost invisible. They are their own painter now, above the lines.
+
+**What rail does on real ground** — 600 random straight tracks, both modes:
+
+| | buildable | refused: shallow crossing | too steep | buildings |
+| --- | --- | --- | --- | --- |
+| train | 107 of 353 | 122 | 91 | 33 |
+| metro | 319 of 353 | 6 | 28 | — |
+
+- **Shallow crossings are the commonest refusal for train.** Real roads curve, and the angle is judged on the short OSM segment actually crossed, so a long straight line meets something at under 45° somewhere. That is the spec's rule working, but it makes train track noticeably harder to place in a real road network than on the fixture's grid. Worth watching in play.
+- **Grade-limited train track makes long viaducts.** A 1.5 km track climbing 33 m (2.46% average against 2.5%) has exactly one feasible profile, a straight ramp: a 20 m-high viaduct over the flat start, then a cutting and a short tunnel. It is what a real railway would need, and the profile strip shows it plainly.
+- **Metro surfaces into a shallow cutting on a hillside steeper than 4.5%.** The spec's averaging leaves it 6–7 m under the ground, and the spec calls under 8 m "at grade". Literal and correct, but it means an overground metro stretch — subject to buildings and roads — where a player would expect a tunnel.
+- **The A8 crossing works as designed**: dual carriageways are two crossings, spanned by one 120 m bridge with ramps; seven ordinary roads on the same track became level crossings.
+- **Station names fall back to "Station"** wherever no named street is within 200 m, which in rural Kiato is most places.
+
+**Not fixed — needs a decision or is out of scope:**
+
+- **A line cannot be started at an existing stop.** With New line and nothing being drawn, a click on any existing stop selects it — the spec's "clicking an object selects it". So a metro line can only *pass through* a train station's location, never start there, and the same is true of a second bus line from an existing bus stop. With interchanges this is the first thing a player tries. A gameplay change, so it is Alex's call.
+- **A discarded one-stop line leaves its stop behind**, paid for and unused. Pre-existing, all modes.
 
 ### Where to test it live
 

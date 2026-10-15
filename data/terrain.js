@@ -151,7 +151,12 @@ export function buildContours(terrain, frame) {
 
   const step = REGION.CONTOUR_INTERVAL_M;
   const features = [];
-  const first = Math.ceil(min / step) * step;
+  // Land only. The coast is already drawn, as the edge of the sea polygons,
+  // and a 0 m line traced through a flat sea — Kiato's gulf reads as a
+  // plateau of 0 m with centimetres of noise — came out as a staircase of
+  // rings along the shore, drawn as a major contour because 0 is a multiple
+  // of 100. Contours under water mean nothing on this map either.
+  const first = Math.max(Math.ceil(min / step) * step, REGION.SEA_LEVEL_M + step);
 
   for (let level = first; level <= max; level += step) {
     const segments = marchingSquares(values, cols, rows, level);

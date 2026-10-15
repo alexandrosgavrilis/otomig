@@ -159,6 +159,10 @@ export function mountNewGame(root, onReady) {
     pitchWithRotate: false,
   });
   map.touchZoomRotate.disableRotation();
+  // For the live tests, which place the square on exact coordinates rather
+  // than trusting a geocoder's first result. main.js does the same for the
+  // game map once it is loaded.
+  window.otomigNewGame = { map };
   map.addControl(new maplibregl.AttributionControl({ compact: false }));
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
 
