@@ -2,9 +2,10 @@
  * The left toolbar and the map interaction it drives.
  *
  * Modes and tools are a small state machine: a mode plus a tool decides what a
- * click on the map does. Clicking a game object always selects it instead of
- * building, as the spec requires — so a misplaced click opens a panel rather
- * than silently extending a line.
+ * click on the map does — including a click on an existing stop. Edit stops
+ * selects whatever it is clicked on; New line starts from (or continues
+ * through) the stop, so lines can share stops as real ones do; Extend line
+ * picks the stop's line; Bulldoze removes it.
  *
  * All four modes are enabled. **Build track** is the one tool that belongs to
  * only some of them: metro and train are built in two steps — track first,
@@ -161,18 +162,23 @@ export function wireMapInteraction(map, game, toolbar, { onFeedback, onSelect })
       return;
     }
 
-    // Clicking an existing object always selects it rather than building —
-    // except while drawing, where clicking a stop is how you route through it.
+    // What a click on an existing stop means is up to the tool. This used to
+    // be decided once, before any tool, as "select it" — which left Bulldoze
+    // unable to remove a stop, Extend line unable to pick its line, and New
+    // line unable to start at a stop that already existed. Selecting is Edit
+    // stops' job.
     const hitStop = game.network.stopNear(lon, lat, pixelsToMetres(map, 12));
-    if (hitStop && !game.draft) {
-      game.selection = hitStop;
-      onSelect?.(hitStop);
-      return;
-    }
 
     if (state.tool === 'newLine') {
-      if (!game.draft) game.startLine(state.mode);
-      const result = game.extendDraft(lon, lat);
+      // Starting on an existing stop of the same mode shares it, as real
+      // lines share stops: aim the first click at the stop itself so it snaps
+      // back to the same node and is reused. A stop of another mode cannot be
+      // shared, so the new line gets its own stop beside it, which forms an
+      // interchange.
+      const starting = !game.draft;
+      if (starting) game.startLine(state.mode);
+      const target = starting && hitStop?.mode === state.mode ? [hitStop.lon, hitStop.lat] : [lon, lat];
+      const result = game.extendDraft(target[0], target[1]);
       if (result.error) onFeedback?.(errorText(result.error), event.point);
     } else if (state.tool === 'extendLine') {
       if (!state.extendTarget) {
@@ -180,6 +186,9 @@ export function wireMapInteraction(map, game, toolbar, { onFeedback, onSelect })
         if (!line) { onFeedback?.(STRINGS.errors.pickALine, event.point); return; }
         state.extendTarget = line;
         game.draft = { line, cursor: null, valid: true };
+        // This click only picked the line. Carrying on would try to add the
+        // picked stop to its own line and refuse with "already on this line".
+        return;
       }
       const result = game.extendDraft(lon, lat);
       if (result.error) onFeedback?.(errorText(result.error), event.point);

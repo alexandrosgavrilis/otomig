@@ -22,7 +22,7 @@ The region comes out identical — same 51,700 buildings and 502,376 residents f
 | | |
 | --- | --- |
 | **Next** | **Phase 5 — full economy.** Loans, the fare slider, the finance panel, all four difficulties end to end, Hard's game over. Much of the plumbing already exists — see §11. |
-| **Open question** | Clicking an existing stop with New line selects it, so a metro line cannot be *started* at a train station — only routed through one. Should a click on a stop of another mode start the new line there? (§10, "Tried on a real import") |
+| **Decide** | Two open questions from §12: whether to fix sparse-building regions (OSM place totals, and optionally Overture's ML footprints), and whether a change of line at the *same* stop should carry the 5-minute transfer penalty. |
 | **Still to try live** | Rail has been tried on a real import at Kiato (§10). Corinth, the case where buildings bite, has not. `tools/import-region.js` snapshots a region once for offline testing. |
 | Shelved | Vector tiles for building geometry. Viable and fully costed ([RESEARCH_TILES.md](RESEARCH_TILES.md) §8), purely additive, worth it only if dense 15 km imports become the priority. |
 
@@ -81,8 +81,8 @@ Both would have reached Alex as a broken screen, and both were invisible to 272 
 ## 2. Testing
 
 ```bash
-npm test                            # 469 logic assertions, plain Node, no dependencies
-npm run test:browser                # 111 assertions in real Chromium via Playwright
+npm test                            # 473 logic assertions, plain Node, no dependencies
+npm run test:browser                # 114 assertions in real Chromium via Playwright
 npm run test:browser -- --headed    # ...and watch it
 npm run test:live                   # 24 assertions against a REAL import — hits live OSM services
 npm run test:live -- --km 5         # ...at a given size (default 5, the slider minimum)
@@ -147,7 +147,7 @@ The scale is fixed at import and never changes mid-game — a dot that silently 
 11. **MapLibre's keyboard handling is disabled**, so 1–4, Space and Esc belong to the game.
 12. **Passengers are not saved.** Transient, would multiply save size, and a reloaded network refills within seconds. Structure, money and satisfaction history survive. A save is under 20 kB and a test enforces it.
 13. **Line segments are re-routed on load, not stored** — derived from stops plus the road graph, so storing them would be larger and a chance to go stale.
-14. **The transfer penalty sits on the walking edge, not on boarding**, so a passenger's first boarding is never penalised — only an actual change of vehicle.
+14. **The transfer penalty sits on the walking edge, not on boarding**, so a passenger's first boarding is never penalised. *Correction, Oct 15 2026:* this also means a change of line at the **same** stop is not penalised — only a change that walks between stops. See §12.4.
 15. **A finished line is given one vehicle automatically** if affordable. A line with no vehicles carries nobody, and a player who draws one and sees nothing happen has no way to tell what is wrong.
 16. **Lifetime counters** (`game.totals`) alongside instantaneous state. On a sparse network the instant you look is usually between passengers.
 17. **Vehicles are spaced evenly in time, not distance.** Hops differ in length, so distance spacing still bunches vehicles where stops are close.
@@ -311,7 +311,7 @@ An escape hatch, not a default. [extract.bbbike.org](https://extract.bbbike.org)
 
 ## 6. What works
 
-Verified by `npm test` (469) and `npm run test:browser` (111). Phases 3 and 4 have their own sections, §9 and §10.
+Verified by `npm test` (473) and `npm run test:browser` (114). Phases 3 and 4 have their own sections, §9 and §10.
 
 **Phase 1.** `LocalFrame` and the bbox/chunk maths; terrain height grid with bilinear interpolation (exact on a ramp); 200 m demand grid; 10 m occupancy bitset; Overpass parsing with road-class filtering, abandoned-rail rejection, chunk-overlap de-duplication and shared-node collapsing; Terrarium decode and tile resampling; marching-squares contours and sea polygons; the base-map GeoJSON. In the browser: the new-game screen, search firing no request while typing, MapLibre rendering real pixels, layer toggles, zoom revealing minor roads, `maxBounds`, IndexedDB round-trips, the module worker booting.
 
@@ -477,7 +477,7 @@ The region was saved once with [tools/import-region.js](tools/import-region.js) 
 
 **Not fixed — needs a decision or is out of scope:**
 
-- **A line cannot be started at an existing stop.** With New line and nothing being drawn, a click on any existing stop selects it — the spec's "clicking an object selects it". So a metro line can only *pass through* a train station's location, never start there, and the same is true of a second bus line from an existing bus stop. With interchanges this is the first thing a player tries. A gameplay change, so it is Alex's call.
+- ~~**A line cannot be started at an existing stop.**~~ Fixed the same day, on Alex's instruction — see §12.4.
 - **A discarded one-stop line leaves its stop behind**, paid for and unused. Pre-existing, all modes.
 
 ### Where to test it live
@@ -522,3 +522,69 @@ Seasonal profiles, coverage subsidies, loans, all four difficulty levels, Hard's
 6. **The finance panel** exists with monthly income and expenses by category, but no loans view.
 
 **Watch out for:** maintenance now includes metro and train track, which dwarfs everything else once rail is built. A 2.7 km tunnelled train track costs €4.2M a year to keep before a single train runs. Hard's balance will feel that, which is probably right, but check it against the "a bus line or two on a small island" criterion before retuning anything else.
+
+---
+
+## 12. Four questions after Kiato — Oct 15 2026
+
+Alex's questions after the Kiato trial, answered with measurements. Two need his decision (marked **Decide**).
+
+### 1. Why Kiato has 45 buildings when rural Lefkada has thousands
+
+**It is OSM, not the importer.** Asked directly, Overpass has exactly 45 `way["building"]` and no building relations in Kiato's 5 km box, and the import got all 45. Lefkada town's box has 4,856, on a street network of the same size (423 residential roads against Kiato's 446).
+
+**Lefkada's buildings were imported, not hand-mapped.** 3,096 of Lefkada town's 3,974 buildings (78%) were created by one account, *Cascafico*, in 2022, and 96% are still at version 1. That account's changesets over Lefkada include three of 10,000, 10,000 and 629 changes on 26 May 2022, and one of 4,793 on 14 June 2022, all commented **"buildings supervised import"** with source **Microsoft GlobalMLBuildingFootprints** and Maxar imagery. The OSM wiki's import page for that dataset names Lefkada and Preveza as its quality-test areas, and records no wider Greek import. So Lefkada is the exception, and **most of Greece outside the cities is probably like Kiato**: roads well mapped, buildings barely.
+
+This matters because buildings are the whole population model. Residents are floor area ÷ 40 m², so a region without buildings has no residents and no demand.
+
+### 2. What we can do about it — **Decide**
+
+The spec says "No fallback for areas with poor building coverage: OSM is good enough." Kiato shows that is not true for much of Greece. Measured with [tools/probe-overture-buildings.js](tools/probe-overture-buildings.js):
+
+| | buildings in the 5 km box | residents by our model | real population |
+| --- | --- | --- | --- |
+| Kiato, OSM | 45 | 1,336 | ~11,100 (OSM `place` tags: Kiato 9,907, Kato Dimini 1,198) |
+| Kiato, OSM + Overture's Microsoft footprints | 6,926 | **~53,900** | same |
+| Lefkada, OSM | 4,838 | **~36,000** | 8,673 (OSM `place` tag) |
+
+**Overture Maps fills the gap.** Its buildings theme merges OSM with Microsoft's and Google's ML footprints (OSM wins where both exist). It is published as one PMTiles archive on public S3 that answers range requests with `Access-Control-Allow-Origin: *`. A browser can therefore read just the tiles over a region with no key and no server: 13 tiles, 54 requests, about 2 MB for Kiato. It is ODbL, the same as OSM, and needs "Overture Maps Foundation" in the attribution line. The release path changes; the latest is named in `https://stac.overturemaps.org/catalog.json`.
+
+**But footprints alone overshoot about 4×, and so does a fully mapped Lefkada.** ML footprints carry no category, levels or height, so every one counts as a 2-level home. That includes farm sheds and greenhouses: 23% are under 40 m², and the median is 113 m². And the 40 m² × 2 levels calibration was made on central Athens apartment blocks. In a Greek town, holiday homes, storage and farm buildings are counted as homes too. **Getting *where* people live right does not get *how many* right. That needs a total.**
+
+The options, cheapest first:
+
+| | what | effort | changes the spec? |
+| --- | --- | --- | --- |
+| **A** | Read OSM `place` nodes' `population` in the main query (no extra request), and scale residents to the sum of the places inside the box. The scaling mechanism already exists for Nominatim's figure. | small | no — the spec already allows a population total |
+| **B** | Warn on the new-game screen when buildings are sparse for the road network. Kiato has 0.1 buildings per residential road; Lefkada has 11. | small | no |
+| **C** | Where OSM has no buildings, take Overture's ML footprints as unclassified homes (default levels, residential). They give *where*; A gives *how many*. Categories and attraction still come from OSM. | a session: PMTiles reader, MVT decode (both already prototyped), clipped-polygon handling | yes — it adds a fallback the spec rules out, and a second data source |
+| **D** | The spec's "typed by the player" population field, never built. | small | no |
+
+**Recommendation: A and B now, C as its own task if Alex wants it.** A alone fixes the *count* everywhere, including Lefkada's 4× overshoot. With C as well, the *distribution* is right in unmapped places too. Without C, Kiato's 11,000 people would all live in its 45 mapped buildings. C also brings back the tile machinery Phase R decided against for buildings. The objection then was that tiles lack building categories, which does not apply to a gap-filler, but the clipped-at-tile-edge geometry objection still does.
+
+### 3. What "motorway crossing" means, exactly
+
+**There is never contact with the motorway.** Precisely, as built:
+
+- **Which roads:** `motorway`, `motorway_link`, `trunk`, `trunk_link` (`BUILD.GRADE_SEPARATED_ROADS`). A dual carriageway is two OSM ways, so two crossings.
+- **When it applies:** wherever the track's centreline crosses the road's centreline, **unless OSM tags that stretch of road `bridge` or `tunnel`**. Then the road is already in the air or underground there, and the track passes under or over it at whatever height the grade rule chooses, with no check. This is the real-world "the motorway goes over the railway" case, and it is common: where an existing motorway meets an existing railway, OSM almost always has the motorway on a bridge.
+- **What happens otherwise:** the motorway is treated as being on the ground (OSM carries no road heights, so its height is the terrain's at the crossing point). The two track samples either side of it are pinned **at least 7 m above** it, an overbridge, or **at least 8 m below**, an underpass, whichever is nearer the profile the track would have had. The smoothing then builds the ramps. Those samples are forced to `bridge` or `tunnel` and priced at that rate. The road is never modified, and there is never a level crossing with a motorway.
+- **So an "underpass" is the railway dropping into a short cut-and-cover tunnel under a road that stays where it is.** In real life the cheaper and more common build is the reverse: the railway stays level and the road is lifted onto a bridge over it. We cannot model that, because we never touch roads. The effect is cost: an underpass is priced as track tunnel (€120M/km for train), so a 60 m one is about €7M plus its ramps — in the plausible range for a road-over-rail bridge, by luck more than design.
+- **Known approximations.** A motorway on an untagged embankment or cutting is a few metres off, because its height is taken from the terrain. The clearance is enforced at the samples either side of the centreline, not across the full 24 m corridor; at 2.5% the track moves 0.3 m over 12 m, which doesn't matter.
+- **Trams are exempt from all of this**, including motorways: the spec lets off-road tram segments cross roads at grade "as real trams do", and the code never checks a dragged tram against roads at all. A tram can be dragged across a motorway at grade. Probably not what the spec meant — worth a line from Alex.
+
+### 4. Shared stops — done, with one question — **Decide**
+
+**One stop serving several lines already worked in the model and in routing**; only the gesture was missing. A stop holds a list of lines. Clicking an existing stop while drawing reuses it. Passenger routing is built on (stop, line, direction) platforms joined through each stop, so a shared stop is a junction: a passenger alights from one line and boards another there, with no walk. `tests/phase2.js` now asserts all of it: a second line started at an existing stop shares it, the stop lists both lines, no second stop is built on the spot, and a route between the two lines' far ends changes at that stop.
+
+**What was broken was the click.** "A click on a stop selects it" ran before every tool, so:
+
+- **New line could not start at an existing stop.** It now does. A stop of the same mode is shared. A stop of another mode can't be shared (a stop has one mode), so the new line gets its own stop beside it, which forms an interchange.
+- **Bulldoze could not remove a stop by clicking it.** It selected it instead. A Phase 2 bug, never caught because no test clicked it.
+- **Extend line could never start.** It picks its line by a click on a stop, which was always swallowed as a selection. Once reachable, it had a second bug: the picking click also tried to add the picked stop to its own line.
+
+Selecting is now Edit stops' job alone. That departs from the spec's "clicking any game object selects it", on Alex's instruction that lines share stops. The browser suite drives all four tools through real clicks.
+
+**Decide — the transfer penalty at a shared stop.** Changing lines *at the same stop* costs a passenger the expected wait (half the headway) and nothing more. Changing between two *nearby* stops costs the walk **plus the spec's 5-minute transfer penalty**. HANDOFF decision 14 says "only an actual change of vehicle is penalised", but a same-stop change of vehicle isn't. Either is defensible: a cross-platform change really is easier than a walk. But it is a gameplay choice. It decides whether players funnel lines through shared stops, and the code and its documentation disagree. Options: keep it and correct decision 14's wording, or add the penalty to every change of line.
+
+**Not done:** one stop shared by two *modes* (a bus and a tram at one platform, or metro and train at one station). A stop has exactly one mode, which sets its price, size, drawing and catchment; sharing across modes is a model change. Cross-mode transfers go through an interchange, with the walk and the penalty.

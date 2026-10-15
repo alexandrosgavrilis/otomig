@@ -411,11 +411,55 @@ try {
 
   await page.screenshot({ path: join(SHOTS, '5-line-built.png') });
 
-  // Selecting a stop opens its panel.
+  // Selecting a stop opens its panel — with Edit stops, whose job selecting is.
+  await page.click('#tb-tools button[data-tool="editStops"]');
   await clickAt(2600, 2800);
   const panelOpen = await page.evaluate(() =>
     !document.querySelector('.panel')?.hidden);
   check('clicking a stop opens its panel', panelOpen === true);
+
+  // New line started ON an existing stop shares it: one stop, two lines.
+  await page.click('#tb-tools button[data-tool="newLine"]');
+  await clickAt(2600, 2800);
+  await clickAt(2600, 3800);
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(150);
+  const shared = await page.evaluate(() => {
+    const game = window.otomig.game;
+    const [first, second] = [...game.network.lines.values()];
+    const stop = second && game.network.stops.get(second.stops[0]);
+    return second ? { sharedStop: first.stops.includes(second.stops[0]),
+      lines: stop.lines.length, secondId: second.id, tail: second.stops[1] } : null;
+  });
+  check('New line started on an existing stop shares that stop',
+    shared?.sharedStop === true && shared.lines === 2, JSON.stringify(shared));
+
+  // Extend line: click a stop to pick its line, then click to add a stop.
+  await page.click('#tb-tools button[data-tool="extendLine"]');
+  await clickAt(2600, 3800);
+  await clickAt(2600, 4600);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(100);
+  const extended = await page.evaluate((id) =>
+    window.otomig.game.network.lines.get(id)?.stops.length, shared?.secondId);
+  check('Extend line picks a line by its stop and extends it', extended === 3, `${extended} stops`);
+
+  // Bulldoze a stop by clicking it, then tidy away the test line so the rest
+  // of the suite sees the board it expects.
+  await page.click('#tb-tools button[data-tool="bulldoze"]');
+  await clickAt(2600, 4600);
+  const bulldozed = await page.evaluate((id) => {
+    const game = window.otomig.game;
+    const line = game.network.lines.get(id);
+    const gone = line.stops.length === 2;
+    const tail = line.stops.slice(1).map((s) => game.network.stops.get(s));
+    game.bulldoze(line);
+    for (const stop of tail) if (stop && stop.lines.length === 0) game.bulldoze(stop);
+    game.selection = null;
+    return gone;
+  }, shared?.secondId);
+  check('Bulldoze removes a stop that is clicked', bulldozed === true);
+  await page.click('#tb-tools button[data-tool="newLine"]');
   await page.keyboard.press('Escape');
 
   // Run the simulation at 4x and watch the numbers move.

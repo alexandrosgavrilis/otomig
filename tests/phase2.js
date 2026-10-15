@@ -64,6 +64,38 @@ function at(game, x, y) {
 }
 
 export function runPhase2Tests(check, near) {
+  // ─── One stop, two lines: a shared stop is a junction ─────────────────────
+  // As in real life, several lines can call at the very same stop, and a
+  // passenger changes between them there without walking anywhere.
+  {
+    const game = newGame('creative');
+    const east = buildLine(game, [
+      at(game, 1600, 2800), at(game, 2600, 2800), at(game, 3400, 2800),
+    ]);
+    const shared = east.stops[1];
+    // The second line starts AT the first line's middle stop.
+    const north = buildLine(game, [
+      at(game, 2600, 2800), at(game, 2600, 3800), at(game, 2600, 4600),
+    ]);
+    for (let i = 0; i < 3; i++) { game.addVehicle(east); game.addVehicle(north); }
+    game.invalidate();
+    game.router.refreshIfNeeded();
+
+    check('a second line can start at an existing stop, sharing it',
+      north.stops[0] === shared, `${north.stops[0]} vs ${shared}`);
+    const stop = game.network.stops.get(shared);
+    check('…and that one stop lists both lines',
+      stop.lines.includes(east.id) && stop.lines.includes(north.id));
+    check('…without a second stop being built on the same spot',
+      [...game.network.stops.values()].filter((s) => s.node === stop.node).length === 1);
+
+    const route = game.router.route(east.stops[0], north.stops.at(-1));
+    check('passengers route through a shared stop, changing lines there',
+      route?.legs.length === 2 && route.legs[0].toStop === shared
+      && route.legs[1].fromStop === shared && route.legs[0].lineId !== route.legs[1].lineId,
+      JSON.stringify(route?.legs));
+  }
+
   // ─── Clock ──────────────────────────────────────────────────────────────
   {
     const clock = new Clock();
