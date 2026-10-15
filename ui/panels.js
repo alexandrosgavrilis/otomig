@@ -19,6 +19,11 @@ export function mountPanels(root, game, { onChange }) {
 
   /** 'finances' when nothing is selected and the player asked for finances. */
   let view = null;
+  /**
+   * Why the last delete on the selected object was refused. The panel is
+   * redrawn every tick, so the reason has to live here rather than in the DOM.
+   */
+  let refusal = null;
 
   function showFinances() { view = 'finances'; game.selection = null; render(); }
   function clear() { view = null; game.selection = null; render(); }
@@ -31,6 +36,10 @@ export function mountPanels(root, game, { onChange }) {
 
     if (view === 'finances') container.innerHTML = financesHtml(game);
     else if (isLine(selection)) container.innerHTML = lineHtml(game, selection);
+    else if (isTrack(selection)) {
+      container.innerHTML = trackHtml(game, selection,
+        refusal?.target === selection ? refusal.text : '');
+    }
     else container.innerHTML = stopHtml(game, selection);
 
     wire();
@@ -40,7 +49,17 @@ export function mountPanels(root, game, { onChange }) {
     container.querySelector('[data-act="close"]')?.addEventListener('click', clear);
 
     const selection = game.selection;
-    if (isLine(selection)) {
+    if (isTrack(selection)) {
+      container.querySelector('[data-act="delete"]')?.addEventListener('click', () => {
+        const result = game.bulldoze(selection);
+        if (result?.error) {
+          refusal = { target: selection, text: STRINGS.errors[result.error] || result.error };
+          render();
+          return;
+        }
+        clear(); onChange?.();
+      });
+    } else if (isLine(selection)) {
       container.querySelector('[data-act="add-vehicle"]')?.addEventListener('click', () => {
         game.addVehicle(selection);
         render(); onChange?.();
@@ -76,6 +95,40 @@ export function mountPanels(root, game, { onChange }) {
 }
 
 const isLine = (object) => Boolean(object && object.segments !== undefined);
+const isTrack = (object) => Boolean(object && object.control !== undefined);
+
+/** Built metro or train track: what it is made of and what it costs to keep. */
+function trackHtml(game, track, refusal) {
+  const step = track.lengthM / Math.max(1, track.kinds.length - 1);
+  const metres = (kind) => track.kinds.filter((k) => k === kind).length * step;
+  const junctions = [track.start, track.end].filter(Boolean).length;
+  const discount = game.region.meta.hasOsmRail ? 1 - COSTS.OSM_RAIL_DISCOUNT : 1;
+
+  return `
+    <header>
+      <h3>${STRINGS.toolbar[track.mode]} ${STRINGS.panel.track}</h3>
+      <button type="button" data-act="close" class="icon">×</button>
+    </header>
+
+    <div class="rows">
+      <div class="row"><span>${STRINGS.panel.length}</span>
+        <span>${(track.lengthM / 1000).toFixed(2)} km</span></div>
+      ${['atGrade', 'tunnel', 'bridge'].map((kind) => metres(kind) > 0 ? `
+        <div class="row"><span>${STRINGS.panel[kind]}</span>
+          <span>${Math.round(metres(kind))} m</span></div>` : '').join('')}
+      <div class="row"><span>${STRINGS.panel.levelCrossings}</span>
+        <span>${track.levelCrossings.length}</span></div>
+      <div class="row"><span>${STRINGS.panel.junctions}</span><span>${junctions}</span></div>
+      <div class="row"><span>${STRINGS.panel.trackCost}</span>
+        <span>${formatMoney(track.cost)}</span></div>
+      <div class="row"><span>${STRINGS.panel.maintenance}</span>
+        <span>${formatMoney(track.cost * COSTS.MAINTENANCE_RATE * discount)}</span></div>
+    </div>
+
+    ${refusal ? `<span class="muted">${escapeHtml(refusal)}</span>` : ''}
+    <button type="button" data-act="delete" class="danger">${STRINGS.panel.deleteTrack}</button>
+  `;
+}
 
 function lineHtml(game, line) {
   const capacity = MODES[line.mode].capacity;
@@ -138,7 +191,8 @@ function stopHtml(game, stop) {
 
   return `
     <header>
-      <h3>${STRINGS.panel.stop}</h3>
+      <h3>${stop.mode === 'metro' || stop.mode === 'train'
+        ? `${STRINGS.toolbar[stop.mode]} ${STRINGS.panel.station}` : STRINGS.panel.stop}</h3>
       <button type="button" data-act="close" class="icon">×</button>
     </header>
 
@@ -153,6 +207,9 @@ function stopHtml(game, stop) {
         <span>${Math.round(totals.residents).toLocaleString()}</span></div>
       <div class="row"><span>${STRINGS.panel.interchange}</span>
         <span>${stop.interchange ? STRINGS.panel.yes : STRINGS.panel.no}</span></div>
+      ${stop.mode === 'metro' || stop.mode === 'train' ? `
+        <div class="row"><span>${STRINGS.panel.structure}</span>
+          <span>${STRINGS.panel.structureNames[stop.structure] || stop.structure}</span></div>` : ''}
     </div>
 
     <div class="lines-served">

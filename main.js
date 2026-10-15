@@ -12,8 +12,9 @@ import { regionKey as makeRegionKey } from './data/cache.js';
 import { createMap, setLayerVisible, setHeatMapData } from './render/basemap.js';
 import {
   Overlay, regionBoundaryPainter, linesPainter, interchangesPainter,
-  stopsPainter, vehiclesPainter, draftPainter,
+  stopsPainter, vehiclesPainter, draftPainter, tracksPainter, trackDraftPainter,
 } from './render/overlay.js';
+import { mountProfile } from './render/profile.js';
 import { Game } from './sim/game.js';
 import { autosave, saveGame, loadGame, exportSaveFile, importSaveFile } from './model/save.js';
 import { mountNewGame } from './ui/new-game.js';
@@ -38,6 +39,7 @@ function startGame(region) {
       <div id="hud"></div>
       <div id="toolbar"></div>
       <div id="panels"></div>
+      <div id="profile"></div>
       <div class="saves" id="saves">
         <button type="button" id="s-finances">${STRINGS.toolbar.finances}</button>
         <button type="button" id="s-save">${STRINGS.saves.save}</button>
@@ -55,6 +57,9 @@ function startGame(region) {
   const panels = mountPanels(document.getElementById('panels'), game, {
     onChange: () => hud.update(),
   });
+
+  const profile = mountProfile(document.getElementById('profile'), game);
+  game.onTick(() => profile.update());
 
   const toolbar = mountToolbar(document.getElementById('toolbar'), game, {
     onChange: () => { game.selection = null; panels.render(); },
@@ -75,10 +80,12 @@ function startGame(region) {
     const overlay = new Overlay(document.getElementById('overlay'), map);
     overlay.painters.push(
       regionBoundaryPainter(region.meta.bbox),
+      tracksPainter(game),
       linesPainter(game),
       interchangesPainter(game),
       stopsPainter(game),
       draftPainter(game),
+      trackDraftPainter(game),
       vehiclesPainter(game),
     );
     overlay.draw();
@@ -92,7 +99,7 @@ function startGame(region) {
   });
 
   wireSaveButtons(game, regionKey, panels, hud);
-  wireKeyboard(game, toolbar, panels, hud);
+  wireKeyboard(game, toolbar, panels, hud, (message) => showFeedback(message));
 
   // Keep the heat map honest as coverage changes.
   let lastHeatVersion = -1;
@@ -110,9 +117,15 @@ function startGame(region) {
     autosave(game, regionKey);
   });
 
+  // The panel follows the selection every tick while there is one — and once
+  // more when it goes away, however it went: bulldozed from the map, Esc, or
+  // deleted from its own panel. Without that last render a bulldozed stop
+  // stayed on screen in a panel of its own.
+  let shownSelection = null;
   game.onTick(() => {
     hud.update();
-    if (game.selection) panels.render();
+    if (game.selection || shownSelection) panels.render();
+    shownSelection = game.selection;
     if (game.economy.gameOver) showGameOver(game);
   });
 
@@ -127,8 +140,13 @@ function startGame(region) {
   requestAnimationFrame(frame);
 }
 
-/** 1–4 pick modes, Space pauses, Esc cancels, Delete removes the selection. */
-function wireKeyboard(game, toolbar, panels, hud) {
+/**
+ * 1–4 pick modes, Space pauses, Esc cancels, Delete removes the selection,
+ * Enter finishes. While track is being drawn, Backspace takes back the last
+ * waypoint instead — the only way to reroute around something blocking it
+ * without starting again.
+ */
+function wireKeyboard(game, toolbar, panels, hud, feedback) {
   window.addEventListener('keydown', (event) => {
     if (event.target instanceof HTMLInputElement) return;
 
@@ -143,9 +161,18 @@ function wireKeyboard(game, toolbar, panels, hud) {
       game.selection = null;
       panels.render();
     } else if (event.key === 'Delete' || event.key === 'Backspace') {
-      if (game.selection) { game.bulldoze(game.selection); panels.render(); hud.update(); }
+      if (game.trackDraft) { game.removeTrackPoint(); return; }
+      if (game.selection) {
+        const result = game.bulldoze(game.selection);
+        if (result?.error) feedback(STRINGS.errors[result.error] || result.error);
+        panels.render(); hud.update();
+      }
     } else if (event.key === 'Enter') {
-      if (game.draft) game.finishDraft();
+      if (game.trackDraft) {
+        const result = game.finishTrack();
+        if (result.error) feedback(STRINGS.errors[result.error] || result.error);
+        hud.update();
+      } else if (game.draft) game.finishDraft();
     }
   });
 }

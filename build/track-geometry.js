@@ -17,7 +17,8 @@
  */
 
 import { BUILD, COSTS, REGION } from '../config.js';
-import { heightAt, isSea, isOccupied } from '../model/region.js';
+import { heightAt, isSea, isOccupied, pointInRing, LocalFrame } from '../model/region.js';
+import { judgeRoadRules } from './rail-roads.js';
 
 /**
  * Centripetal Catmull-Rom through the control points, resampled to an even
@@ -131,7 +132,8 @@ export function resample(points, spacing) {
  */
 export function desiredProfile(samples, region, mode) {
   const terrain = samples.map(([x, y]) => heightAt(region.terrain, x, y));
-  const overWater = samples.map(([x, y]) => isSea(region.terrain, x, y));
+  const overWater = samples.map(([x, y]) =>
+    isSea(region.terrain, x, y) || overInlandWater(region, x, y));
   const desired = terrain.map((ground, i) => {
     if (mode === 'metro') return ground - BUILD.METRO_DEPTH_M;
     if (!overWater[i]) return ground;
@@ -141,6 +143,37 @@ export function desiredProfile(samples, region, mode) {
     return Math.max(ground, surface + BUILD.WATER_CLEARANCE_M);
   });
   return { desired, terrain, overWater };
+}
+
+/** Lakes and rivers per region, in local metres with a bounding box each. */
+const inlandWater = new WeakMap();
+
+/**
+ * Is this point on a lake or a river?
+ *
+ * The sea comes from the height grid, but lakes and rivers do not: the
+ * elevation data has them as dry ground at the water's level, so a track
+ * across a river would otherwise run straight through it at grade. The OSM
+ * water polygons are what know where they are.
+ */
+export function overInlandWater(region, x, y) {
+  let rings = inlandWater.get(region);
+  if (!rings) {
+    const frame = new LocalFrame(region.meta.bbox);
+    rings = (region.water || []).map((ring) => {
+      const local = ring.map(([lon, lat]) => frame.toLocal(lon, lat));
+      const xs = local.map((p) => p[0]);
+      const ys = local.map((p) => p[1]);
+      return { local, minX: Math.min(...xs), maxX: Math.max(...xs),
+        minY: Math.min(...ys), maxY: Math.max(...ys) };
+    });
+    inlandWater.set(region, rings);
+  }
+  for (const ring of rings) {
+    if (x < ring.minX || x > ring.maxX || y < ring.minY || y > ring.maxY) continue;
+    if (pointInRing(x, y, ring.local)) return true;
+  }
+  return false;
 }
 
 /**
@@ -172,24 +205,46 @@ export function desiredProfile(samples, region, mode) {
  * length of the segment, no profile exists and this returns `null` — the
  * segment is genuinely too steep to build.
  *
+ * **Pins anywhere.** Phase 4 needs more than the ends: a motorway crossing
+ * pins the track a clearance above or below the road, mid-segment. The same
+ * cone argument covers it. Clamp every sample into the cone of every pin,
+ * `|h[i] − pin.height| ≤ g·|i − pin.index|`; then at a pinned sample the
+ * lower envelope cannot go below the pin (every sample is within reach of
+ * it) nor the upper above it, so both envelopes — and their average — pass
+ * through it exactly. A set of pins is feasible exactly when each pair of
+ * neighbouring pins is within reach of the other.
+ *
  * @param {number[]} desired
  * @param {number} stepM distance between samples
  * @param {number} maxGrade as a fraction, e.g. 0.07
- * @param {{start:number, end:number}} [pin] heights the ends must meet
- * @returns {number[]|null} null when `pin` cannot be satisfied
+ * @param {{start:number, end:number}|Array<{index:number, height:number}>} [pin]
+ *   heights the ends must meet, or any set of samples pinned to a height
+ * @returns {number[]|null} null when the pins cannot be satisfied
  */
 export function smoothProfile(desired, stepM, maxGrade, pin = null) {
   const n = desired.length;
   if (n === 0) return [];
   const g = maxGrade * stepM;
 
-  if (pin) {
-    if (n === 1) return [pin.start];
-    // Unreachable: the ends differ by more than the grade can climb.
-    if (Math.abs(pin.end - pin.start) > g * (n - 1) + 1e-9) return null;
+  if (pin && !Array.isArray(pin) && n === 1) return [pin.start];
+  const pins = !pin ? []
+    : Array.isArray(pin) ? pin.slice().sort((a, b) => a.index - b.index)
+    : [{ index: 0, height: pin.start }, { index: n - 1, height: pin.end }];
+
+  if (pins.length > 0) {
+    // Unreachable: two pins differ by more than the grade can climb between them.
+    for (let k = 1; k < pins.length; k++) {
+      const reach = g * (pins[k].index - pins[k - 1].index);
+      if (Math.abs(pins[k].height - pins[k - 1].height) > reach + 1e-9) return null;
+    }
     desired = desired.map((value, i) => {
-      const floor = Math.max(pin.start - g * i, pin.end - g * (n - 1 - i));
-      const ceiling = Math.min(pin.start + g * i, pin.end + g * (n - 1 - i));
+      let floor = -Infinity;
+      let ceiling = Infinity;
+      for (const { index, height } of pins) {
+        const reach = g * Math.abs(i - index);
+        floor = Math.max(floor, height - reach);
+        ceiling = Math.min(ceiling, height + reach);
+      }
       return Math.min(ceiling, Math.max(floor, value));
     });
   }
@@ -208,14 +263,25 @@ export function smoothProfile(desired, stepM, maxGrade, pin = null) {
 /**
  * Label each sample at-grade, tunnel or bridge, then merge away the flicker.
  *
+ * `forced` marks samples whose structure is not the terrain's to decide — the
+ * samples either side of a motorway crossing, which must be a bridge or a
+ * tunnel however short. A run containing a forced sample is never merged
+ * away, or a short motorway bridge would flicker back to a level crossing.
+ *
+ * A bridge over water is protected the same way. A river is often narrower
+ * than the 60 m merge threshold, and merging its one or two samples into the
+ * banks would run the track through the river at grade.
+ *
  * @param {number[]} height smoothed track height
  * @param {number[]} terrain ground height at the same samples
  * @param {boolean[]} overWater
  * @param {number} stepM
+ * @param {Array<string|undefined>} [forced] a structure per sample, or empty
  * @returns {string[]} one of 'atGrade' | 'tunnel' | 'bridge' per sample
  */
-export function classifyStructures(height, terrain, overWater, stepM) {
+export function classifyStructures(height, terrain, overWater, stepM, forced = []) {
   const kinds = height.map((h, i) => {
+    if (forced[i]) return forced[i];
     if (terrain[i] - h >= BUILD.TUNNEL_BELOW_M) return 'tunnel';
     if (h - terrain[i] >= BUILD.BRIDGE_ABOVE_M || overWater[i]) return 'bridge';
     return 'atGrade';
@@ -231,6 +297,8 @@ export function classifyStructures(height, terrain, overWater, stepM) {
     for (let r = 0; r < runs.length; r++) {
       const run = runs[r];
       if (run.end - run.start + 1 >= minSamples) continue;
+      if (hasForced(forced, run)) continue;
+      if (run.kind === 'bridge' && hasWater(overWater, run)) continue;
       const before = runs[r - 1];
       const after = runs[r + 1];
       const winner = !before ? after : !after ? before
@@ -242,6 +310,16 @@ export function classifyStructures(height, terrain, overWater, stepM) {
     if (!changed) break;
   }
   return kinds;
+}
+
+function hasForced(forced, run) {
+  for (let i = run.start; i <= run.end; i++) if (forced[i]) return true;
+  return false;
+}
+
+function hasWater(overWater, run) {
+  for (let i = run.start; i <= run.end; i++) if (overWater[i]) return true;
+  return false;
 }
 
 /** Contiguous runs of equal values, as {kind, start, end} inclusive. */
@@ -320,11 +398,16 @@ export function buildTrack(controlLonLat, region, frame, mode) {
  * last `OFF_ROAD_STREET_LEAD_M` of an off-road segment are still leaving and
  * rejoining the street, so they are exempt too.
  *
+ * Rail track built with the Build track tool passes `leadM = 0`: it does not
+ * start on a street, so it gets no exemption.
+ *
+ * @param {number} [leadM] how much of each end is exempt
  * @returns {number[]} indices of blocked samples
  */
-export function blockedSamples(samples, kinds, region, frame) {
+export function blockedSamples(samples, kinds, region, frame,
+  leadM = BUILD.OFF_ROAD_STREET_LEAD_M) {
   if (!region.occupancy) return [];
-  const leadSamples = Math.round(BUILD.OFF_ROAD_STREET_LEAD_M / BUILD.SAMPLE_M);
+  const leadSamples = Math.round(leadM / BUILD.SAMPLE_M);
   const blocked = [];
   for (let i = 0; i < samples.length; i++) {
     if (kinds[i] === 'tunnel') continue;
@@ -333,6 +416,179 @@ export function blockedSamples(samples, kinds, region, frame) {
     if (isOccupied(region.occupancy, x, y)) blocked.push(i);
   }
   return blocked;
+}
+
+/**
+ * Build a piece of metro or train track: the whole grade rule, the building
+ * rule and the rail-and-roads rules, in the order the spec gives them.
+ *
+ *   1. Spline through the waypoints, sampled every 20 m.
+ *   2. Desired height: the terrain for train (cleared above water), 15 m
+ *      under it for metro.
+ *   3. Smooth with the ends pinned. A free end sits at its desired height; an
+ *      end that joins existing track has to meet that track's height.
+ *   4. Hard targets, then smooth again with them pinned. Over water a train
+ *      is pinned at the clearance. At a motorway or trunk crossing the track
+ *      is pinned 7 m above or 8 m below the road — whichever is nearer — if
+ *      it is not already clear. The ramps then come out of the smoothing on
+ *      their own, so the crossing becomes a short bridge or tunnel without
+ *      the player choosing it.
+ *   5. Classify and merge structures, keeping the forced crossings.
+ *   6. Block anything overground inside a building, and any at-grade
+ *      crossing that is too shallow or runs along a road.
+ *   7. Price it: structure by structure, plus each level crossing.
+ *
+ * Unlike an off-road tram segment, nothing here is exempt at the ends: rail
+ * track does not start on a street.
+ *
+ * @param {Array<[number,number]>} controlLonLat waypoints, lon/lat
+ * @param {Object} region
+ * @param {import('../model/region.js').LocalFrame} frame
+ * @param {'metro'|'train'} mode
+ * @param {{startHeight?:number|null, endHeight?:number|null,
+ *          corridors?:import('./rail-roads.js').RoadCorridors|null}} [options]
+ */
+export function buildRailTrack(controlLonLat, region, frame, mode, options = {}) {
+  const stepM = BUILD.SAMPLE_M;
+  const control = controlLonLat.map(([lon, lat]) => frame.toLocal(lon, lat));
+  const samples = splinePoints(control, stepM);
+  const points = samples.map(([x, y]) => frame.toLonLat(x, y));
+  const empty = {
+    points, samples, height: [], terrain: [], overWater: [], kinds: [], runs: [],
+    blockedAt: [], blocked: true, reason: null, lengthM: 0, cost: 0,
+    levelCrossings: [], gradeSeparatedCrossings: 0,
+  };
+  if (samples.length < 2) return { ...empty, reason: 'tooShort' };
+
+  const { desired, terrain, overWater } = desiredProfile(samples, region, mode);
+  const maxGrade = BUILD.MAX_GRADE[mode];
+  const ends = [
+    { index: 0, height: options.startHeight ?? desired[0] },
+    { index: samples.length - 1, height: options.endHeight ?? desired.at(-1) },
+  ];
+
+  let height = smoothProfile(desired, stepM, maxGrade, ends);
+  if (!height) return { ...empty, terrain, overWater, reason: 'tooSteep', tooSteep: true };
+
+  // Water clearance is a floor, not a wish. Averaging the envelopes would
+  // otherwise leave a train about halfway up to it over a river, so every
+  // over-water sample still below the clearance is pinned to it. Metro is
+  // exempt: it passes under water by default.
+  const waterPins = [];
+  if (mode !== 'metro') {
+    for (let i = 0; i < samples.length; i++) {
+      if (!overWater[i]) continue;
+      const clear = Math.max(0, terrain[i]) + BUILD.WATER_CLEARANCE_M;
+      if (height[i] < clear) waterPins.push({ index: i, height: clear });
+    }
+  }
+
+  // Motorway and trunk crossings: each wants the track a clearance above or
+  // below the road. Try the nearer side for every crossing first; if those
+  // cannot all be met at once, try going over all of them, then under.
+  const crossings = options.corridors ? options.corridors.crossings(samples) : [];
+  const separated = crossings.filter((crossing) => crossing.gradeSeparated);
+  const gradeSeparatedCrossings = separated.length;
+  let forced = [];
+
+  if (waterPins.length > 0 || separated.length > 0) {
+    let solved = null;
+    for (const side of ['nearer', 'above', 'below']) {
+      const attempt = crossingPins(separated, height, region, side);
+      const smoothed = smoothProfile(desired, stepM, maxGrade,
+        dedupePins([...ends, ...waterPins, ...attempt.pins]));
+      if (smoothed) { solved = { height: smoothed, forced: attempt.forced }; break; }
+      if (separated.length === 0) break;
+    }
+    if (!solved) {
+      return { ...empty, terrain, overWater, gradeSeparatedCrossings,
+        reason: 'tooSteep', tooSteep: true };
+    }
+    height = solved.height;
+    forced = solved.forced;
+  }
+
+  const kinds = classifyStructures(height, terrain, overWater, stepM, forced);
+  const runs = runsOf(kinds).map((run) => ({
+    ...run,
+    lengthM: (run.end - run.start) * stepM || stepM,
+  }));
+
+  const buildingBlocked = blockedSamples(samples, kinds, region, frame, 0);
+  const rules = options.corridors
+    ? judgeRoadRules(samples, kinds, crossings, options.corridors, stepM)
+    : { levelCrossings: [], shallow: [], along: [] };
+
+  // One reason is reported, the one most worth fixing first.
+  const reason = buildingBlocked.length ? 'blockedByBuilding'
+    : rules.shallow.length ? 'crossingTooShallow'
+    : rules.along.length ? 'alongRoad'
+    : null;
+  const blockedAt = [...new Set([...buildingBlocked, ...rules.shallow, ...rules.along])]
+    .sort((a, b) => a - b);
+
+  let lengthM = 0;
+  for (let i = 1; i < samples.length; i++) lengthM += dist(samples[i - 1], samples[i]);
+
+  const structureCost = trackCost(runs, stepM, mode);
+  const levelCrossings = rules.levelCrossings.map(({ x, y, roadBearing }) =>
+    ({ lonLat: frame.toLonLat(x, y), roadBearing }));
+
+  return {
+    points, samples, height, terrain, overWater, kinds, runs, blockedAt,
+    blocked: blockedAt.length > 0,
+    reason,
+    lengthM,
+    structureCost,
+    levelCrossings,
+    gradeSeparatedCrossings,
+    cost: structureCost + levelCrossings.length * COSTS.LEVEL_CROSSING,
+  };
+}
+
+/**
+ * Pins that hold the track clear of each motorway or trunk road it crosses,
+ * on the two samples either side of the crossing.
+ *
+ * @param {'nearer'|'above'|'below'} side which clearance to aim for
+ * @returns {{pins:Array<{index:number,height:number}>, forced:string[]}}
+ */
+function crossingPins(crossings, height, region, side) {
+  const pins = [];
+  const forced = [];
+  for (const crossing of crossings) {
+    const road = heightAt(region.terrain, crossing.x, crossing.y);
+    const i = crossing.index;
+    const here = (height[i] + height[i + 1]) / 2;
+    const above = road + BUILD.MOTORWAY_CLEARANCE_ABOVE_M;
+    const below = road - BUILD.MOTORWAY_CLEARANCE_BELOW_M;
+    let target;
+    if (side === 'above') target = Math.max(here, above);
+    else if (side === 'below') target = Math.min(here, below);
+    // Already clear of the road: hold it there, so other pins cannot drag
+    // it back down onto the carriageway.
+    else if (here >= above || here <= below) target = here;
+    else target = above - here <= here - below ? above : below;
+
+    const kind = target > road ? 'bridge' : 'tunnel';
+    for (const index of [i, i + 1]) {
+      pins.push({ index, height: target });
+      forced[index] = kind;
+    }
+  }
+  return { pins, forced };
+}
+
+/**
+ * One pin per sample. The first wins, and the ends are listed first, so the
+ * track always meets the junction it was drawn to; two motorways crossed in
+ * one 20 m step simply share the first one's clearance, and a motorway over
+ * a river keeps the water's.
+ */
+function dedupePins(pins) {
+  const byIndex = new Map();
+  for (const pin of pins) if (!byIndex.has(pin.index)) byIndex.set(pin.index, pin);
+  return [...byIndex.values()];
 }
 
 /**

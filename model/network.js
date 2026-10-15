@@ -1,6 +1,6 @@
 /**
- * The player's network: stops, lines and the interchanges that emerge from
- * them.
+ * The player's network: stops, lines, track, and the interchanges that emerge
+ * from them.
  *
  * Nothing here knows about simulation or drawing. It owns the structure, keeps
  * derived data (segment paths, lengths, interchange groups) consistent after
@@ -9,29 +9,61 @@
  * rather than doing it per frame.
  */
 
-import { MODES, DEMAND, COSTS, LINE_PALETTE, VEHICLES } from '../config.js';
-import { buildTrack, onStreetCost } from '../build/track-geometry.js';
+import { MODES, DEMAND, COSTS, LINE_PALETTE, VEHICLES, BUILD } from '../config.js';
+import { buildTrack, buildRailTrack, onStreetCost } from '../build/track-geometry.js';
+import { RoadCorridors } from '../build/rail-roads.js';
+import { TrackGraph, canRunOn } from '../build/track-routing.js';
 
 let nextId = 1;
 const newId = (prefix) => `${prefix}${nextId++}`;
 
+/**
+ * Make sure ids handed out from now on cannot collide with ones loaded from a
+ * save.
+ *
+ * The counter is per page, so on a fresh page it starts at 1 — and a save
+ * loaded there already holds `s1`, `s2`, …. Without this, the first stop built
+ * after loading reused an id that was already in the network, and the two
+ * stops silently became one in every Map keyed by id.
+ *
+ * @param {Iterable<string>} ids
+ */
+export function reserveIds(ids) {
+  for (const id of ids) {
+    const number = Number(String(id).replace(/^[a-z]+/, ''));
+    if (Number.isFinite(number)) nextId = Math.max(nextId, number + 1);
+  }
+}
+
 /** @typedef {'bus'|'tram'|'metro'|'train'} Mode */
+
+/** Which price a rail station pays, by the structure of the track it sits on. [spec] */
+const STATION_PRICE = {
+  metro: { tunnel: 'underground', atGrade: 'atGrade', bridge: 'elevated' },
+  train: { tunnel: 'tunnel', atGrade: 'atGrade', bridge: 'elevated' },
+};
+
+const isRail = (mode) => mode === 'metro' || mode === 'train';
 
 export class Stop {
   /**
    * @param {Mode} mode
    * @param {number} lon
    * @param {number} lat
-   * @param {number} node road-graph node this stop is snapped to
+   * @param {number|string} node what this stop is snapped to: a road-graph
+   *   node index for bus and tram, a track sample key for metro and train
    * @param {string} name
+   * @param {string} [structure] for a station, the structure of the track
+   *   under it — which decides its price
    */
-  constructor(mode, lon, lat, node, name) {
+  constructor(mode, lon, lat, node, name, structure = 'atGrade') {
     this.id = newId('s');
     this.mode = mode;
     this.lon = lon;
     this.lat = lat;
     this.node = node;
     this.name = name;
+    this.structure = structure;
     /** Line ids calling here. */
     this.lines = [];
     /** Interchange id, or null when this stop stands alone. */
@@ -44,9 +76,72 @@ export class Stop {
     this.waiting = [];
   }
 
+  /**
+   * Stations simply take the structure at their position — underground, at
+   * grade or elevated — and are priced to match, as the spec says.
+   */
   get cost() {
     const cost = COSTS.STOP[this.mode];
-    return typeof cost === 'number' ? cost : cost.atGrade;
+    if (typeof cost === 'number') return cost;
+    return cost[STATION_PRICE[this.mode]?.[this.structure]] ?? cost.atGrade;
+  }
+}
+
+/**
+ * A piece of metro or train track, built with the Build track tool.
+ *
+ * Track is separate from lines, as the spec asks: build track, then draw lines
+ * on it. A track is defined by the player's waypoints and by what it joins at
+ * each end; everything else — the spline, the profile, the structures, the
+ * level crossings — is derived by `buildRailTrack` and rebuilt identically on
+ * load rather than saved.
+ */
+export class Track {
+  /**
+   * @param {'metro'|'train'} mode
+   * @param {Array<[number,number]>} control waypoints, lon/lat
+   * @param {{trackId:string, index:number}|null} start junction at the first waypoint
+   * @param {{trackId:string, index:number}|null} end junction at the last waypoint
+   */
+  constructor(mode, control, start = null, end = null) {
+    this.id = newId('t');
+    this.mode = mode;
+    this.control = control;
+    this.start = start;
+    this.end = end;
+    /**
+     * Heights each end was built to meet, m, or null for a free end.
+     *
+     * Stored rather than looked up again on load, so a track whose junction
+     * partner has since been bulldozed still rebuilds to exactly the profile
+     * the player paid for.
+     */
+    this.pins = { start: null, end: null };
+    /** What was paid for it, for the refund and for maintenance. */
+    this.cost = 0;
+
+    // Derived geometry, filled by `apply`.
+    this.points = [];
+    this.kinds = [];
+    this.height = [];
+    this.terrain = [];
+    this.overWater = [];
+    this.blockedAt = [];
+    this.levelCrossings = [];
+    this.lengthM = 0;
+  }
+
+  /** Copy a built geometry onto the track. */
+  apply(built) {
+    this.points = built.points;
+    this.kinds = built.kinds;
+    this.height = built.height;
+    this.terrain = built.terrain;
+    this.overWater = built.overWater;
+    this.blockedAt = built.blockedAt;
+    this.levelCrossings = built.levelCrossings;
+    this.lengthM = built.lengthM;
+    return this;
   }
 }
 
@@ -157,6 +252,12 @@ export class Network {
     this.lines = new Map();
     /** @type {Map<string, Interchange>} */
     this.interchanges = new Map();
+    /** Metro and train track, in the order it was built. @type {Map<string, Track>} */
+    this.tracks = new Map();
+    /** Routing over `tracks`, rebuilt lazily after any track changes. */
+    this._trackGraph = null;
+    /** The road corridors rail must respect, built on first use. */
+    this._corridors = null;
     /**
      * Bumped on every structural change. The demand pair table and the route
      * cache compare against their own copy and rebuild only when it moves.
@@ -166,6 +267,20 @@ export class Network {
   }
 
   touch() { this.version++; }
+
+  /** Routing over every piece of built track. */
+  get trackGraph() {
+    if (!this._trackGraph) this._trackGraph = new TrackGraph(this.tracks.values(), this.frame);
+    return this._trackGraph;
+  }
+
+  /** Road corridors for the rail-and-roads rules. Lazy: a bus game never needs them. */
+  get corridors() {
+    if (!this._corridors && this.region) {
+      this._corridors = new RoadCorridors(this.region.roads, this.frame);
+    }
+    return this._corridors;
+  }
 
   /** Next unused palette colour, cycling once they run out. */
   nextColor() {
@@ -182,6 +297,8 @@ export class Network {
    * @returns {{stop: Stop, reused: boolean}|{error: string}}
    */
   addStop(lon, lat, mode) {
+    if (isRail(mode)) return this.addStation(lon, lat, mode);
+
     const snapped = this.roadIndex.snap(lon, lat, mode);
     if (!snapped) return { error: 'tooFarFromRoad' };
 
@@ -191,6 +308,35 @@ export class Network {
 
     const stop = new Stop(mode, snapped.lon, snapped.lat, snapped.node,
       snapped.name || 'Stop');
+    this.stops.set(stop.id, stop);
+    this.recomputeInterchanges();
+    this.touch();
+    return { stop, reused: false };
+  }
+
+  /**
+   * Place a metro or train station, snapped to compatible track within
+   * `BUILD.STATION_SNAP_M`.
+   *
+   * A train station clicked onto metro track is refused with its own message,
+   * because "too far from track" would be a lie when the track is right there.
+   */
+  addStation(lon, lat, mode) {
+    const graph = this.trackGraph;
+    const snapped = graph.snap(lon, lat, mode, BUILD.STATION_SNAP_M);
+    if (!snapped) {
+      const anyTrack = graph.snap(lon, lat, mode, BUILD.STATION_SNAP_M, { anyMode: true });
+      return { error: anyTrack ? 'wrongTrack' : 'tooFarFromTrack' };
+    }
+
+    const existing = this.stopAtNode(snapped.key, mode);
+    if (existing) return { stop: existing, reused: true };
+
+    // Named after the nearest street, like a bus stop, looking a little wider:
+    // a station is often set back from the road.
+    const street = this.roadIndex.snap(snapped.lon, snapped.lat, 'bus', BUILD.STOP_SNAP_M * 4);
+    const stop = new Stop(mode, snapped.lon, snapped.lat, snapped.key,
+      street?.name || 'Station', snapped.kind);
     this.stops.set(stop.id, stop);
     this.recomputeInterchanges();
     this.touch();
@@ -252,10 +398,12 @@ export class Network {
   extendLine(line, stop) {
     if (line.loop) return { error: 'lineIsLoop' };
 
+    const noPath = isRail(line.mode) ? 'noTrackPath' : 'noRoadPath';
+
     // Closing the loop.
     if (line.stops.length >= 3 && stop.id === line.stops[0]) {
       const closing = this.routeBetween(line, this.stops.get(line.stops.at(-1)), stop);
-      if (!closing) return { error: 'noRoadPath' };
+      if (!closing) return { error: noPath };
       line.segments.push(closing);
       line.loop = true;
       this.touch();
@@ -267,7 +415,7 @@ export class Network {
     if (line.stops.length > 0) {
       const previous = this.stops.get(line.stops.at(-1));
       const segment = this.routeBetween(line, previous, stop);
-      if (!segment) return { error: 'noRoadPath' };
+      if (!segment) return { error: noPath };
       line.segments.push(segment);
     }
 
@@ -306,7 +454,7 @@ export class Network {
       line.stops.splice(afterIndex + 1, 1);
       stop.lines = stop.lines.filter((id) => id !== line.id);
       this.rebuildSegments(line);
-      return { error: 'noRoadPath' };
+      return { error: isRail(line.mode) ? 'noTrackPath' : 'noRoadPath' };
     }
     this.touch();
     return { ok: true };
@@ -351,6 +499,13 @@ export class Network {
    *            height?:number[], terrain?:number[], cost?:number}|null}
    */
   routeBetween(line, from, to) {
+    // Metro and train never touch the roads: their stations sit on track, and
+    // the path between them is the shortest on track their vehicles may use.
+    if (isRail(line.mode)) {
+      const path = this.trackGraph.path(from.node, to.node, line.mode);
+      return path ? { ...path, onTrack: true } : null;
+    }
+
     const via = this.viaFor(line, from, to);
 
     if (via && line.mode === 'tram' && this.region) {
@@ -388,7 +543,9 @@ export class Network {
    * rate for any segment the player dragged off the road.
    */
   trackCostOf(line) {
-    if (!COSTS.TRACK_PER_KM[line.mode]) return 0;
+    // Rail track is bought with the Build track tool, before any line runs on
+    // it, so drawing a line on it costs nothing more.
+    if (isRail(line.mode) || !COSTS.TRACK_PER_KM[line.mode]) return 0;
     let total = 0;
     for (const segment of line.segments) {
       total += segment.offRoad
@@ -421,6 +578,103 @@ export class Network {
     line.segments = segments;
     return true;
   }
+
+  // ─── Track ────────────────────────────────────────────────────────────────
+
+  /**
+   * Work out what a piece of track would be, without building it.
+   *
+   * An end that joins existing track must meet that track's height, so the
+   * junction is level; a free end sits wherever the grade rule wants it.
+   *
+   * @param {'metro'|'train'} mode
+   * @param {Array<[number,number]>} control waypoints, lon/lat
+   * @param {{trackId:string, index:number}|null} start
+   * @param {{trackId:string, index:number}|null} end
+   * @param {{start?:number|null, end?:number|null}} [pins] explicit end
+   *   heights, overriding the junctions — used when rebuilding from a save
+   */
+  planTrack(mode, control, start = null, end = null, pins = null) {
+    const startHeight = pins?.start ?? this.junctionHeight(start);
+    const endHeight = pins?.end ?? this.junctionHeight(end);
+    const built = buildRailTrack(control, this.region, this.frame, mode, {
+      startHeight, endHeight, corridors: this.corridors,
+    });
+    return { ...built, pins: { start: startHeight, end: endHeight } };
+  }
+
+  /** Height of existing track at a junction, or null for a free end. */
+  junctionHeight(junction) {
+    if (!junction) return null;
+    const track = this.tracks.get(junction.trackId);
+    const height = track?.height[junction.index];
+    return Number.isFinite(height) ? height : null;
+  }
+
+  /**
+   * Nearest sample of existing track a new track of `mode` may join.
+   * New metro track may join train track (metro vehicles run on both); new
+   * train track may join only train track.
+   */
+  junctionAt(lon, lat, mode, maxDistM = BUILD.JUNCTION_SNAP_M) {
+    const snapped = this.trackGraph.snap(lon, lat, mode, maxDistM);
+    return snapped ? { trackId: snapped.trackId, index: snapped.index,
+      lonLat: [snapped.lon, snapped.lat] } : null;
+  }
+
+  /** Add a planned track to the network. The caller has already paid. */
+  addTrack(mode, control, start, end, built, cost) {
+    const track = new Track(mode, control, start, end).apply(built);
+    track.pins = built.pins;
+    track.cost = cost;
+    this.tracks.set(track.id, track);
+    this._trackGraph = null;
+    this.touch();
+    return track;
+  }
+
+  /**
+   * Remove a track, unless something still uses it.
+   *
+   * Tracks that were joined to it keep their geometry — their end heights are
+   * stored — and simply become dead ends there.
+   *
+   * @returns {{ok:true}|{error:string}}
+   */
+  removeTrack(trackId) {
+    if (!this.tracks.has(trackId)) return { error: 'nothingThere' };
+    const prefix = `${trackId}:`;
+    const stationOnIt = [...this.stops.values()].some((stop) =>
+      typeof stop.node === 'string' && stop.node.startsWith(prefix));
+    const lineOnIt = [...this.lines.values()].some((line) =>
+      line.segments.some((segment) => segment.onTrack && segment.tracks?.includes(trackId)));
+    if (stationOnIt || lineOnIt) return { error: 'trackInUse' };
+
+    this.tracks.delete(trackId);
+    for (const other of this.tracks.values()) {
+      if (other.start?.trackId === trackId) other.start = null;
+      if (other.end?.trackId === trackId) other.end = null;
+    }
+    this._trackGraph = null;
+    this.touch();
+    return { ok: true };
+  }
+
+  /** Nearest track to a point, for selection and bulldozing. */
+  trackNear(lon, lat, maxDistM) {
+    let best = null;
+    let bestDist = maxDistM;
+    for (const track of this.tracks.values()) {
+      for (const [pLon, pLat] of track.points) {
+        const distance = this.frame.distance(lon, lat, pLon, pLat);
+        if (distance < bestDist) { bestDist = distance; best = track; }
+      }
+    }
+    return best;
+  }
+
+  /** May a line of this mode run on this track? Re-exported for the UI. */
+  static canRunOn(lineMode, trackMode) { return canRunOn(lineMode, trackMode); }
 
   // ─── Interchanges ─────────────────────────────────────────────────────────
 

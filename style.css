@@ -16,6 +16,11 @@
 
 * { box-sizing: border-box; }
 
+/* The `hidden` attribute has to win over any display rule. Without this,
+   `.panel { display: flex }` beat it and the right-hand panel could never be
+   closed — not even by its own × button. */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   height: 100%;
@@ -375,3 +380,35 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   border-radius: 6px;
 }
 .saves button { padding: 5px 9px; font-size: 12px; }
+
+/* ─── Build track ─────────────────────────────────────────────────────────── */
+
+/* The height-profile strip, bottom centre, clear of the region card and the
+   save buttons. It never takes pointer events: the map under it stays live. */
+.profile {
+  position: absolute;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  padding: 8px 10px 6px;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  pointer-events: none;
+}
+.profile canvas { display: block; }
+.profile .profile-meta {
+  margin-top: 4px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.profile .profile-meta.refused { color: #a8392f; font-weight: 600; }
+
+.toolbar .hint {
+  max-width: 150px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--ink-soft);
+}

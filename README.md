@@ -4,7 +4,7 @@ A transit sandbox with Mini Metro's look and drawing feel and Cities: Skylines' 
 
 You draw bus, tram, metro and train lines. Passengers appear where people live and want to go. Money comes from tickets, coverage subsidies and advertising. There is no win condition — a good network settles into balance. Some places can only ever support a bus line or two, and that is fine.
 
-**Status:** Phases 0–3 of 7 done — region import, base map, the bus core loop (lines, passengers, transfers, money, save/load) and trams with on-street track, off-road dragged segments and automatic tunnels and bridges. The import is verified against live OpenStreetMap data: a 5 km slice of central Athens imports in about 20 seconds and two Overpass requests. Rail is next — see [HANDOFF.md](HANDOFF.md).
+**Status:** Phases 0–4 of 7 done — region import, base map, the bus core loop (lines, passengers, transfers, money, save/load), trams with on-street track and off-road dragged segments, and metro and train: track built through waypoints, stations on it, and lines that route on compatible track. Wherever track leaves the street, the terrain decides where it tunnels and bridges, and a height-profile strip shows why while you draw. The import is verified against live OpenStreetMap data: a 5 km slice of central Athens imports in about 20 seconds and two Overpass requests. The full economy (loans, the fare slider) is next — see [HANDOFF.md](HANDOFF.md).
 
 ## Running it
 
@@ -20,8 +20,8 @@ Click **Use the test region** for a synthetic region that needs no network at al
 Serve it over `http://` — don't open `index.html` as a `file://` URL. ES modules, the import worker and the OSM services all need a real origin.
 
 ```bash
-npm test               # 359 logic assertions, plain Node, no framework, no dependencies
-npm run test:browser   # 88 assertions driving real Chromium (needs: npm install)
+npm test               # 464 logic assertions, plain Node, no framework, no dependencies
+npm run test:browser   # 110 assertions driving real Chromium (needs: npm install)
 npm run test:live      # 25 assertions against a REAL import — hits live OSM services
 npm run fixture        # regenerate fixtures/test-region.json
 ```
@@ -37,7 +37,7 @@ Plain JavaScript ES modules with JSDoc types. No TypeScript, no bundler, no fram
 - **MapLibre** draws the calm static world — land, water, roads, contour lines, heat map — entirely from our own imported GeoJSON, so the map works offline once a region is imported.
 - **A Canvas 2D overlay**, synced to MapLibre's `render` event, draws everything that moves or that the player draws. Mini Metro's line patterns are far easier with a path and a stroke than with style rules.
 - **A Web Worker** runs the import: Overpass parsing, building processing, elevation decoding and contour tracing.
-- **The terrain decides where tunnels and bridges go**, not the player. Drag a tram line off the road and the grade rule smooths a profile the mode can actually climb, then classifies each 20 m sample as tunnel, bridge or at grade and prices it accordingly.
+- **The terrain decides where tunnels and bridges go**, not the player. Drag a tram line off the road, or draw metro or train track, and the grade rule smooths a profile the mode can actually climb, then classifies each 20 m sample as tunnel, bridge or at grade and prices it accordingly. Rail also has to respect the roads: it may cross them at 45° or more (each becomes a priced level crossing) but never run along them, and it bridges or tunnels motorways on its own.
 - **IndexedDB** caches imported regions and autosaves. A region is fetched once and never again.
 
 ## Data and attribution

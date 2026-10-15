@@ -320,6 +320,13 @@ export const BUILD = {
   /** Catmull-Rom alpha. 0.5 = centripetal, which never self-intersects. [spec] */
   SPLINE_ALPHA: 0.5,
 
+  /**
+   * Which track each rail mode's vehicles may run on. Metro vehicles run on
+   * both kinds; train vehicles only on train track (and, from Phase 6,
+   * existing OSM rail). [spec]
+   */
+  TRACK_COMPATIBILITY: { metro: ['metro', 'train'], train: ['train'] },
+
   /** Maximum grade by mode, as a fraction. [spec] */
   MAX_GRADE: { tram: 0.07, metro: 0.045, train: 0.025 },
 
@@ -364,6 +371,23 @@ export const BUILD = {
   /** Motorways and trunk roads are never crossed at grade: clearances, m. [spec] */
   MOTORWAY_CLEARANCE_ABOVE_M: 7,
   MOTORWAY_CLEARANCE_BELOW_M: 8,
+  /** Road classes that are never crossed at grade. Links count as the road they serve. */
+  GRADE_SEPARATED_ROADS: ['motorway', 'motorway_link', 'trunk', 'trunk_link'],
+
+  /**
+   * How close a Build track click must land to existing track to join it, m.
+   *
+   * Not in the spec, which says only that clicking existing track makes a
+   * junction. Generous on purpose: a junction is the one click where missing
+   * by a few metres silently produces a dead end that looks connected.
+   */
+  JUNCTION_SNAP_M: 30,
+  /**
+   * A waypoint closer than this to the previous one is ignored, m. A
+   * double-click to finish fires two clicks on the same spot first, and two
+   * coincident control points would put a kink in the spline.
+   */
+  WAYPOINT_MIN_M: 5,
 };
 
 // ─── Economy ──────────────────────────────────────────────────────────────────
@@ -561,6 +585,20 @@ export const COLORS = {
   stopStroke: '#2B2B2B',
   passenger: '#2B2B2B',
   bareTrack: '#B5AFA4',
+  /** Train track's sleeper ticks, a shade darker than the rail itself. */
+  sleeper: '#9C958A',
+  /** Anything that cannot be built: a blocked preview, a refused crossing. */
+  blocked: '#D14A3F',
+
+  /**
+   * Track being drawn is coloured by structure, before it belongs to any line
+   * and so before it has a line colour of its own. [spec: "coloured by
+   * structure"; the colours are mine]
+   */
+  structure: { atGrade: '#5B5F66', tunnel: '#8C8F95', bridge: '#2C7BD6' },
+  /** The height-profile strip. */
+  profileTerrain: '#E2DACB',
+  profileTerrainEdge: '#B9AE9A',
 
   /** Heat map ramp for unserved demand, low to high. */
   heat: ['rgba(255,170,60,0)', 'rgba(255,140,40,0.35)', 'rgba(230,70,30,0.55)'],
@@ -598,6 +636,12 @@ export const RENDER = {
 
   /** Minor roads appear at this zoom and above. [spec] */
   MINOR_ROAD_MIN_ZOOM: 14,
+
+  /** Spacing of the sleeper ticks on bare train track, px. */
+  SLEEPER_SPACING_PX: 7,
+  /** Height-profile strip size, CSS px. */
+  PROFILE_WIDTH_PX: 520,
+  PROFILE_HEIGHT_PX: 110,
 };
 
 // ─── Saving ───────────────────────────────────────────────────────────────────

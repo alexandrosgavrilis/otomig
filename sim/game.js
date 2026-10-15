@@ -6,9 +6,9 @@
  * one thing to pass around and exactly one thing to serialise.
  */
 
-import { CLOCK, COSTS, MODES, passengersPerDot } from '../config.js';
+import { CLOCK, COSTS, MODES, BUILD, passengersPerDot } from '../config.js';
 import { LocalFrame } from '../model/region.js';
-import { Network, Stop, Line } from '../model/network.js';
+import { Network, Stop, Line, Track, reserveIds } from '../model/network.js';
 import { RoadIndex } from '../build/road-routing.js';
 import { buildTrack, onStreetCost } from '../build/track-geometry.js';
 import { Clock } from './clock.js';
@@ -49,6 +49,13 @@ export class Game {
      * blocked stretch before committing.
      */
     this.drag = null;
+    /**
+     * In-progress track: { mode, control, start, end, cursor, preview }.
+     * `preview` is the track as it would be built with the cursor as the next
+     * waypoint — structures, profile, cost and anything blocking it — which is
+     * what the overlay and the height-profile strip draw.
+     */
+    this.trackDraft = null;
     /** Set when the network changed and dots need revalidating. */
     this.networkDirty = false;
     /**
@@ -161,6 +168,14 @@ export class Game {
     }
     this.invalidate();
     return result;
+  }
+
+  /** Could a stop of this mode go here? Drives the rubber band's colour. */
+  canPlaceStop(lon, lat, mode) {
+    if (mode === 'metro' || mode === 'train') {
+      return Boolean(this.network.trackGraph.snap(lon, lat, mode, BUILD.STATION_SNAP_M));
+    }
+    return Boolean(this.roadIndex.snap(lon, lat, mode));
   }
 
   /** Start a new line in a mode. */
@@ -337,6 +352,124 @@ export class Game {
     return line;
   }
 
+  // ─── Building track ───────────────────────────────────────────────────────
+
+  /** Start drawing metro or train track. Nothing is built until it is finished. */
+  startTrack(mode) {
+    this.trackDraft = { mode, control: [], start: null, end: null, cursor: null, preview: null };
+    return this.trackDraft;
+  }
+
+  /**
+   * A Build track click: a waypoint, or a junction with existing track.
+   *
+   * The first click joins existing track if it lands on some; otherwise the
+   * track starts with a free end. A later click on existing track ends the
+   * track there, as a junction, and finishes it — the way closing a loop
+   * finishes a line in Mini Metro. If that track cannot be built, the
+   * junction is taken back off so the player can reroute.
+   *
+   * @param {number} [snapM] how near existing track a click must be to join it
+   * @returns {{ok:true, finished?:boolean, track?:Track, cost?:number}|{error:string}}
+   */
+  addTrackPoint(lon, lat, snapM = BUILD.JUNCTION_SNAP_M) {
+    const draft = this.trackDraft;
+    if (!draft) return { error: 'noDraft' };
+    const junction = this.network.junctionAt(lon, lat, draft.mode, snapM);
+
+    if (draft.control.length === 0) {
+      draft.control.push(junction ? junction.lonLat : [lon, lat]);
+      draft.start = junction ? { trackId: junction.trackId, index: junction.index } : null;
+      return { ok: true };
+    }
+
+    const point = this.endJunction(draft, junction) ? junction.lonLat : [lon, lat];
+    const last = draft.control.at(-1);
+    if (this.frame.distance(last[0], last[1], point[0], point[1]) < BUILD.WAYPOINT_MIN_M) {
+      return { ok: true }; // the first half of a double-click
+    }
+
+    draft.control.push(point);
+    if (!this.endJunction(draft, junction)) return { ok: true };
+
+    draft.end = { trackId: junction.trackId, index: junction.index };
+    const result = this.finishTrack();
+    if (result.error) { draft.control.pop(); draft.end = null; }
+    return { ...result, finished: !result.error };
+  }
+
+  /**
+   * Does this junction end the draft? Not when it is the track the draft
+   * started from, close to where it started: drawing away from a track, the
+   * first waypoint or two are inevitably still near it, and finishing the
+   * moment the player clicked would leave a stub they never meant.
+   */
+  endJunction(draft, junction) {
+    if (!junction) return false;
+    if (!draft.start || junction.trackId !== draft.start.trackId) return true;
+    const [startLon, startLat] = draft.control[0];
+    return this.frame.distance(startLon, startLat, junction.lonLat[0], junction.lonLat[1])
+      > 3 * BUILD.JUNCTION_SNAP_M;
+  }
+
+  /**
+   * Preview the draft with the cursor as its next waypoint, for the overlay
+   * and the profile strip. Costs and checks everything, builds nothing.
+   */
+  previewTrack(lon, lat, snapM = BUILD.JUNCTION_SNAP_M) {
+    const draft = this.trackDraft;
+    if (!draft || draft.control.length === 0) return null;
+    const junction = this.network.junctionAt(lon, lat, draft.mode, snapM);
+    const atJunction = this.endJunction(draft, junction);
+    draft.cursor = atJunction ? junction.lonLat : [lon, lat];
+    draft.preview = this.network.planTrack(draft.mode, [...draft.control, draft.cursor],
+      draft.start, atJunction ? { trackId: junction.trackId, index: junction.index } : null);
+    draft.preview.joins = atJunction;
+    return draft.preview;
+  }
+
+  /** Take back the last waypoint, so a blocked stretch can be redrawn. */
+  removeTrackPoint() {
+    const draft = this.trackDraft;
+    if (!draft || draft.control.length === 0) return;
+    draft.control.pop();
+    if (draft.control.length === 0) draft.start = null;
+    draft.end = null;
+    draft.preview = null;
+  }
+
+  /**
+   * Build the drafted track, if it can be built and afforded.
+   *
+   * A blocked or unaffordable track is refused and the draft is KEPT, so the
+   * player can reroute rather than start again — the spec's "cannot be
+   * confirmed until the player reroutes it".
+   *
+   * @returns {{ok:true, track:Track, cost:number}|{error:string}|{cancelled:true}}
+   */
+  finishTrack() {
+    const draft = this.trackDraft;
+    if (!draft) return { error: 'noDraft' };
+    if (draft.control.length < 2) {
+      this.trackDraft = null;
+      return { cancelled: true };
+    }
+
+    const built = this.network.planTrack(draft.mode, draft.control, draft.start, draft.end);
+    if (built.blocked) return { error: built.reason === 'tooSteep' ? 'trackTooSteep' : built.reason };
+    if (!this.economy.spend(built.cost, 'construction')) return { error: 'cannotAfford' };
+
+    const track = this.network.addTrack(draft.mode, draft.control, draft.start, draft.end,
+      built, built.cost);
+    this.trackDraft = null;
+    this.invalidate();
+    return { ok: true, track, cost: built.cost };
+  }
+
+  cancelTrack() {
+    this.trackDraft = null;
+  }
+
   /** Buy a vehicle for a line. @returns {boolean} */
   addVehicle(line, direction = 0) {
     if (line.vehicles.length >= line.maxVehicles) return false;
@@ -366,10 +499,19 @@ export class Game {
     return true;
   }
 
-  /** Bulldoze a stop or a whole line, refunding half. */
+  /**
+   * Bulldoze a stop, a whole line or a piece of track, refunding half.
+   * @returns {{ok:true}|{error:string}}
+   */
   bulldoze(target) {
-    if (!target) return;
-    if (target.stops !== undefined && target.segments !== undefined) {
+    if (!target) return { error: 'nothingThere' };
+    if (target instanceof Track) {
+      // Track still carrying a station or a line stays: tearing it out would
+      // strand the line, and the player did not ask to remove that.
+      const removed = this.network.removeTrack(target.id);
+      if (removed.error) return removed;
+      this.economy.refund(target.cost);
+    } else if (target.stops !== undefined && target.segments !== undefined) {
       // A line: refund its vehicles, then delete it. Its stops stay, because
       // other lines may use them and the player did not ask to remove them.
       for (const vehicle of target.vehicles) this.economy.refund(COSTS.VEHICLE[target.mode]);
@@ -383,6 +525,7 @@ export class Game {
     }
     if (this.selection === target) this.selection = null;
     this.invalidate();
+    return { ok: true };
   }
 
   // ─── Totals for the HUD ───────────────────────────────────────────────────
@@ -414,9 +557,16 @@ export class Game {
       clock: this.clock.toJSON(),
       economy: this.economy.toJSON(),
       demand: this.demand.toJSON(),
+      // Track is saved as the player drew it — waypoints, junctions, end
+      // heights and what was paid — and its geometry rebuilt on load, so a
+      // save stays a few kilobytes however much track there is.
+      tracks: [...this.network.tracks.values()].map((track) => ({
+        id: track.id, mode: track.mode, control: track.control,
+        start: track.start, end: track.end, pins: track.pins, cost: track.cost,
+      })),
       stops: [...this.network.stops.values()].map((stop) => ({
         id: stop.id, mode: stop.mode, lon: stop.lon, lat: stop.lat,
-        node: stop.node, name: stop.name, lines: stop.lines,
+        node: stop.node, name: stop.name, lines: stop.lines, structure: stop.structure,
       })),
       lines: [...this.network.lines.values()].map((line) => ({
         id: line.id, mode: line.mode, color: line.color, stops: line.stops,
@@ -448,8 +598,21 @@ export class Game {
     game.economy = Economy.fromJSON(data.economy);
     game.demand.loadJSON(data.demand);
 
+    // Track first, in the order it was built, because lines route over it.
+    for (const saved of data.tracks || []) {
+      const built = game.network.planTrack(saved.mode, saved.control,
+        saved.start, saved.end, saved.pins);
+      const track = new Track(saved.mode, saved.control, saved.start, saved.end).apply(built);
+      track.id = saved.id;
+      track.pins = saved.pins;
+      track.cost = saved.cost;
+      game.network.tracks.set(track.id, track);
+      game.network._trackGraph = null;
+    }
+
     for (const saved of data.stops) {
-      const stop = new Stop(saved.mode, saved.lon, saved.lat, saved.node, saved.name);
+      const stop = new Stop(saved.mode, saved.lon, saved.lat, saved.node, saved.name,
+        saved.structure);
       stop.id = saved.id;
       stop.lines = saved.lines;
       game.network.stops.set(stop.id, stop);
@@ -477,6 +640,10 @@ export class Game {
         line.vehicles.push(vehicle);
       }
     }
+
+    // Ids from the save must never be handed out again on this page.
+    reserveIds([...data.stops.map((s) => s.id), ...data.lines.map((l) => l.id),
+      ...(data.tracks || []).map((t) => t.id)]);
 
     game.network.recomputeInterchanges();
     game.network.touch();

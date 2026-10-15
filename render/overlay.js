@@ -21,7 +21,8 @@ import { STRINGS } from '../ui/strings.js';
 import { formatMoney } from '../sim/economy.js';
 import {
   strokePath, drawLinePattern, drawVehicle, drawStop, drawInterchange,
-  drawTrackStructure, drawDragPreview,
+  drawTrackStructure, drawDragPreview, drawBareTrack, drawLevelCrossing,
+  drawTrackPreview, drawWaypoint,
   drawWaiting, drawWaitRing, offsetPolyline, shade,
 } from './shapes.js';
 
@@ -150,10 +151,10 @@ export function linesPainter(game) {
         const spread = (index - (bundle.length - 1) / 2) * RENDER.LINE_OFFSET_PX * zoomScale;
         const drawn = offsetPolyline(points, spread);
 
-        if (segment.offRoad) {
+        if (segment.offRoad || segment.onTrack) {
           // Dedicated track: draw it by structure so the tunnels and bridges
           // the terrain forced on the player are visible without a legend.
-          drawTrackStructure(ctx, drawn, segment.kinds, line.color, width);
+          drawTrackStructure(ctx, drawn, segment.kinds, line.color, width, line.mode);
         } else {
           strokePath(ctx, drawn, line.color, width);
         }
@@ -169,6 +170,101 @@ export function linesPainter(game) {
       drawDragLabel(ctx, points.at(-1), drag);
     }
   };
+}
+
+/**
+ * Built metro and train track, under the lines that run on it, with a marker
+ * at every level crossing.
+ *
+ * Every piece of track is drawn bare whether or not a line uses it: a line is
+ * drawn on top and covers it, and where no line runs the player still sees
+ * what they have paid for and are maintaining.
+ */
+export function tracksPainter(game) {
+  return (ctx, overlay) => {
+    const zoomScale = Math.min(2, Math.max(0.6, overlay.map.getZoom() / 14));
+    const width = RENDER.BARE_TRACK_PX * zoomScale;
+    for (const track of game.network.tracks.values()) {
+      const points = track.points.map(([lon, lat]) => overlay.project(lon, lat));
+      if (game.selection === track) {
+        strokePath(ctx, points, shade(COLORS.stopStroke, 0.55), width * 5);
+      }
+      drawBareTrack(ctx, points, track.kinds, track.mode, width);
+    }
+    // Crossings last, so a later track never paints over an earlier marker.
+    for (const track of game.network.tracks.values()) {
+      for (const crossing of track.levelCrossings) {
+        const [x, y] = overlay.project(crossing.lonLat[0], crossing.lonLat[1]);
+        drawLevelCrossing(ctx, x, y, screenAngle(overlay, crossing), 3.5 * zoomScale);
+      }
+    }
+  };
+}
+
+/** A road's direction on screen, from its bearing in local metres. */
+function screenAngle(overlay, crossing) {
+  const [lon, lat] = crossing.lonLat;
+  // Step a few metres along the road and project both ends; this is right at
+  // any map rotation and pitch, which a bearing alone would not be.
+  const metres = 5 / 111320;
+  const dLon = Math.cos(crossing.roadBearing) * metres / Math.cos(lat * Math.PI / 180);
+  const dLat = Math.sin(crossing.roadBearing) * metres;
+  const [x1, y1] = overlay.project(lon, lat);
+  const [x2, y2] = overlay.project(lon + dLon, lat + dLat);
+  return Math.atan2(y2 - y1, x2 - x1);
+}
+
+/**
+ * Track being drawn with the Build track tool: the preview coloured by
+ * structure and red where blocked, the waypoints placed so far, and the
+ * running cost beside the cursor.
+ */
+export function trackDraftPainter(game) {
+  return (ctx, overlay) => {
+    const draft = game.trackDraft;
+    if (!draft) return;
+    const zoomScale = Math.min(2, Math.max(0.6, overlay.map.getZoom() / 14));
+    const width = RENDER.LINE_WIDTH_PX * zoomScale * 0.75;
+
+    const preview = draft.preview;
+    if (preview?.points?.length >= 2) {
+      const points = preview.points.map(([lon, lat]) => overlay.project(lon, lat));
+      drawTrackPreview(ctx, points, preview.kinds, new Set(preview.blockedAt), width);
+      // The level crossings it would make, so their cost is not a surprise.
+      for (const crossing of preview.levelCrossings || []) {
+        const [x, y] = overlay.project(crossing.lonLat[0], crossing.lonLat[1]);
+        drawLevelCrossing(ctx, x, y, screenAngle(overlay, crossing), 3.5 * zoomScale);
+      }
+      if (draft.cursor) {
+        drawTag(ctx, overlay.project(draft.cursor[0], draft.cursor[1]),
+          trackLabel(preview), preview.blocked);
+      }
+    }
+    draft.control.forEach(([lon, lat], i) => {
+      const [x, y] = overlay.project(lon, lat);
+      drawWaypoint(ctx, x, y, i === 0 && Boolean(draft.start));
+    });
+    if (preview?.joins && draft.cursor) {
+      const [x, y] = overlay.project(draft.cursor[0], draft.cursor[1]);
+      drawWaypoint(ctx, x, y, true);
+    }
+  };
+}
+
+/** What the cursor tag says about a track preview. */
+export function trackLabel(preview) {
+  if (preview.blocked) {
+    const key = preview.reason === 'tooSteep' ? 'trackTooSteep' : preview.reason;
+    return STRINGS.errors[key] || STRINGS.errors.blockedByBuilding;
+  }
+  const parts = [formatMoney(preview.cost)];
+  const kinds = new Set(preview.kinds);
+  for (const kind of ['tunnel', 'bridge']) if (kinds.has(kind)) parts.push(STRINGS.build[kind]);
+  if (preview.levelCrossings?.length) {
+    const count = preview.levelCrossings.length;
+    parts.push(`${count} ${count === 1 ? STRINGS.build.levelCrossing : STRINGS.build.levelCrossings}`);
+  }
+  return parts.join(' · ');
 }
 
 /** Interchange rings, under the stops they join. */
@@ -297,7 +393,11 @@ function drawDragLabel(ctx, at, drag) {
     }
     text = parts.join(' · ');
   }
+  drawTag(ctx, at, text, preview.blocked);
+}
 
+/** A small dark tag beside the cursor, red when what it describes is refused. */
+function drawTag(ctx, at, text, blocked) {
   ctx.save();
   ctx.font = '600 12px ui-sans-serif, system-ui, sans-serif';
   ctx.textBaseline = 'middle';
@@ -305,7 +405,7 @@ function drawDragLabel(ctx, at, drag) {
   const metrics = ctx.measureText(text);
   const x = at[0] + 12;
   const y = at[1] - 14;
-  ctx.fillStyle = preview.blocked ? '#D14A3F' : 'rgba(31,31,31,0.88)';
+  ctx.fillStyle = blocked ? COLORS.blocked : 'rgba(31,31,31,0.88)';
   ctx.beginPath();
   ctx.roundRect(x, y - 10, metrics.width + padding * 2, 20, 4);
   ctx.fill();

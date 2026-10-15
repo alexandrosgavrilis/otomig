@@ -2,8 +2,9 @@
 
 Read this first in every session. Update it last.
 
-**State:** Phases 0, 1, 2, R, Q and 3 complete. Verified in a real browser against the fixture **and against a real live import of central Athens**, which found two bugs no fixture could have (§1).
-**Last session:** Oct 10, 2026 — Phase 0 (research), Phase 1 (region and map), Phase 2 (buses and passengers), Phase R (data architecture), first live import, Phase Q (query restructure), Phase 3 (trams).
+**State:** Phases 0, 1, 2, R, Q, 3 and **4** complete. Rail is in: track built with the Build track tool, the full grade rule, the rail-and-roads rules, stations, metro and train lines on track, and the height-profile strip. Every Phase 4 acceptance criterion is asserted in code (§10).
+**Last session:** Oct 15, 2026 — Phase 4 (rail), plus three bugs it turned up in earlier phases (§10, "Fixed on the way").
+**Earlier:** Oct 10, 2026 — Phase 0 (research), Phase 1 (region and map), Phase 2 (buses and passengers), Phase R (data architecture), first live import, Phase Q (query restructure), Phase 3 (trams).
 
 **Phase R is done, and it cancelled Phase D.** See [RESEARCH_TILES.md](RESEARCH_TILES.md).
 
@@ -20,7 +21,8 @@ The region comes out identical — same 51,700 buildings and 502,376 residents f
 
 | | |
 | --- | --- |
-| **Next** | **Phase 4 — rail.** Track building with the Build track tool, metro and train lines, stations, the profile strip. Most of the hard geometry already exists — see §10. |
+| **Next** | **Phase 5 — full economy.** Loans, the fare slider, the finance panel, all four difficulties end to end, Hard's game over. Much of the plumbing already exists — see §11. |
+| **Untested live** | Phase 4 has only been run against the fixture. Rail is worth one real import before Phase 5: Kiato or Aigio for the geometry, Corinth for buildings (§10, "Where to test it live"). |
 | Shelved | Vector tiles for building geometry. Viable and fully costed ([RESEARCH_TILES.md](RESEARCH_TILES.md) §8), purely additive, worth it only if dense 15 km imports become the priority. |
 
 The reason Phase R was ordered before Phase 3 was that a data-layer rewrite would change the occupancy raster's provenance. It never happened, so the raster is exactly what it was.
@@ -78,8 +80,8 @@ Both would have reached Alex as a broken screen, and both were invisible to 272 
 ## 2. Testing
 
 ```bash
-npm test                            # 359 logic assertions, plain Node, no dependencies
-npm run test:browser                # 88 assertions in real Chromium via Playwright
+npm test                            # 464 logic assertions, plain Node, no dependencies
+npm run test:browser                # 110 assertions in real Chromium via Playwright
 npm run test:browser -- --headed    # ...and watch it
 npm run test:live                   # 24 assertions against a REAL import — hits live OSM services
 npm run test:live -- --km 5         # ...at a given size (default 5, the slider minimum)
@@ -92,7 +94,9 @@ The browser suite serves on **port 4001**, loads the fixture, and checks that Ma
 
 Playwright is a devDependency. `npm test` stays dependency-free.
 
-Each phase's acceptance criteria live in `tests/phase2.js` and `tests/phase3.js` marked `ACCEPTANCE:`, so they stay checked rather than being verified once by hand. Phase 3's drag gesture is additionally driven through real mouse events in `tests/browser.js`, because MapLibre's own handling is the thing most likely to break it.
+Each phase's acceptance criteria live in `tests/phase2.js`, `tests/phase3.js` and `tests/phase4.js` marked `ACCEPTANCE:`, so they stay checked rather than being verified once by hand. Phase 3's drag gesture and Phase 4's waypoint clicks, Enter, double-click and station clicks are additionally driven through real mouse and keyboard events in `tests/browser.js`, because MapLibre's own handling is the thing most likely to break them.
+
+`npm test` takes about 35 s of wall time but only ~2 s of CPU: some Phase 1 fetch tests wait out real retry backoff. That predates Phase 4 (the suite before it measured the same) and is harmless, but it is why the suite feels slow.
 
 ### Four bugs the browser suite caught
 
@@ -148,7 +152,7 @@ The scale is fixed at import and never changes mid-game — a dot that silently 
 17. **Vehicles are spaced evenly in time, not distance.** Hops differ in length, so distance spacing still bunches vehicles where stops are close.
 18. **Buildings are drawn, and their outlines are kept.** The spec says neither — it discards footprints after rasterising and says buildings are not drawn. Reversed on Alex's instruction: seeing the city you are serving is the point of a real map, and from Phase 4 the "no track through buildings" rule must agree with what is on screen. Road colours were also darkened from the spec's `#DCD6CC`, which against `#F4F1EA` land is a few percent of luminance — drawn, but invisible.
 19. **Two kinds of Overpass failure get opposite treatment.** A 429 or a dropped connection means "not now", so it keeps the full retry ladder. A 504, or a 200 carrying a `remark`, means "this query is too big for me" — re-sending it unchanged mostly fails the same way, and the only real fix is `fetchChunkAdaptive` subdividing the box. Those get `OVERPASS_HEAVY_RETRY_MAX` (1) retries and then give up so the split can happen. Measured: a 10 km import cost **22 Overpass requests and 289 s** on the full ladder, and **6 requests and 123 s** with the small budget. The old code's comment already said retrying an identical 504 was useless while the code did it four times.
-20. **Only Bus is enabled**; Tram, Metro and Train buttons are present but disabled. A dead button that says "Tram" tells the player the plan; a missing one tells them nothing.
+20. **Modes were enabled phase by phase**, present but disabled until their phase shipped: a dead button that says "Tram" tells the player the plan, a missing one tells them nothing. All four are enabled as of Phase 4. Build track is the one tool still disabled by mode, for bus and tram.
 
 ---
 
@@ -306,7 +310,7 @@ An escape hatch, not a default. [extract.bbbike.org](https://extract.bbbike.org)
 
 ## 6. What works
 
-Verified by `npm test` (270) and `npm run test:browser` (75).
+Verified by `npm test` (464) and `npm run test:browser` (110). Phases 3 and 4 have their own sections, §9 and §10.
 
 **Phase 1.** `LocalFrame` and the bbox/chunk maths; terrain height grid with bilinear interpolation (exact on a ramp); 200 m demand grid; 10 m occupancy bitset; Overpass parsing with road-class filtering, abandoned-rail rejection, chunk-overlap de-duplication and shared-node collapsing; Terrarium decode and tile resampling; marching-squares contours and sea polygons; the base-map GeoJSON. In the browser: the new-game screen, search firing no request while typing, MapLibre rendering real pixels, layer toggles, zoom revealing minor roads, `maxBounds`, IndexedDB round-trips, the module worker booting.
 
@@ -321,15 +325,16 @@ Verified by `npm test` (270) and `npm run test:browser` (75).
 ```
 index.html  style.css  config.js  main.js      package.json (no runtime deps)
 data/    overpass.js  terrain.js  import.worker.js  cache.js
-model/   region.js (contract, frame, grids)  population.js  network.js  save.js
-build/   road-routing.js                     ← track-geometry.js arrives in Phase 3
+model/   region.js (contract, frame, grids)  population.js  network.js (stops, lines, track)  save.js
+build/   road-routing.js  track-geometry.js (spline, grade rule, structures, buildRailTrack)
+         rail-roads.js (crossings, corridors)  track-routing.js (stations and paths on track)
 sim/     clock.js  demand.js  routing.js  vehicles.js  passengers.js
          economy.js  game.js
-render/  basemap.js (MapLibre style)  overlay.js (Canvas 2D)  shapes.js
+render/  basemap.js (MapLibre style)  overlay.js (Canvas 2D)  shapes.js  profile.js (height strip)
 ui/      new-game.js  hud.js  toolbar.js  panels.js  strings.js
 vendor/  maplibre-gl.js  maplibre-gl.css  LICENSE.txt      (v5.24.0, UMD)
 fixtures/ make-fixture.js  test-region.json               (npm run fixture)
-tests/   run.js  phase2.js  browser.js  screenshots/
+tests/   run.js  phase2.js  phase3.js  phase4.js  browser.js  live.js  screenshots/
 ```
 
 The fixture is a 6×6 km synthetic coast: a bay in the south-west, a lake, a river, a ridge with a notched valley (for Phase 4's tunnels and bridges), a motorway, a pedestrian street, a road tunnel and bridge, an existing railway with three stations, and an abandoned branch the parser must reject. **41,828 residents, ~1,162/km²** — a small town, so `passengersPerDot` is 1. It carries 1,971 building outlines.
@@ -338,8 +343,8 @@ The fixture is a 6×6 km synthetic coast: a bay in the south-west, a lake, a riv
 
 ## 8. Known gaps
 
-- **A drag always wins over a click near a line.** Pressing within 10 px of a segment starts a drag, so selecting a line by clicking it is harder than it was. A press that never moves is treated as a click and does nothing, but the interaction deserves a second look when the Edit stops tool is finished.
-- **Edit stops is select-only.** Dragging a stop to move it and clicking a segment to insert one are unwired; `Network.insertStop` and `removeStopFromLine` exist and are tested.
+- **A drag always wins over a click near a line.** Pressing within 10 px of a bus or tram segment starts a drag. A press that never moves falls through to a click, which is how Edit stops selects a line — but a hand that wobbles a pixel drags instead.
+- **Edit stops is select-only.** It selects stops, lines and track (from Phase 4 — before that, no click anywhere opened the line panel). Dragging a stop to move it and clicking a segment to insert one are unwired; `Network.insertStop` and `removeStopFromLine` exist and are tested.
 - **A cost preview follows the cursor only while dragging a segment**, not while placing stops. The drag is the gesture that can spend tens of millions without placing anything, so it was the one that needed it most; stop placement still gives no running total.
 - **Water from multipolygon relations is not imported.** Only `way[natural=water]`. Big lakes and most coastal water in OSM are relations, so a region with one will be missing it. The sea mask comes from elevation and is unaffected.
 - **A land island inside a sea area is painted as sea** — the tracer returns it as its own ring, not a hole. Rare; fix is ring-containment tests.
@@ -349,6 +354,7 @@ The fixture is a 6×6 km synthetic coast: a bay in the south-west, a lake, a riv
 - **One-way roads are ignored**, per the spec's v1 decision.
 - **Import payload is not a problem** (§4, corrected). What remains is **region size in storage**: a dense 15 km region holds ~300,000 building outlines and ~76 MB of JSON in IndexedDB, identically whatever the source. Created by the decision to keep and draw footprints, which is still the right decision. It is an encoding problem — delta-encoded typed arrays instead of nested JSON arrays — and deserves its own task. See [RESEARCH_TILES.md](RESEARCH_TILES.md) §5.5.
 - **Overpass timing is unpredictable.** The same 2 km box measured 18.4 s, then 2.3 s, then 2.7 s on one afternoon. Region figures are single runs; read them as "minutes, variable".
+- **Rail gaps from Phase 4** — see §10, "Known gaps".
 - **Building multipolygon relations are not imported.** `parseResponses` handles `way["building"]` only, so a mall or a courtyard block tagged as a relation is missing — the same gap as water. Measured at 166 relations against 30,686 ways over a 4 km box of Athens, but they are large buildings.
 
 ---
@@ -377,21 +383,75 @@ Measured on the fixture, between two stops either side of the ridge:
 
 ---
 
-## 10. Phase 4 — rail (next)
+## 10. Phase 4 — rail. Done.
 
-Track building with smooth splines, the full grade rule with tunnels and bridges, metro and train lines, stations, track compatibility, the profile strip.
+Metro and Train are enabled. Rail is built in two steps, as the spec asks: **Build track** lays metro or train track through waypoint clicks, then **New line** places stations on it and routes between them on track. The acceptance criteria are asserted in [tests/phase4.js](tests/phase4.js) marked `ACCEPTANCE:`, and again through real clicks, keys and a double-click in [tests/browser.js](tests/browser.js).
 
-**Accept when:** track can be drawn as a smooth curve through waypoints, the grade rule gives it tunnels and bridges without the player choosing, metro and train lines run on compatible track, and the height-profile strip shows what is being built.
+| Acceptance criterion | Where it is proved |
+| --- | --- |
+| track is a smooth curve through waypoints | centripetal Catmull-Rom from Phase 3, now driven by Build track clicks |
+| the grade rule gives tunnels and bridges without the player choosing | no tunnel or bridge tool exists; the tests check the terrain put them there |
+| metro stays underground on flat land and surfaces brightened across a valley | fixture plain, and the fixture's ridge notch; the colour is checked on a recording canvas context |
+| train track on hilly ground produces tunnels and bridges | a bridge over the river, then a tunnel through the ridge |
+| a metro line runs on train track; a train line is refused on metro track | both station placement and pathfinding are refused for train |
+| the height-profile strip shows what is being built | pixel-sampled in Chromium, with the running cost under it |
 
-**Most of the geometry is already done and tested**, because Phase 3 built it generically rather than for trams specifically:
+Measured on the fixture:
 
-1. **[build/track-geometry.js](build/track-geometry.js) is mode-agnostic.** `splinePoints`, `smoothProfile`, `classifyStructures`, `blockedSamples` and `trackCost` all take a mode and read `BUILD.MAX_GRADE`, so metro at 4.5% and train at 2.5% already work — `tests/phase3.js` asserts every mode honours its own limit. Metro's `METRO_DEPTH_M` default-underground behaviour is already in `desiredProfile`.
-2. **Structure rendering is done.** `drawTrackStructure` in [render/shapes.js](render/shapes.js) draws tunnels muted and bridges with a deck casing, and `drawDragPreview` handles the provisional dashed state with red for blocked.
-3. **What is genuinely new:** the Build track tool (waypoint clicks, Enter/double-click to finish, Esc to cancel), track as a first-class object separate from lines, junctions where track meets track, stations snapped to track, shortest-path routing *on track* rather than on roads, and the height-profile strip.
-4. **The rail-and-roads rules are unimplemented and not trivial**: crossing angle ≥ 45°, no running within a road corridor for more than 40 m, level crossings at €0.3M, and motorway/trunk crossings forcing a 7 m bridge or 8 m tunnel into the profile. `BUILD` already carries every constant for these; none of the logic exists.
-5. **Watch out for:** the grade rule samples every 20 m (`BUILD.SAMPLE_M`) against a ~30 m height grid, which is why `heightAt` interpolates rather than snapping. Don't change that to nearest-cell or the smoothed profile will step.
+| track | length | cost | structures (terrain-chosen) | level crossings |
+| --- | --- | --- | --- | --- |
+| metro, flat plain | 1.04 km | €84.8M | tunnel 1,080 m | 0 |
+| metro, across the ridge notch | 2.20 km | €161.2M | tunnel 800 m → **bridge 600 m** → tunnel 820 m | 0 |
+| train, river then ridge | 2.68 km | €277.0M | **bridge 420 m** → **tunnel 2,180 m** → at grade 120 m | 1 |
+| train, over the motorway | 0.95 km | €17.0M | at grade 540 m → **bridge 100 m** → at grade 340 m | 4 |
 
-### Where to test it — not Athens
+Planning a track takes 1–6 ms (the road corridor index costs ~30 ms once, on first use), so the preview is re-planned on every mouse move.
+
+### How it works
+
+- **[build/track-geometry.js](build/track-geometry.js) `buildRailTrack`** runs the spec's steps in order: spline, desired height, smoothing with the ends pinned, hard targets (water clearance, motorway clearance) pinned and smoothed again, classification, then the building and road rules, then the price. `smoothProfile` now takes pins *anywhere* along the profile, not just the ends. The same cone argument as Phase 3 proves a pinned sample is met exactly and the result stays feasible in one pass. The proof is in its comment.
+- **[build/rail-roads.js](build/rail-roads.js)** indexes road segments in a 50 m grid and does exact segment intersection, because OSM road edges are straight node-to-node. Roads on a bridge or in a tunnel are skipped; footways never reach the road graph at all.
+- **[build/track-routing.js](build/track-routing.js)** is the road graph's counterpart: nodes are every 20 m track sample, edges join consecutive samples plus a zero-length edge at each junction. **Compatibility lives on the nodes**: a train line may only visit train-track samples. That one rule *is* "metro runs on train track, train is refused on metro track", with no special cases at junctions.
+- **Track is a first-class object** (`Track` in [model/network.js](model/network.js)), separate from lines. A track saves only its waypoints, junctions, end heights and price; its geometry is rebuilt on load. Three tracks and a line save in well under the 20 kB budget.
+
+### Decisions worth not relitigating
+
+1. **New metro track may join train track; new train track may join only train track.** The spec says "clicking existing track of the same type makes a junction". This reads that rule through compatibility: a junction is made wherever the new track's vehicles can carry on. Metro onto train track is useful (a metro line can continue onto it) and harmless; train onto metro track would lead nowhere a train may go.
+2. **Free ends are pinned at their desired height**: a train terminus at grade, a metro terminus 15 m down. The alternative is a track that ends in mid-air or deep underground — the exact bug Phase 3 fixed for trams. The cost is that a short train track between two points too far apart in height is refused as too steep, and the player has to draw a longer way round. That is the spec's intent ("the only way to avoid them is to draw a better, usually longer, path"), and the profile strip shows why.
+3. **Water clearance is a hard floor for train track**, not a target. The spec puts "never lower than 8 m above any water surface" in the desired profile, but averaging the two envelopes then left a train about halfway up to it over a river. Over-water samples below the clearance are pinned to it. Metro is exempt, since it passes under water.
+4. **Motorway clearance tries the nearer side, then above, then below** before refusing. The spec says "whichever is nearer". A nearer side that cannot be reached within the grade would otherwise refuse a crossing that the other side could make.
+5. **Structure runs over water and at motorway crossings are protected from the 60 m merge.** A 28 m river was being merged into its banks, so the track crossed it at grade, and a short metro motorway bridge would have flickered back to a level crossing.
+6. **Lakes and rivers now count as water for the grade rule**, from the OSM water polygons. Before, only the sea counted, because the elevation data shows a river as dry ground at water level. This applies to off-road tram segments too: a tram dragged across a river now gets a bridge. Trams do not get the hard 8 m floor; their segments are short, and the spec's tram rule is unchanged.
+7. **An at-grade crossing takes the structure of the nearer of its two samples.** "At grade" for the road rules means that sample's classification; a ramp sample 5 m up counts as at grade.
+8. **"Running along a road" counts samples, at 20 m each**, across *any* road's corridor. With the spec's corridor widths, a square crossing of the widest road holds two samples (40 m, allowed) and so does a 45° one, so the 40 m limit catches running along a road without ever catching a legal crossing. The 45° limit has a 1e-6° tolerance, because a diagonal across a street grid is 45° give or take float error.
+9. **No exemption at the ends for rail.** Phase 3's 25 m street lead-in exists because off-road tram segments start on a street. Rail track never does.
+10. **Stations snap to the nearest 20 m sample**, not a projected point. That is at most 10 m out, invisible at any zoom where clicking works, and it gives every station a stable graph node (`"t3:41"`) that survives a reload.
+11. **Clicking existing track ends the draft there and builds it**, the way closing a loop finishes a line in Mini Metro. The exception is the track you started from, within 90 m of the start: drawing away from a track, the first waypoint is inevitably still near it.
+12. **A blocked track is refused and the draft is kept.** **Backspace** takes back the last waypoint, which is the only way to reroute around a blocked stretch without starting over. Esc discards the draft. Switching mode or tool discards it too, since nothing about it has been paid for.
+13. **Junction snap is 30 m, or 10 px when zoomed out further.** Missing a junction by a few metres silently makes a dead end that looks connected, so the snap is generous.
+14. **Rail lines pay nothing for track.** Track is bought with Build track and maintained on its own (1.5%/yr, 25% off with OSM rail), whether or not a line runs on it. Bulldozing refunds half, and is refused while a station or a line still uses the track.
+15. **Rail lines cannot be dragged.** They follow their track; there is nothing to drag them to.
+
+### Fixed on the way — three bugs from earlier phases
+
+1. **The right-hand panel could never close.** `.panel { display: flex }` overrode the `hidden` attribute, so the × button, Esc and bulldozing all left it on screen, showing a stop that no longer existed. One global `[hidden] { display: none !important }`; the browser suite now asserts the panel closes, and fails without the rule.
+2. **No click ever selected a line.** The line panel (vehicles +/−, colour, delete) was unreachable in the UI since Phase 2; the tests reached it through the model. Edit stops now selects stops, lines and track.
+3. **Ids could collide after loading a save on a fresh page.** The id counter starts at 1 per page and stops, lines and track share it, so a save's ids run past its object count. The first stop built after loading could reuse a live id and silently merge two stops in every Map keyed by id. `reserveIds` in [model/network.js](model/network.js) now bumps the counter past everything loaded. The test reproduces a fresh page and fails without the fix.
+
+### Known gaps
+
+- **Junctions are only made at the ends of new track.** New track drawn across existing track crosses it without connecting, and a rail-on-rail crossing at grade is neither refused nor drawn as a diamond.
+- **Track cannot be edited**, only bulldozed (if unused) and redrawn.
+- **Lines sharing only part of their track are not offset side by side.** Bundling still keys on a whole segment's ends and length, which works for buses on the same road between the same stops and not for two rail lines that share half a route.
+- **The profile strip sits bottom centre over the map**, and while drawing near the bottom of the screen it hides the track being drawn. Pan, or move it, if it gets in the way.
+- **Existing OSM rail is not yet usable track**; that is Phase 6. The rail-and-roads rules also ignore it, so new track crossing OSM rail is not treated as a crossing.
+- **A track whose junction partner is bulldozed becomes a dead end there**, keeping its stored end height. Correct, but nothing tells the player.
+- **The fixture is a hard place to build rail**, and that is intended: of 1,753 straight probes across it, 63 are buildable. The rest are refused for buildings, for running along the 200 m street grid, or as too steep. The tests use alignments found by search, robust to ±10 m so that browser clicks reproduce them.
+
+### Where to test it live
+
+The survey below was done before Phase 4, to choose where rail should be tried against real data. It still stands.
+
 
 **Alex's call, and the numbers back it.** Rail cannot cross buildings, so testing track building in a dense city means almost every alignment is blocked before the geometry is exercised at all. Surveyed with [tools/probe-railtest.js](tools/probe-railtest.js) over 5 km boxes:
 
@@ -411,3 +471,22 @@ Three traps, all measured rather than assumed:
 - **Most of the Peloponnese network is dead-tagged.** The system largely closed in 2011 and much of it is `railway=disused` or `abandoned`, which `isDeadRail` in [data/overpass.js](data/overpass.js) correctly rejects. "Near existing rail" on a map is not the same as rail the importer will keep — Zevgolatio (22.820, 37.970) looks railway-adjacent and returns **zero** usable rail ways. The north-coast Proastiakos line is the live one.
 - **`REGION.SIZE_KM_MIN` is 5, so a 1×1 km region is not currently possible.** The slider minimum would have to drop first. A 5 km rural box is already sparse enough to draw freely, so this is only worth changing if a tighter box is actually wanted for iteration speed. Note that `npm run test:live -- --km 1` would not silently lie about it: the HTML range input clamps to 5 and the test's `size set to N km` assertion fails, which is the right failure but a confusing message.
 - **Rural means almost no demand.** Kiato returns 45 buildings across 25 km², so residents and attraction will be close to nothing and no one will ride the line. That is fine for testing track geometry, the grade rule and crossings, and useless for testing whether a rail line earns money. Those need Corinth or Athens.
+
+---
+
+## 11. Phase 5 — full economy (next)
+
+Seasonal profiles, coverage subsidies, loans, all four difficulty levels, Hard's game over, the fare slider, the finance panel.
+
+**Accept when:** a Tourist region visibly swells in August; Hard on a small island supports a bus line or two and little more; Creative never limits money.
+
+**Already in place**, so this phase is mostly UI and verification:
+
+1. **Seasonal multipliers** are applied to trip generation in `sim/demand.js`, and `tests/phase2.js` already asserts Tourist swells in August.
+2. **The coverage subsidy** is computed daily in `Economy.endDay`, capped at running costs, from `DIFFICULTY[*].subsidyShare`.
+3. **Difficulty rules** (`DIFFICULTY` in [config.js](config.js)) drive starting capital, patience, fare evasion, build-blocking when negative and Hard's 12-month game over. `economy.gameOver` is checked every tick and `showGameOver` in [main.js](main.js) puts up the calm ending.
+4. **`economy.fareMultiplier`** exists, is saved, scales tickets and feeds the demand model's elasticity. **There is no slider for it yet.**
+5. **Loans are configured** (`LOANS` in config — 3/6/12 years at 4/6/9%, Alex's decision C4) **but not implemented**: no state, no repayment, no UI. That is the main build.
+6. **The finance panel** exists with monthly income and expenses by category, but no loans view.
+
+**Watch out for:** maintenance now includes metro and train track, which dwarfs everything else once rail is built. A 2.7 km tunnelled train track costs €4.2M a year to keep before a single train runs. Hard's balance will feel that, which is probably right, but check it against the "a bus line or two on a small island" criterion before retuning anything else.

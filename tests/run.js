@@ -28,6 +28,7 @@ import {
 } from '../render/basemap.js';
 import { runPhase2Tests } from './phase2.js';
 import { runPhase3Tests } from './phase3.js';
+import { runPhase4Tests } from './phase4.js';
 
 let passed = 0;
 const failures = [];
@@ -578,6 +579,7 @@ check('some contours are major', region.contours.features.some((f) => f.properti
 
 runPhase2Tests(check, near);
 runPhase3Tests(check, near);
+runPhase4Tests(check, near);
 
 // ─── report ───────────────────────────────────────────────────────────────────
 

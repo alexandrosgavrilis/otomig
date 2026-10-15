@@ -342,9 +342,12 @@ try {
   check('Tram is enabled now that Phase 3 has shipped',
     await page.evaluate(() =>
       document.querySelector('#tb-modes button[data-mode="tram"]')?.disabled) === false);
-  check('later-phase modes are visibly disabled, not missing',
-    await page.evaluate(() => ['metro', 'train'].every((m) =>
-      document.querySelector(`#tb-modes button[data-mode="${m}"]`)?.disabled)) === true);
+  check('every mode is enabled now that Phase 4 has shipped',
+    await page.evaluate(() => ['bus', 'tram', 'metro', 'train'].every((m) =>
+      document.querySelector(`#tb-modes button[data-mode="${m}"]`)?.disabled === false)) === true);
+  check('Build track is disabled for a bus — it rides on roads that exist',
+    await page.evaluate(() =>
+      document.querySelector('#tb-tools button[data-tool="buildTrack"]')?.disabled) === true);
 
   // Three stops along a street, clear of the fixture's bay.
   await clickAt(1600, 2800);
@@ -685,6 +688,199 @@ try {
     });
     check('the off-road track is actually drawn on the overlay', painted > 0,
       `${painted} opaque samples`);
+  }
+
+  // ─── Phase 4: rail track, stations and lines on track ──────────────────────
+  // Everything here goes through the real toolbar, keyboard and map clicks:
+  // the waypoint clicks, Enter, the double-click and the station clicks are
+  // the parts of rail building that no headless test reaches.
+  {
+    await page.evaluate(() => {
+      const game = window.otomig.game;
+      for (const line of [...game.network.lines.values()]) game.bulldoze(line);
+      for (const stop of [...game.network.stops.values()]) game.bulldoze(stop);
+      game.economy.balance = 1e12;
+      game.selection = null;
+      const [w, s, e, n] = window.otomig.region.meta.bbox;
+      window.otomig.map.fitBounds([[w, s], [e, n]], { padding: 30, duration: 0 });
+    });
+    await page.waitForTimeout(500);
+
+    const screenOf = (x, y) => page.evaluate(([lx, ly]) => {
+      const p = window.otomig.map.project(window.otomig.frame.toLonLat(lx, ly));
+      return { x: p.x, y: p.y };
+    }, [x, y]);
+
+    await page.keyboard.press('4');
+    check('4 selects Train', await page.evaluate(() =>
+      document.querySelector('#tb-modes button[data-mode="train"]')?.classList.contains('on')));
+    check('Build track is enabled for a train', await page.evaluate(() =>
+      document.querySelector('#tb-tools button[data-tool="buildTrack"]')?.disabled) === false);
+    await page.click('#tb-tools button[data-tool="buildTrack"]');
+    check('the Build track hint shows', await page.isVisible('#tb-hint'));
+
+    // Across the river and through the ridge: the same alignment the logic
+    // suite proves gets a bridge and a tunnel, chosen because it survives
+    // being nudged by the few metres a pixel is worth at this zoom.
+    await clickAt(1900, 1000);
+    const end = await screenOf(700, 3400);
+    const start = await screenOf(1900, 1000);
+    for (let step = 1; step <= 5; step++) {
+      await page.mouse.move(start.x + (end.x - start.x) * step / 5,
+        start.y + (end.y - start.y) * step / 5);
+      await page.waitForTimeout(40);
+    }
+    await page.waitForTimeout(150);
+    const preview = await page.evaluate(() => {
+      const draft = window.otomig.game.trackDraft;
+      const profile = document.querySelector('#profile');
+      const canvas = profile?.querySelector('canvas');
+      let inked = 0;
+      if (canvas) {
+        const { data } = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+        for (let i = 3; i < data.length; i += 4 * 11) if (data[i] > 20) inked++;
+      }
+      return {
+        has: Boolean(draft?.preview),
+        kinds: draft?.preview ? [...new Set(draft.preview.kinds)] : [],
+        profileShown: profile ? !profile.hidden : false,
+        profileText: profile?.querySelector('.profile-meta')?.textContent || '',
+        inked,
+        built: window.otomig.game.network.tracks.size,
+      };
+    });
+    check('moving the cursor previews the track before anything is built',
+      preview.has && preview.built === 0, JSON.stringify(preview.kinds));
+    check('the preview is coloured by structure: it already knows the tunnel and the bridge',
+      preview.kinds.includes('tunnel') && preview.kinds.includes('bridge'), preview.kinds.join());
+    check('ACCEPTANCE: the height-profile strip shows what is being built',
+      preview.profileShown && preview.inked > 50, `${preview.inked} inked`);
+    check('…with the running cost under it', /€/.test(preview.profileText), preview.profileText);
+    await page.screenshot({ path: join(SHOTS, '12-track-preview.png') });
+
+    const balanceBefore = await page.evaluate(() => window.otomig.game.economy.balance);
+    await clickAt(700, 3400);
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(150);
+    const trainTrack = await page.evaluate((before) => {
+      const game = window.otomig.game;
+      const track = [...game.network.tracks.values()][0];
+      return track ? {
+        kinds: [...new Set(track.kinds)], mode: track.mode,
+        paid: before - game.economy.balance, cost: track.cost,
+        draftGone: game.trackDraft === null,
+      } : null;
+    }, balanceBefore);
+    check('Enter builds the track', trainTrack !== null && trainTrack.draftGone);
+    check('ACCEPTANCE: train track on hilly ground got a tunnel and a bridge by itself',
+      trainTrack?.kinds.includes('tunnel') && trainTrack?.kinds.includes('bridge'),
+      trainTrack?.kinds.join());
+    check('…and the player paid for exactly that', trainTrack && trainTrack.paid === trainTrack.cost);
+
+    check('the panel closes once its selection is gone',
+      await page.evaluate(() => !document.querySelector('.panel')?.checkVisibility()));
+
+    // Metro on flat land, then a metro branch off the train track finished
+    // with a double-click.
+    await page.keyboard.press('3');
+    check('Build track stays selected when switching to Metro', await page.evaluate(() =>
+      document.querySelector('#tb-tools button[data-tool="buildTrack"]')?.classList.contains('on')));
+    await clickAt(4200, 600);
+    await clickAt(5200, 900);
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(150);
+    const flatMetro = await page.evaluate(() => {
+      const metro = [...window.otomig.game.network.tracks.values()].find((t) => t.mode === 'metro');
+      return metro ? [...new Set(metro.kinds)].join() : null;
+    });
+    check('ACCEPTANCE: metro track on flat land stays underground', flatMetro === 'tunnel',
+      flatMetro);
+
+    await clickAt(1300, 2200);
+    await clickAt(3200, 1200);
+    const last = await screenOf(4300, 650);
+    await page.mouse.dblclick(last.x, last.y);
+    await page.waitForTimeout(200);
+    const metroTrack = await page.evaluate(() => {
+      const tracks = [...window.otomig.game.network.tracks.values()];
+      const metro = tracks.filter((t) => t.mode === 'metro')[1];
+      return metro ? { start: metro.start, firstKind: metro.kinds[0],
+        joined: metro.start?.trackId === tracks[0].id } : null;
+    });
+    check('a double-click builds metro track', metroTrack !== null);
+    check('…joined to the train track it was started on', metroTrack?.joined === true,
+      JSON.stringify(metroTrack?.start));
+    check('…leaving it underground, where the train track is in its tunnel',
+      metroTrack?.firstKind === 'tunnel', metroTrack?.firstKind);
+
+    // A metro line on the train track, placed by clicking stations.
+    await page.click('#tb-tools button[data-tool="newLine"]');
+    await clickAt(1540, 1720);
+    await clickAt(1000, 2800);
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(150);
+    const metroLine = await page.evaluate(() => {
+      const line = [...window.otomig.game.network.lines.values()].find((l) => l.mode === 'metro');
+      return line ? { stops: line.stops.length, onTrack: line.segments.every((s) => s.onTrack),
+        vehicles: line.vehicles.length,
+        on: line.segments[0]?.tracks } : null;
+    });
+    check('ACCEPTANCE: a metro line runs on train track',
+      metroLine?.stops === 2 && metroLine.onTrack && metroLine.vehicles === 1,
+      JSON.stringify(metroLine));
+
+    // A train station clicked onto the metro track is refused, out loud.
+    await page.keyboard.press('4');
+    const onMetro = await page.evaluate(() => {
+      const metro = [...window.otomig.game.network.tracks.values()].filter((t) => t.mode === 'metro')[1];
+      const [lon, lat] = metro.points[Math.floor(metro.points.length / 2)];
+      return window.otomig.frame.toLocal(lon, lat);
+    });
+    await clickAt(onMetro[0], onMetro[1]);
+    await page.waitForTimeout(100);
+    const refusal = await page.evaluate(() => ({
+      text: document.querySelector('.feedback')?.textContent || '',
+      trainLines: [...window.otomig.game.network.lines.values()]
+        .filter((l) => l.mode === 'train' && l.stops.length > 0).length,
+    }));
+    check('ACCEPTANCE: a train line is refused on metro track, with a message',
+      /metro track/i.test(refusal.text) && refusal.trainLines === 0, refusal.text);
+    await page.keyboard.press('Escape');
+
+    // Run the sim and watch the metro move along its train track.
+    const moved = await page.evaluate(async () => {
+      const game = window.otomig.game;
+      const line = [...game.network.lines.values()].find((l) => l.mode === 'metro');
+      const vehicle = line.vehicles[0];
+      const before = [vehicle.lon, vehicle.lat];
+      game.clock.setSpeedIndex(3);
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      return Math.hypot(vehicle.lon - before[0], vehicle.lat - before[1]) > 1e-5;
+    });
+    check('the metro vehicle moves along the track in the browser', moved);
+
+    // Select the bare metro track with Edit stops: the panel and the profile
+    // both describe it.
+    await page.click('#tb-tools button[data-tool="editStops"]');
+    await clickAt(onMetro[0], onMetro[1]);
+    await page.waitForTimeout(150);
+    const selected = await page.evaluate(() => ({
+      panel: document.querySelector('.panel h3')?.textContent || '',
+      profile: !document.querySelector('#profile')?.hidden,
+    }));
+    check('Edit stops selects bare track and opens its panel', /track/i.test(selected.panel),
+      selected.panel);
+    check('…and the profile strip shows the selected track', selected.profile);
+
+    // Close in on the stretch where the metro line runs on train track, so
+    // the screenshot shows bare track, structures and level crossings.
+    await page.evaluate(() => {
+      const [w, s] = window.otomig.frame.toLonLat(700, 800);
+      const [e, n] = window.otomig.frame.toLonLat(2500, 2900);
+      window.otomig.map.fitBounds([[w, s], [e, n]], { padding: 40, duration: 0 });
+    });
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: join(SHOTS, '13-rail.png') });
   }
 
   // ─── Nothing threw ────────────────────────────────────────────────────────

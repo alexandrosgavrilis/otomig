@@ -6,9 +6,10 @@
  * building, as the spec requires — so a misplaced click opens a panel rather
  * than silently extending a line.
  *
- * Bus and Tram are enabled. Metro and Train are present but disabled until
- * Phase 4, because a dead button that says "Metro" tells the player the plan;
- * a missing one tells them nothing.
+ * All four modes are enabled. **Build track** is the one tool that belongs to
+ * only some of them: metro and train are built in two steps — track first,
+ * then lines on it — so the tool is disabled for bus and tram, which ride on
+ * roads that already exist.
  *
  * **Dragging a segment** is the one gesture that is not a click. Press on the
  * line between two stops, drag, release: for a bus that forces a different
@@ -18,12 +19,12 @@
  */
 
 import { STRINGS } from './strings.js';
-import { MODES, COSTS } from '../config.js';
+import { MODES, COSTS, BUILD } from '../config.js';
 import { formatMoney } from '../sim/economy.js';
 
-/** Tools available in Phase 2. Build track arrives with rail in Phase 4. */
-export const TOOLS = ['newLine', 'extendLine', 'editStops', 'bulldoze'];
-const ENABLED_MODES = ['bus', 'tram'];
+export const TOOLS = ['newLine', 'extendLine', 'editStops', 'buildTrack', 'bulldoze'];
+const MODE_LIST = ['bus', 'tram', 'metro', 'train'];
+const RAIL_MODES = ['metro', 'train'];
 
 export function mountToolbar(root, game, { onChange, onToggleLayer }) {
   const state = {
@@ -36,9 +37,8 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
   root.innerHTML = `
     <div class="toolbar">
       <div class="group" id="tb-modes">
-        ${['bus', 'tram', 'metro', 'train'].map((mode, index) => `
+        ${MODE_LIST.map((mode, index) => `
           <button type="button" data-mode="${mode}"
-            ${ENABLED_MODES.includes(mode) ? '' : 'disabled title="Arrives in a later phase"'}
             class="${mode === state.mode ? 'on' : ''}">
             <span class="key">${index + 1}</span> ${STRINGS.toolbar[mode]}
           </button>`).join('')}
@@ -49,6 +49,7 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
           <button type="button" data-tool="${tool}"
             class="${tool === state.tool ? 'on' : ''}">${STRINGS.toolbar[tool]}</button>`).join('')}
       </div>
+      <div class="hint" id="tb-hint" hidden>${STRINGS.build.trackHint}</div>
       <hr />
       <div class="group">
         <button type="button" id="t-heat">${STRINGS.toolbar.heatMap}</button>
@@ -61,6 +62,8 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
 
   const modes = root.querySelector('#tb-modes');
   const tools = root.querySelector('#tb-tools');
+  const hint = root.querySelector('#tb-hint');
+  syncTools();
 
   modes.addEventListener('click', (event) => {
     const button = event.target.closest('button[data-mode]:not(:disabled)');
@@ -69,34 +72,53 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
   });
 
   tools.addEventListener('click', (event) => {
-    const button = event.target.closest('button[data-tool]');
+    const button = event.target.closest('button[data-tool]:not(:disabled)');
     if (!button) return;
     setTool(button.dataset.tool);
   });
 
   function setMode(mode) {
-    if (!ENABLED_MODES.includes(mode)) return;
+    if (!MODE_LIST.includes(mode)) return;
     state.mode = mode;
     cancelDraft();
     for (const button of modes.querySelectorAll('button')) {
       button.classList.toggle('on', button.dataset.mode === mode);
     }
+    // Build track means nothing for a bus or a tram.
+    if (state.tool === 'buildTrack' && !RAIL_MODES.includes(mode)) state.tool = 'newLine';
+    syncTools();
     onChange?.(state);
   }
 
   function setTool(tool) {
+    if (tool === 'buildTrack' && !RAIL_MODES.includes(state.mode)) return;
     state.tool = tool;
     cancelDraft();
-    for (const button of tools.querySelectorAll('button')) {
-      button.classList.toggle('on', button.dataset.tool === tool);
-    }
+    syncTools();
     onChange?.(state);
   }
 
+  function syncTools() {
+    for (const button of tools.querySelectorAll('button')) {
+      button.classList.toggle('on', button.dataset.tool === state.tool);
+      if (button.dataset.tool === 'buildTrack') {
+        button.disabled = !RAIL_MODES.includes(state.mode);
+        button.title = button.disabled ? STRINGS.errors.trackOnlyRail : '';
+      }
+    }
+    hint.hidden = state.tool !== 'buildTrack';
+  }
+
+  /**
+   * Esc, or switching mode or tool. A line being drawn is kept as far as it
+   * got, as in Mini Metro; track being drawn is discarded, because nothing
+   * about it has been built or paid for yet.
+   */
   function cancelDraft() {
     if (game.draft) {
       game.finishDraft();
     }
+    game.cancelTrack();
     state.extendTarget = null;
   }
 
@@ -129,6 +151,16 @@ export function wireMapInteraction(map, game, toolbar, { onFeedback, onSelect })
   map.on('click', (event) => {
     const { lng: lon, lat } = event.lngLat;
 
+    // Building track: every click is a waypoint, or a junction when it lands
+    // on existing track. Nothing is selected, because stations sit on track
+    // and clicking one is how a branch is started from it.
+    if (state.tool === 'buildTrack') {
+      if (!game.trackDraft) game.startTrack(state.mode);
+      const result = game.addTrackPoint(lon, lat, junctionSnapM(map));
+      reportTrack(result, event.point);
+      return;
+    }
+
     // Clicking an existing object always selects it rather than building —
     // except while drawing, where clicking a stop is how you route through it.
     const hitStop = game.network.stopNear(lon, lat, pixelsToMetres(map, 12));
@@ -152,24 +184,48 @@ export function wireMapInteraction(map, game, toolbar, { onFeedback, onSelect })
       const result = game.extendDraft(lon, lat);
       if (result.error) onFeedback?.(errorText(result.error), event.point);
     } else if (state.tool === 'bulldoze') {
-      const target = hitStop || nearestLine(game, lon, lat, pixelsToMetres(map, 10));
-      if (target) game.bulldoze(target);
-      else onFeedback?.(STRINGS.errors.nothingThere, event.point);
+      const reach = pixelsToMetres(map, 10);
+      const target = hitStop || nearestLine(game, lon, lat, reach)
+        || game.network.trackNear(lon, lat, reach);
+      const result = game.bulldoze(target);
+      if (result?.error) onFeedback?.(errorText(result.error), event.point);
     } else if (state.tool === 'editStops') {
-      if (hitStop) { game.selection = hitStop; onSelect?.(hitStop); }
+      // Select whatever is under the cursor: a stop first, then a line, then
+      // bare track. This is the one place a line or a track can be clicked
+      // without building something.
+      const reach = pixelsToMetres(map, 10);
+      const target = hitStop || nearestLine(game, lon, lat, reach)
+        || game.network.trackNear(lon, lat, reach);
+      game.selection = target || null;
+      onSelect?.(target);
     }
   });
 
+  function reportTrack(result, point) {
+    if (result.error) onFeedback?.(errorText(result.error), point);
+    else if (result.track) {
+      onFeedback?.(`${STRINGS.build.trackBuilt} ${formatMoney(result.cost)}`, point);
+    }
+  }
+
   // The rubber band follows the cursor while drawing.
   map.on('mousemove', (event) => {
-    if (!game.draft) return;
     const { lng: lon, lat } = event.lngLat;
+    // Track being drawn re-plans on every move, so the structures, the cost
+    // and anything blocking it are live before a waypoint is placed.
+    if (game.trackDraft) game.previewTrack(lon, lat, junctionSnapM(map));
+    if (!game.draft) return;
     game.draft.cursor = [lon, lat];
-    game.draft.valid = Boolean(game.roadIndex.snap(lon, lat, game.draft.line.mode));
+    game.draft.valid = game.canPlaceStop(lon, lat, game.draft.line.mode);
   });
 
   // Double-click or Enter finishes a line, Esc cancels — as in Mini Metro.
   map.on('dblclick', (event) => {
+    if (game.trackDraft) {
+      event.preventDefault();
+      reportTrack(game.finishTrack(), event.point);
+      return;
+    }
     if (!game.draft) return;
     event.preventDefault();
     game.finishDraft();
@@ -182,7 +238,8 @@ export function wireMapInteraction(map, game, toolbar, { onFeedback, onSelect })
   // dedicated track. MapLibre's own drag-pan has to be suspended for the
   // duration, or the map slides out from under the gesture.
   map.on('mousedown', (event) => {
-    if (game.draft || state.tool === 'bulldoze') return;
+    if (game.draft || game.trackDraft) return;
+    if (state.tool === 'bulldoze' || state.tool === 'buildTrack') return;
     const { lng: lon, lat } = event.lngLat;
     const hit = segmentAt(game, lon, lat, pixelsToMetres(map, 10));
     if (!hit) return;
@@ -237,6 +294,8 @@ export function segmentAt(game, lon, lat, maxDistM) {
   let best = null;
   let bestDist = maxDistM;
   for (const line of game.network.lines.values()) {
+    // A metro or train line follows its track; there is nothing to drag it to.
+    if (RAIL_MODES.includes(line.mode)) continue;
     line.segments.forEach((segment, index) => {
       // On a loop the final segment closes back to the first stop.
       const fromId = line.stops[index];
@@ -249,6 +308,15 @@ export function segmentAt(game, lon, lat, maxDistM) {
     });
   }
   return best;
+}
+
+/**
+ * How near existing track a Build track click must be to join it: the
+ * configured distance, or ten pixels when zoomed out so far that the
+ * configured distance is smaller than the cursor.
+ */
+function junctionSnapM(map) {
+  return Math.max(BUILD.JUNCTION_SNAP_M, pixelsToMetres(map, 10));
 }
 
 /** Approximate ground metres for a screen-pixel radius at the current zoom. */

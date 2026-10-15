@@ -183,6 +183,13 @@ export class Economy {
       const discount = isRail && hasOsmRail ? 1 - COSTS.OSM_RAIL_DISCOUNT : 1;
       total += line.trackCost * COSTS.MAINTENANCE_RATE * discount;
     }
+    // Metro and train track, from Phase 4. It belongs to no line — it is
+    // built first and lines are drawn on it — so it is charged on its own,
+    // whether anything runs on it or not. Bare track still has to be kept.
+    for (const track of network.tracks?.values() ?? []) {
+      const discount = hasOsmRail ? 1 - COSTS.OSM_RAIL_DISCOUNT : 1;
+      total += track.cost * COSTS.MAINTENANCE_RATE * discount;
+    }
     return total;
   }
 

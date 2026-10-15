@@ -318,6 +318,12 @@ export function offsetPolyline(points, offset) {
  *     carrying the track over whatever is below.
  *   - **at grade** — the plain line.
  *
+ * **Metro is the inverse**, as the spec asks: underground is a metro's normal
+ * state, so its tunnels are drawn in the plain colour and anything overground
+ * — at grade or on a bridge — is brightened toward white
+ * (`RENDER.METRO_SURFACE_LIGHTEN`). A metro line surfacing across a valley
+ * therefore lights up exactly where it leaves the ground.
+ *
  * `points` and `kinds` are parallel: the grade rule samples every
  * `BUILD.SAMPLE_M`, and each sample carries its own classification.
  *
@@ -326,8 +332,9 @@ export function offsetPolyline(points, offset) {
  * @param {string[]} kinds one of 'atGrade' | 'tunnel' | 'bridge' per point
  * @param {string} color the line colour
  * @param {number} width
+ * @param {string} [mode] the line's mode; 'metro' inverts the colouring
  */
-export function drawTrackStructure(ctx, points, kinds, color, width) {
+export function drawTrackStructure(ctx, points, kinds, color, width, mode = null) {
   if (points.length < 2) return;
   if (!kinds || kinds.length !== points.length) {
     strokePath(ctx, points, color, width);
@@ -347,7 +354,10 @@ export function drawTrackStructure(ctx, points, kinds, color, width) {
   for (const run of contiguousRuns(kinds)) {
     // Overlap by one point so consecutive runs join without a seam.
     const slice = points.slice(run.start, run.end + 2);
-    if (run.kind === 'tunnel') {
+    if (mode === 'metro') {
+      strokePath(ctx, slice, run.kind === 'tunnel'
+        ? color : shade(color, RENDER.METRO_SURFACE_LIGHTEN), width);
+    } else if (run.kind === 'tunnel') {
       ctx.globalAlpha = 0.55;
       strokePath(ctx, slice, shade(color, -RENDER.TUNNEL_DARKEN), width * 0.8);
       ctx.globalAlpha = 1;
@@ -366,6 +376,142 @@ function contiguousRuns(kinds) {
     else runs.at(-1).end = i;
   }
   return runs;
+}
+
+/**
+ * Bare track: built, whether or not a line runs on it. Thin grey, as the spec
+ * asks; train track carries sleeper ticks and metro track is plain, so the
+ * two kinds read apart before any line is drawn on them.
+ *
+ * Tunnels are drawn dashed and faint — the track is there, but under the
+ * ground — and bridges get a thin casing so a viaduct reads as one.
+ *
+ * @param {Array<[number,number]>} points screen coordinates
+ * @param {string[]} kinds per-point structure
+ * @param {'metro'|'train'} mode
+ * @param {number} width
+ */
+export function drawBareTrack(ctx, points, kinds, mode, width) {
+  if (points.length < 2) return;
+  ctx.save();
+  for (const run of contiguousRuns(kinds)) {
+    const slice = points.slice(run.start, run.end + 2);
+    if (run.kind === 'tunnel') {
+      ctx.setLineDash([width * 2.5, width * 2]);
+      ctx.globalAlpha = 0.6;
+      strokePath(ctx, slice, COLORS.bareTrack, width);
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+      continue;
+    }
+    if (run.kind === 'bridge') strokePath(ctx, slice, COLORS.sleeper, width * 2.6);
+    if (run.kind === 'bridge') strokePath(ctx, slice, '#FFFFFF', width * 1.6);
+    strokePath(ctx, slice, COLORS.bareTrack, width);
+    if (mode === 'train') drawSleepers(ctx, slice, width * 2.2);
+  }
+  ctx.restore();
+}
+
+/** Short ticks across a polyline at a fixed screen spacing. */
+function drawSleepers(ctx, points, length) {
+  ctx.save();
+  ctx.strokeStyle = COLORS.sleeper;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  let carry = RENDER.SLEEPER_SPACING_PX / 2;
+  for (let i = 1; i < points.length; i++) {
+    const [x1, y1] = points[i - 1];
+    const [x2, y2] = points[i];
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const span = Math.hypot(dx, dy);
+    if (span === 0) continue;
+    const nx = (-dy / span) * length / 2;
+    const ny = (dx / span) * length / 2;
+    for (let d = carry; d < span; d += RENDER.SLEEPER_SPACING_PX) {
+      const x = x1 + dx * (d / span);
+      const y = y1 + dy * (d / span);
+      ctx.moveTo(x - nx, y - ny);
+      ctx.lineTo(x + nx, y + ny);
+    }
+    carry = (carry - span) % RENDER.SLEEPER_SPACING_PX;
+    if (carry < 0) carry += RENDER.SLEEPER_SPACING_PX;
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+/**
+ * A level crossing: a small striped bar laid across the road, like the
+ * barrier it stands for. Drawn along the road, so it sits across the track.
+ *
+ * @param {number} angle the road's direction on screen, radians
+ */
+export function drawLevelCrossing(ctx, x, y, angle, size) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  const length = size * 2.4;
+  const height = size * 0.9;
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(-length / 2, -height / 2, length, height);
+  ctx.fillStyle = COLORS.blocked;
+  const stripes = 4;
+  for (let i = 0; i < stripes; i += 2) {
+    ctx.fillRect(-length / 2 + (length / stripes) * i, -height / 2, length / stripes, height);
+  }
+  ctx.strokeStyle = COLORS.stopStroke;
+  ctx.lineWidth = 0.8;
+  ctx.strokeRect(-length / 2, -height / 2, length, height);
+  ctx.restore();
+}
+
+/**
+ * Track being drawn with the Build track tool, coloured by structure — at
+ * grade, tunnel, bridge — with anything blocked in red, as the spec asks.
+ * Nothing about it is built yet, so it is dashed like every other preview.
+ *
+ * @param {Array<[number,number]>} points screen coordinates
+ * @param {string[]} kinds per-point structure, may be empty when refused outright
+ * @param {Set<number>} blocked indices of blocked samples
+ * @param {number} width
+ */
+export function drawTrackPreview(ctx, points, kinds, blocked, width) {
+  if (points.length < 2) return;
+  ctx.save();
+  ctx.setLineDash([width * 1.6, width * 1.0]);
+  if (!kinds || kinds.length !== points.length) {
+    strokePath(ctx, points, COLORS.blocked, width);
+    ctx.restore();
+    return;
+  }
+  // Paint by run of (structure, blocked), so a blocked stretch inside a bridge
+  // still shows red.
+  const keys = kinds.map((kind, i) => (blocked.has(i) ? 'blocked' : kind));
+  for (const run of contiguousRuns(keys)) {
+    const slice = points.slice(run.start, run.end + 2);
+    const color = run.kind === 'blocked' ? COLORS.blocked : COLORS.structure[run.kind];
+    if (run.kind === 'bridge') {
+      ctx.setLineDash([]);
+      strokePath(ctx, slice, '#FFFFFF', width * 1.9);
+      ctx.setLineDash([width * 1.6, width * 1.0]);
+    }
+    strokePath(ctx, slice, color, run.kind === 'tunnel' ? width * 0.8 : width);
+  }
+  ctx.restore();
+}
+
+/** A waypoint of track being drawn: a small hollow square, not a stop. */
+export function drawWaypoint(ctx, x, y, joined = false) {
+  ctx.save();
+  ctx.fillStyle = joined ? COLORS.stopStroke : '#FFFFFF';
+  ctx.strokeStyle = COLORS.stopStroke;
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.rect(x - 3.5, y - 3.5, 7, 7);
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
 }
 
 /**
