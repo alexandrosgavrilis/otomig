@@ -529,11 +529,25 @@ Seasonal profiles, coverage subsidies, loans, all four difficulty levels, Hard's
 
 Alex's questions after the Kiato trial, answered with measurements. Two need his decision (marked **Decide**).
 
-### 1. Why Kiato has 45 buildings when rural Lefkada has thousands
+### 1. Why Kiato has 45 buildings when Lefkada has thousands
 
-**It is OSM, not the importer.** Asked directly, Overpass has exactly 45 `way["building"]` and no building relations in Kiato's 5 km box, and the import got all 45. Lefkada town's box has 4,856, on a street network of the same size (423 residential roads against Kiato's 446).
+**It is OSM, not the importer.** Asked directly, Overpass has exactly 45 `way["building"]` and no building relations in Kiato's 5 km box, and the import got all 45.
 
-**Lefkada's buildings were imported, not hand-mapped.** 3,096 of Lefkada town's 3,974 buildings (78%) were created by one account, *Cascafico*, in 2022, and 96% are still at version 1. That account's changesets over Lefkada include three of 10,000, 10,000 and 629 changes on 26 May 2022, and one of 4,793 on 14 June 2022, all commented **"buildings supervised import"** with source **Microsoft GlobalMLBuildingFootprints** and Maxar imagery. The OSM wiki's import page for that dataset names Lefkada and Preveza as its quality-test areas, and records no wider Greek import. So Lefkada is the exception, and **most of Greece outside the cities is probably like Kiato**: roads well mapped, buildings barely.
+**What "Lefkada" means here — measured in boxes, not as a place name.** Every Lefkada figure below is labelled with its box. The first answer to this question compared Kiato against *Lefkada town* only, and gave the town's population against a box that also holds villages; Alex caught the mix-up, and it is corrected here.
+
+| 5 km box unless stated | buildings | from the 2022 bulk import | residential roads |
+| --- | --- | --- | --- |
+| Kiato | 45 | 0 | 446 |
+| Lefkada town | 4,856 | 3,941 (81%) | 423 |
+| Lefkada island (bbox 20.54–20.73 E, 38.56–38.86 N) | 9,243 | 6,051 (65%) | 1,558 |
+| rural Lefkada — Karya | **93** | 0 | 122 |
+| rural Lefkada — west coast, Agios Nikitas to Kalamitsi | **280** | 0 | 45 |
+| Nidri | 322 | 63 (20%) | 143 |
+| Vasiliki | 131 | 0 | 69 |
+
+**Only Lefkada *town* is well mapped; rural Lefkada is as sparse as Kiato.** Over half the island's buildings are in the town box, and four out of five of those came from one bulk import.
+
+**The town's buildings were imported, not hand-mapped.** In a 3.5 × 3.3 km box over the town centre, 3,096 of 3,974 buildings (78%) were created by one account, *Cascafico*, in 2022, and 96% are still at version 1. That account's changesets over Lefkada include three of 10,000, 10,000 and 629 changes on 26 May 2022, and one of 4,793 on 14 June 2022, all commented **"buildings supervised import"** with source **Microsoft GlobalMLBuildingFootprints** and Maxar imagery. The OSM wiki's import page for that dataset names Lefkada and Preveza as its quality-test areas, and records no wider Greek import. So Lefkada town is the exception, and **most of Greece outside the cities is probably like Kiato and rural Lefkada**: roads well mapped, buildings barely.
 
 This matters because buildings are the whole population model. Residents are floor area ÷ 40 m², so a region without buildings has no residents and no demand.
 
@@ -541,26 +555,26 @@ This matters because buildings are the whole population model. Residents are flo
 
 The spec says "No fallback for areas with poor building coverage: OSM is good enough." Kiato shows that is not true for much of Greece. Measured with [tools/probe-overture-buildings.js](tools/probe-overture-buildings.js):
 
-| | buildings in the 5 km box | residents by our model | real population |
+| 5 km box | buildings | residents by our model | real population |
 | --- | --- | --- | --- |
-| Kiato, OSM | 45 | 1,336 | ~11,100 (OSM `place` tags: Kiato 9,907, Kato Dimini 1,198) |
+| Kiato, OSM | 45 | 1,336 | ~11,100 by OSM `place` tags (Kiato 9,907, Kato Dimini 1,198, Kokkinia 44) |
 | Kiato, OSM + Overture's Microsoft footprints | 6,926 | **~53,900** | same |
-| Lefkada, OSM | 4,838 | **~36,000** | 8,673 (OSM `place` tag) |
+| Lefkada town, OSM | 4,838 | **~36,000** | ~9,300–11,000: the town alone was 9,253 at the 2021 census, and the box adds a few villages; the municipal unit, larger than the box, was 13,540 |
 
 **Overture Maps fills the gap.** Its buildings theme merges OSM with Microsoft's and Google's ML footprints (OSM wins where both exist). It is published as one PMTiles archive on public S3 that answers range requests with `Access-Control-Allow-Origin: *`. A browser can therefore read just the tiles over a region with no key and no server: 13 tiles, 54 requests, about 2 MB for Kiato. It is ODbL, the same as OSM, and needs "Overture Maps Foundation" in the attribution line. The release path changes; the latest is named in `https://stac.overturemaps.org/catalog.json`.
 
-**But footprints alone overshoot about 4×, and so does a fully mapped Lefkada.** ML footprints carry no category, levels or height, so every one counts as a 2-level home. That includes farm sheds and greenhouses: 23% are under 40 m², and the median is 113 m². And the 40 m² × 2 levels calibration was made on central Athens apartment blocks. In a Greek town, holiday homes, storage and farm buildings are counted as homes too. **Getting *where* people live right does not get *how many* right. That needs a total.**
+**But footprints alone overshoot about 4×, and a fully mapped Lefkada town overshoots about 3.3–3.9×.** ML footprints carry no category, levels or height, so every one counts as a 2-level home. That includes farm sheds and greenhouses: 23% are under 40 m², and the median is 113 m². And the 40 m² × 2 levels calibration was made on central Athens apartment blocks. In a Greek town, holiday homes, storage and farm buildings are counted as homes too. **Getting *where* people live right does not get *how many* right. That needs a total.**
 
 The options, cheapest first:
 
 | | what | effort | changes the spec? |
 | --- | --- | --- | --- |
-| **A** | Read OSM `place` nodes' `population` in the main query (no extra request), and scale residents to the sum of the places inside the box. The scaling mechanism already exists for Nominatim's figure. | small | no — the spec already allows a population total |
+| **A** | Read OSM `place` nodes' `population` in the main query (no extra request), and scale residents to the sum of the places inside the box. The scaling mechanism already exists for Nominatim's figure. **Caveats, measured:** the tags can be a census out of date (Lefkada town is tagged 8,673; the 2021 census says 9,253); most villages carry no tag at all (none of rural Lefkada's do); and a place near the box edge brings its whole population with it. "Plausible, not accurate" covers the first; the other two need a rule — for instance, scale only the cells near tagged places and leave the rest at the building estimate. | small | no — the spec already allows a population total |
 | **B** | Warn on the new-game screen when buildings are sparse for the road network. Kiato has 0.1 buildings per residential road; Lefkada has 11. | small | no |
 | **C** | Where OSM has no buildings, take Overture's ML footprints as unclassified homes (default levels, residential). They give *where*; A gives *how many*. Categories and attraction still come from OSM. | a session: PMTiles reader, MVT decode (both already prototyped), clipped-polygon handling | yes — it adds a fallback the spec rules out, and a second data source |
 | **D** | The spec's "typed by the player" population field, never built. | small | no |
 
-**Recommendation: A and B now, C as its own task if Alex wants it.** A alone fixes the *count* everywhere, including Lefkada's 4× overshoot. With C as well, the *distribution* is right in unmapped places too. Without C, Kiato's 11,000 people would all live in its 45 mapped buildings. C also brings back the tile machinery Phase R decided against for buildings. The objection then was that tiles lack building categories, which does not apply to a gap-filler, but the clipped-at-tile-edge geometry objection still does.
+**Recommendation: A and B now, C as its own task if Alex wants it.** A alone fixes the *count* wherever places are tagged, including Lefkada town's overshoot. With C as well, the *distribution* is right in unmapped places too. Without C, Kiato's 11,000 people would all live in its 45 mapped buildings. C also brings back the tile machinery Phase R decided against for buildings. The objection then was that tiles lack building categories, which does not apply to a gap-filler, but the clipped-at-tile-edge geometry objection still does.
 
 ### 3. What "motorway crossing" means, exactly
 
