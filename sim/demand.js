@@ -64,6 +64,11 @@ export class DemandModel {
      */
     this.satisfaction = new Map();
 
+    /** Ordered stop pairs the network connects, from the last rebuild. */
+    this.connected = new Set();
+    /** `flows()` merged and sorted, until the next rebuild. */
+    this.sortedFlows = null;
+
     /** Per-cell unserved demand, 0..1, for the heat map. */
     this.unserved = new Array(region.demand.cols * region.demand.rows).fill(0);
 
@@ -167,6 +172,8 @@ export class DemandModel {
    */
   buildPairTable(month, fareMultiplier) {
     this.pairRate.clear();
+    this.connected = new Set();
+    this.sortedFlows = null;
     const stops = [...this.network.stops.values()];
     if (stops.length < 2) return;
 
@@ -175,6 +182,7 @@ export class DemandModel {
 
     const { cols, rows, cellM, attraction } = this.region.demand;
     const connected = this.connectedPairs();
+    this.connected = connected;
 
     for (const from of stops) {
       const totals = this.stopTotals.get(from.id);
@@ -325,6 +333,56 @@ export class DemandModel {
       for (let i = 0; i < dots; i++) born.push({ fromId, toId });
     }
     return born;
+  }
+
+  /**
+   * Where people arriving at a stop from outside the region want to go:
+   * every stop the network connects it to, weighted like ordinary trips by
+   * attraction and distance. Used for intercity arrivals.
+   * @returns {Array<{toId:string, weight:number}>}
+   */
+  destinationsFrom(fromId) {
+    const from = this.network.stops.get(fromId);
+    if (!from) return [];
+    const result = [];
+    for (const to of this.network.stops.values()) {
+      if (to.id === fromId || !this.connected.has(pairKey(fromId, to.id))) continue;
+      const attraction = this.stopTotals.get(to.id)?.attraction ?? 0;
+      const weight = attraction * decay(this.frame.distance(from.lon, from.lat, to.lon, to.lat));
+      if (weight > 0) result.push({ toId: to.id, weight });
+    }
+    return result;
+  }
+
+  /**
+   * People a day wanting to travel between each pair of stops, both
+   * directions together, busiest first: what the Flows layer draws. Only
+   * pairs the network connects carry any demand, so every flow is a trip the
+   * player's network can make — including the rare ones that only produce a
+   * dot every few minutes.
+   *
+   * @param {number} [limit]
+   * @returns {Array<{a:string, b:string, perDay:number}>}
+   */
+  flows(limit = Infinity) {
+    // The overlay asks every frame; the answer only changes with the table.
+    if (!this.sortedFlows) this.sortedFlows = this.mergeFlows();
+    return this.sortedFlows.slice(0, limit);
+  }
+
+  mergeFlows() {
+    const perSimSecondToPerDay = CLOCK.DAILY_SCALE * Clock.simSecondsPerDay;
+    const merged = new Map();
+    for (const [key, rate] of this.pairRate) {
+      if (!(rate > 0)) continue;
+      const [from, to] = key.split('|');
+      const [a, b] = from < to ? [from, to] : [to, from];
+      const pair = `${a}|${b}`;
+      const flow = merged.get(pair) || { a, b, perDay: 0 };
+      flow.perDay += rate * perSimSecondToPerDay;
+      merged.set(pair, flow);
+    }
+    return [...merged.values()].sort((x, y) => y.perDay - x.perDay);
   }
 
   /** A passenger gave up: knock this pair's satisfaction down. */

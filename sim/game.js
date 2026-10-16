@@ -6,17 +6,21 @@
  * one thing to pass around and exactly one thing to serialise.
  */
 
-import { CLOCK, COSTS, MODES, BUILD, passengersPerDot, baselineResidents } from '../config.js';
+import {
+  CLOCK, COSTS, MODES, BUILD, passengersPerDot, baselineResidents,
+} from '../config.js';
 import { LocalFrame } from '../model/region.js';
 import { Network, Stop, Line, Track, reserveIds } from '../model/network.js';
 import { RoadIndex } from '../build/road-routing.js';
 import { buildTrack, onStreetCost } from '../build/track-geometry.js';
+import { osmRailTracks } from '../build/osm-rail.js';
 import { Clock } from './clock.js';
 import { DemandModel } from './demand.js';
 import { Router } from './routing.js';
 import { Vehicle, stepVehicle, respaceVehicles } from './vehicles.js';
 import { stepPassengers, spawnDots, revalidateDots } from './passengers.js';
 import { Economy } from './economy.js';
+import { stepIntercity } from './intercity.js';
 
 export class Game {
   /** @param {import('../model/region.js').Region} region */
@@ -27,6 +31,8 @@ export class Game {
 
     this.roadIndex = new RoadIndex(region.roads, this.frame);
     this.network = new Network(this.roadIndex, this.frame, region);
+    // Existing railways are ready-made train track from the start (Phase 6).
+    this.network.addOsmRail(osmRailTracks(region, this.frame));
     this.clock = new Clock();
     this.router = new Router(this.network);
     this.demand = new DemandModel(region, this.frame, this.network);
@@ -37,11 +43,13 @@ export class Game {
     // Both fixed at the start from the year-round population the profile
     // implies, not the raw building count: Kiato's buildings come to ~50,000
     // residents as Urban and ~18,000 as Countryside, and it is capitalised
-    // accordingly.
+    // and dotted accordingly.
     this.passengersPerDot = passengersPerDot(baselineResidents(region.meta));
     this.economy = new Economy(this.difficulty, baselineResidents(region.meta),
       this.passengersPerDot);
 
+    /** Whether the Flows layer is drawn. A view setting, never saved. */
+    this.showFlows = false;
     /** Currently selected object (stop or line), for the right-hand panel. */
     this.selection = null;
     /** In-progress line drawing: { line, cursor, valid }. */
@@ -132,6 +140,7 @@ export class Game {
       }
 
       this.totals.spawned += spawnDots(this, simSeconds);
+      stepIntercity(this, simSeconds);
       const stats = stepPassengers(this, simSeconds);
       this.totals.boarded += stats.boarded;
       this.totals.arrived += stats.arrived;
@@ -474,11 +483,38 @@ export class Game {
     this.trackDraft = null;
   }
 
+  /**
+   * Switch intercity service on or off at a station on existing rail. Free:
+   * the trains belong to someone else, and the station is already paid for.
+   * @returns {{ok:true, on:boolean}|{error:string}}
+   */
+  toggleIntercity(stop) {
+    if (!stop || !this.network.onOsmRail(stop)) return { error: 'intercityNeedsRail' };
+    stop.intercity = !stop.intercity;
+    return { ok: true, on: stop.intercity };
+  }
+
+  /**
+   * Set how many people a dot stands for, everywhere that converts between
+   * the two. Only ever called at the start of a game or when loading one: a
+   * dot that changed meaning mid-game would make every count on screen lie.
+   */
+  setDotSize(people) {
+    this.passengersPerDot = people;
+    this.demand.passengersPerDot = people;
+    this.economy.passengersPerDot = people;
+    for (const line of this.network.lines.values()) {
+      for (const vehicle of line.vehicles) vehicle.dotSize = people;
+    }
+  }
+
   /** Buy a vehicle for a line. @returns {boolean} */
   addVehicle(line, direction = 0) {
     if (line.vehicles.length >= line.maxVehicles) return false;
     if (!this.economy.spend(COSTS.VEHICLE[line.mode], 'construction')) return false;
-    line.vehicles.push(new Vehicle(line, line.loop ? direction : 0));
+    const vehicle = new Vehicle(line, line.loop ? direction : 0);
+    vehicle.dotSize = this.passengersPerDot;
+    line.vehicles.push(vehicle);
     respaceVehicles(line);
     this.invalidate();
     return true;
@@ -564,13 +600,18 @@ export class Game {
       // Track is saved as the player drew it — waypoints, junctions, end
       // heights and what was paid — and its geometry rebuilt on load, so a
       // save stays a few kilobytes however much track there is.
-      tracks: [...this.network.tracks.values()].map((track) => ({
+      // Existing railways are not saved: they are rebuilt from the region.
+      tracks: [...this.network.tracks.values()].filter((track) => !track.osm).map((track) => ({
         id: track.id, mode: track.mode, control: track.control,
         start: track.start, end: track.end, pins: track.pins, cost: track.cost,
       })),
       stops: [...this.network.stops.values()].map((stop) => ({
         id: stop.id, mode: stop.mode, lon: stop.lon, lat: stop.lat,
         node: stop.node, name: stop.name, lines: stop.lines, structure: stop.structure,
+        ...(stop.intercity || stop.intercityCalls ? {
+          intercity: stop.intercity, intercityTimer: stop.intercityTimer,
+          intercityCarry: stop.intercityCarry, intercityCalls: stop.intercityCalls,
+        } : {}),
       })),
       lines: [...this.network.lines.values()].map((line) => ({
         id: line.id, mode: line.mode, color: line.color, stops: line.stops,
@@ -601,6 +642,9 @@ export class Game {
     game.clock = Clock.fromJSON(data.clock);
     game.economy = Economy.fromJSON(data.economy);
     game.demand.loadJSON(data.demand);
+    // The dot keeps the size it had when the game began, even if the rule for
+    // choosing it has changed since.
+    game.setDotSize(game.economy.passengersPerDot);
 
     // Track first, in the order it was built, because lines route over it.
     for (const saved of data.tracks || []) {
@@ -619,6 +663,10 @@ export class Game {
         saved.structure);
       stop.id = saved.id;
       stop.lines = saved.lines;
+      stop.intercity = Boolean(saved.intercity);
+      stop.intercityTimer = saved.intercityTimer || 0;
+      stop.intercityCarry = saved.intercityCarry || 0;
+      stop.intercityCalls = saved.intercityCalls || 0;
       game.network.stops.set(stop.id, stop);
     }
 
@@ -641,6 +689,7 @@ export class Game {
         vehicle.hop = savedVehicle.hop;
         vehicle.progress = savedVehicle.progress;
         vehicle.dwellRemaining = savedVehicle.dwellRemaining;
+        vehicle.dotSize = game.passengersPerDot;
         line.vehicles.push(vehicle);
       }
     }

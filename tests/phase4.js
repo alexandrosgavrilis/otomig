@@ -50,6 +50,9 @@ function richGame() {
  * Draw track the way the player does — waypoint clicks, then Enter — in local
  * metres. Returns the built track, or the refusal.
  */
+/** Track the player built: existing railways are track from the start. */
+const playerTracks = (game) => [...game.network.tracks.values()].filter((t) => !t.osm).length;
+
 function drawTrack(game, mode, points) {
   game.startTrack(mode);
   let result = { ok: true };
@@ -340,7 +343,7 @@ export function runPhase4Tests(check, near) {
     check('the game refuses to build a blocked track', refused.error === 'alongRoad',
       JSON.stringify(refused));
     check('…and charges nothing for it', game.economy.balance === balance);
-    check('…and builds nothing', game.network.tracks.size === 0);
+    check('…and builds nothing', playerTracks(game) === 0);
   }
 
   // ─── The Build track gestures ─────────────────────────────────────────────
@@ -362,7 +365,7 @@ export function runPhase4Tests(check, near) {
     check('the cursor previews the track before it is placed',
       preview && preview.kinds.length > 1 && Number.isFinite(preview.cost));
     check('…without building or charging anything',
-      game.network.tracks.size === 0 && game.economy.balance === 1e12);
+      playerTracks(game) === 0 && game.economy.balance === 1e12);
     game.cancelTrack();
     check('Esc throws the draft away', game.trackDraft === null);
 

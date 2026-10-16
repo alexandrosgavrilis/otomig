@@ -7,16 +7,23 @@
  * operation. Tickets are counted as they are earned during the day and scaled
  * once, at the day boundary.
  *
- * Phase 2 covers tickets, advertising, vehicle running costs and maintenance.
- * Subsidies, loans and the fare slider's full economy arrive in Phase 5; the
- * subsidy is already wired here because coverage is the one number Phase 2
- * makes meaningful.
+ * Loans are the one piece of borrowed money. Taking one credits the
+ * `loans` category and every instalment debits it, so the ledger's rows always
+ * add up to the change in the balance — "why did my balance jump?" has an
+ * answer on the panel.
  */
 
-import { INCOME, COSTS, DIFFICULTY, CLOCK } from '../config.js';
+import { INCOME, COSTS, DIFFICULTY, CLOCK, LOANS } from '../config.js';
 
-/** The categories the finance panel reports, in display order. */
-export const CATEGORIES = ['tickets', 'advertising', 'subsidy', 'running', 'maintenance'];
+/**
+ * The categories the finance panel reports, in display order. Construction and
+ * loans are listed so the rows add up to the month's net; before Phase 5 the
+ * panel left construction out and its rows did not sum to the total under them.
+ */
+export const CATEGORIES = [
+  'tickets', 'intercity', 'advertising', 'subsidy', 'running', 'maintenance',
+  'construction', 'loans',
+];
 
 export class Economy {
   /**
@@ -35,7 +42,7 @@ export class Economy {
     this.startingCapital = this.balance;
 
     /** Running totals for the day in progress, in raw (unscaled) counts. */
-    this.today = { firstBoardings: 0, trips: 0 };
+    this.today = { firstBoardings: 0, trips: 0, intercity: 0 };
     /** Euro totals for the month in progress, by category. */
     this.month = blankLedger();
     /** Last completed month, for the top bar's "last month" figure. */
@@ -48,6 +55,13 @@ export class Economy {
     this.gameOver = false;
 
     this.fareMultiplier = 1;
+
+    /**
+     * Loans taken and not yet repaid, at most one per slot.
+     * @type {Array<{slot:string, amount:number, interest:number, termYears:number,
+     *   payment:number, outstanding:number, monthsLeft:number, fresh:boolean}>}
+     */
+    this.loans = [];
   }
 
   get rules() { return DIFFICULTY[this.difficulty]; }
@@ -71,7 +85,8 @@ export class Economy {
   /** Bulldozing or selling returns half, in every mode. */
   refund(constructionCost) {
     const amount = constructionCost * COSTS.REFUND_RATE;
-    if (!this.unlimited) this.balance += amount;
+    // Booked against construction, so the ledger still sums to the balance.
+    this.credit('construction', amount);
     return amount;
   }
 
@@ -82,6 +97,15 @@ export class Economy {
   recordTick({ firstBoardings, arrived }) {
     this.today.firstBoardings += firstBoardings;
     this.today.trips += arrived;
+  }
+
+  /**
+   * An intercity call: one ticket per passenger aboard, in PEOPLE rather than
+   * dots, since the passengers aboard are never drawn. Scaled at day end like
+   * every other daily total.
+   */
+  recordIntercity(passengers) {
+    this.today.intercity = (this.today.intercity ?? 0) + passengers;
   }
 
   /**
@@ -107,6 +131,8 @@ export class Economy {
 
     this.transported += trips;
     this.credit('tickets', tickets);
+    this.credit('intercity',
+      (this.today.intercity ?? 0) * CLOCK.DAILY_SCALE * INCOME.FARE * this.fareMultiplier);
     this.credit('advertising', advertising);
 
     // Costs accrue daily; the panel reports them monthly.
@@ -123,11 +149,14 @@ export class Economy {
     const subsidy = Math.min(runningPerDay, runningPerDay * share * coverageFraction);
     this.credit('subsidy', subsidy);
 
-    this.today = { firstBoardings: 0, trips: 0 };
+    this.today = { firstBoardings: 0, trips: 0, intercity: 0 };
   }
 
-  /** Close out a month: roll the ledger and advance Hard's game-over clock. */
+  /** Close out a month: pay instalments, roll the ledger, advance Hard's clock. */
   endMonth() {
+    // Instalments land in the month they are paid for, before it is rolled.
+    this.payInstalments();
+
     this.lastMonth = this.month;
     this.month = blankLedger();
 
@@ -149,6 +178,108 @@ export class Economy {
     if (!(amount > 0)) return;
     if (!this.unlimited) this.balance -= amount;
     this.month[category] = (this.month[category] ?? 0) - amount;
+  }
+
+  /** Set the ticket price multiplier, clamped to the slider's range. */
+  setFareMultiplier(multiplier) {
+    const value = Number(multiplier);
+    if (!Number.isFinite(value)) return this.fareMultiplier;
+    this.fareMultiplier = Math.min(INCOME.FARE_MULTIPLIER_MAX,
+      Math.max(INCOME.FARE_MULTIPLIER_MIN, value));
+    return this.fareMultiplier;
+  }
+
+  // ─── Loans ────────────────────────────────────────────────────────────────
+
+  /** May this game borrow at all? Never in Creative, whose money has no end. */
+  get canBorrow() {
+    return !this.unlimited && Boolean(this.rules.loans);
+  }
+
+  /**
+   * What a slot would lend, on what terms. Sized from the starting capital, so
+   * a small island's loans are small too.
+   */
+  loanOffer(slot) {
+    const terms = LOANS.find((loan) => loan.slot === slot);
+    if (!terms || !Number.isFinite(this.startingCapital)) return null;
+    const amount = Math.round(this.startingCapital * terms.fraction);
+    const months = terms.termYears * 12;
+    return {
+      slot, amount, interest: terms.interest, termYears: terms.termYears,
+      payment: monthlyPayment(amount, terms.interest, months),
+    };
+  }
+
+  /** The active loan in a slot, if any. */
+  loanIn(slot) {
+    return this.loans.find((loan) => loan.slot === slot) || null;
+  }
+
+  /**
+   * Borrow. Allowed with a negative balance — that is when a loan is most
+   * needed, and on Hard it is the way out of the game-over countdown.
+   * @returns {{ok:true, loan:object}|{error:string}}
+   */
+  takeLoan(slot) {
+    if (!this.canBorrow) return { error: 'noLoans' };
+    if (this.loanIn(slot)) return { error: 'loanTaken' };
+    const offer = this.loanOffer(slot);
+    if (!offer || offer.amount <= 0) return { error: 'noLoans' };
+
+    const loan = {
+      ...offer,
+      outstanding: offer.amount,
+      monthsLeft: offer.termYears * 12,
+      // No instalment is due at the end of the month the money arrived in:
+      // borrowing on the 29th should not cost a payment on the 30th.
+      fresh: true,
+    };
+    this.loans.push(loan);
+    this.credit('loans', offer.amount);
+    return { ok: true, loan };
+  }
+
+  /**
+   * Repay a loan in full, early. No penalty: the outstanding principal is all
+   * that is owed, so repaying early simply saves the interest still to come.
+   * It needs the money in hand, like anything else bought.
+   * @returns {{ok:true, paid:number}|{error:string}}
+   */
+  repayLoan(slot) {
+    const loan = this.loanIn(slot);
+    if (!loan) return { error: 'noLoan' };
+    if (this.balance < loan.outstanding) return { error: 'cannotAfford' };
+    const paid = loan.outstanding;
+    this.debit('loans', paid);
+    this.loans = this.loans.filter((other) => other !== loan);
+    return { ok: true, paid };
+  }
+
+  /**
+   * The monthly instalment on every loan: interest on what is outstanding,
+   * and the rest off the principal. Charged whatever the balance — a debt is
+   * owed whether or not there is money for it, which is exactly what makes a
+   * large loan a risk on Hard.
+   */
+  payInstalments() {
+    for (const loan of this.loans) {
+      if (loan.fresh) { loan.fresh = false; continue; }
+      const interest = loan.outstanding * loan.interest / 12;
+      // The last instalment clears whatever rounding has left behind.
+      const payment = loan.monthsLeft <= 1
+        ? loan.outstanding + interest
+        : Math.min(loan.payment, loan.outstanding + interest);
+      this.debit('loans', payment);
+      loan.outstanding = Math.max(0, loan.outstanding + interest - payment);
+      loan.monthsLeft--;
+    }
+    this.loans = this.loans.filter((loan) => loan.monthsLeft > 0 && loan.outstanding > 0.005);
+  }
+
+  /** Everything still owed, principal only. */
+  get debt() {
+    return this.loans.reduce((total, loan) => total + loan.outstanding, 0);
   }
 
   /** Every vehicle's annual running cost. */
@@ -187,6 +318,8 @@ export class Economy {
     // built first and lines are drawn on it — so it is charged on its own,
     // whether anything runs on it or not. Bare track still has to be kept.
     for (const track of network.tracks?.values() ?? []) {
+      // Existing railways are kept by whoever owns them, never by the player.
+      if (track.osm) continue;
       const discount = hasOsmRail ? 1 - COSTS.OSM_RAIL_DISCOUNT : 1;
       total += track.cost * COSTS.MAINTENANCE_RATE * discount;
     }
@@ -210,6 +343,7 @@ export class Economy {
       month: this.month, lastMonth: this.lastMonth, transported: this.transported,
       negativeMonths: this.negativeMonths, gameOver: this.gameOver,
       fareMultiplier: this.fareMultiplier,
+      loans: this.loans,
     };
   }
 
@@ -217,8 +351,27 @@ export class Economy {
     const economy = new Economy(data.difficulty, 0, data.passengersPerDot ?? 10);
     Object.assign(economy, data);
     economy.unlimited = DIFFICULTY[data.difficulty].unlimitedMoney;
+    // JSON has no Infinity: Creative's balance and capital come back as null.
+    if (economy.unlimited) {
+      economy.balance = Infinity;
+      economy.startingCapital = Infinity;
+    }
+    economy.loans = (data.loans || []).map((loan) => ({ ...loan }));
+    economy.month = { ...blankLedger(), ...data.month };
+    economy.lastMonth = { ...blankLedger(), ...data.lastMonth };
     return economy;
   }
+}
+
+/**
+ * The fixed instalment that repays `amount` over `months` at an annual rate,
+ * interest charged monthly on what is outstanding — an ordinary annuity.
+ */
+export function monthlyPayment(amount, annualRate, months) {
+  if (months <= 0) return amount;
+  const rate = annualRate / 12;
+  if (rate === 0) return amount / months;
+  return amount * rate / (1 - (1 + rate) ** -months);
 }
 
 function blankLedger() {

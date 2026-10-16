@@ -16,7 +16,7 @@ import { dirname, join } from 'node:path';
 
 import {
   CLOCK, COSTS, DIFFICULTY, MODES, VEHICLES, DEMAND, PATIENCE, LOANS,
-  passengersPerDot, buildingChunkCount,
+  passengersPerDot, buildingChunkCount, baselineResidents,
   ROUTING,
 } from '../config.js';
 import { LocalFrame, reviveRegion } from '../model/region.js';
@@ -673,12 +673,17 @@ export function runPhase2Tests(check, near) {
     // show an unreadable swarm.
     check('a village or town shows one passenger per dot',
       passengersPerDot(2000) === 1 && passengersPerDot(40000) === 1);
-    check('a small city still shows one per dot', passengersPerDot(120000) === 1);
-    check('a large city scales up', passengersPerDot(500000) === 5);
-    check('a million-person region matches the spec\'s original 10',
-      passengersPerDot(1000000) === 10);
-    check('a metropolis is capped so dots stay readable',
-      passengersPerDot(50000000) === DEMAND.PASSENGERS_PER_DOT_MAX);
+    check('…and so does any place too small to pass the visible-dot target',
+      passengersPerDot(DEMAND.VISIBLE_DOTS_TARGET * 1000 / DEMAND.VISIBLE_DOTS_PER_1000_RESIDENTS) === 1);
+    check('a city grows the dot so it stays near the target',
+      passengersPerDot(120000) === 2 && passengersPerDot(500000) === 8,
+      `${passengersPerDot(120000)}, ${passengersPerDot(500000)}`);
+    check('a metropolis is capped so a dot still fits in a bus',
+      passengersPerDot(50000000) === DEMAND.PASSENGERS_PER_DOT_MAX
+      && DEMAND.PASSENGERS_PER_DOT_MAX <= Math.min(...Object.values(MODES).map((m) => m.capacity)));
+    check('below the cap, a well-built network never shows more than the target',
+      [70e3, 250e3, 1e6, 2.5e6].every((r) => r * DEMAND.VISIBLE_DOTS_PER_1000_RESIDENTS / 1000
+        / passengersPerDot(r) <= DEMAND.VISIBLE_DOTS_TARGET));
     check('the scale is never zero or fractional', [0, 1, 999, 1e9].every((r) => {
       const p = passengersPerDot(r);
       return Number.isInteger(p) && p >= 1;
@@ -692,6 +697,14 @@ export function runPhase2Tests(check, near) {
       }
       return true;
     })());
+    {
+      // Lefkada town as Tourist, from HANDOFF §13: 14,935 in its quietest
+      // month, so ~29,900 year-round and ~75,000 in August. Sized for August
+      // it got two people per dot; a town that size must get one.
+      const lefkada = { populationTotal: 33456, season: 'tourist', center: [20.7, 38.8] };
+      near('Lefkada town as Tourist holds ~30,000 year-round', baselineResidents(lefkada), 29870, 100);
+      check('…and gets one person per dot', passengersPerDot(baselineResidents(lefkada)) === 1);
+    }
 
     // The whole point: a town must actually produce visible dots.
     const town = newGame('creative');
@@ -712,9 +725,7 @@ export function runPhase2Tests(check, near) {
       return tickets / Math.max(1, game.economy.transported);
     };
     const scaled = newGame('creative');
-    scaled.passengersPerDot = 10;
-    scaled.economy.passengersPerDot = 10;
-    scaled.demand.passengersPerDot = 10;
+    scaled.setDotSize(10);
     buildLine(scaled, [
       at(scaled, 1600, 2800), at(scaled, 2600, 2800), at(scaled, 3400, 2800),
     ]);

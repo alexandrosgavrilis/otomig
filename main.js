@@ -6,22 +6,24 @@
  * frame slows nothing down and a fast monitor speeds nothing up.
  */
 
-import { ATTRIBUTION } from './config.js';
+import { ATTRIBUTION, PLAYABLE_MODES } from './config.js';
 import { reviveRegion } from './model/region.js';
 import { regionKey as makeRegionKey } from './data/cache.js';
 import { createMap, setLayerVisible, setHeatMapData } from './render/basemap.js';
 import {
   Overlay, regionBoundaryPainter, linesPainter, interchangesPainter,
   stopsPainter, vehiclesPainter, draftPainter, tracksPainter, trackDraftPainter,
-  levelCrossingsPainter,
+  levelCrossingsPainter, flowsPainter,
 } from './render/overlay.js';
 import { mountProfile } from './render/profile.js';
 import { Game } from './sim/game.js';
 import { autosave, saveGame, loadGame, exportSaveFile, importSaveFile } from './model/save.js';
 import { mountNewGame } from './ui/new-game.js';
-import { mountHud } from './ui/hud.js';
+import { mountHud, mountLegend } from './ui/hud.js';
 import { mountToolbar, wireMapInteraction } from './ui/toolbar.js';
 import { mountPanels } from './ui/panels.js';
+import { mountTuning } from './ui/tuning.js';
+import { applyOverrides, loadSaved } from './sim/tuning.js';
 import { STRINGS } from './ui/strings.js';
 
 const app = document.getElementById('app');
@@ -30,6 +32,9 @@ mountNewGame(app, (region) => startGame(region));
 /** @param {import('./model/region.js').Region} region */
 function startGame(region) {
   reviveRegion(region);
+  // Play-testing overrides from the tuning panel, kept from the last session.
+  // Applied before the game exists, so its first demand table uses them.
+  applyOverrides(null, loadSaved());
   const game = new Game(region);
   const regionKey = makeRegionKey(region.meta.center[0], region.meta.center[1], region.meta.sizeKm);
 
@@ -41,6 +46,8 @@ function startGame(region) {
       <div id="toolbar"></div>
       <div id="panels"></div>
       <div id="profile"></div>
+      <div id="tuning"></div>
+      <div id="legend"></div>
       <div class="saves" id="saves">
         <button type="button" id="s-finances">${STRINGS.toolbar.finances}</button>
         <button type="button" id="s-save">${STRINGS.saves.save}</button>
@@ -56,9 +63,13 @@ function startGame(region) {
 
   const map = createMap(document.getElementById('map'), region, game.frame);
   const hud = mountHud(document.getElementById('hud'), game);
+  const legend = mountLegend(document.getElementById('legend'), game);
   const panels = mountPanels(document.getElementById('panels'), game, {
     onChange: () => hud.update(),
   });
+
+  const tuning = mountTuning(document.getElementById('tuning'),
+    document.getElementById('saves'), game);
 
   const profile = mountProfile(document.getElementById('profile'), game);
   game.onTick(() => profile.update());
@@ -82,6 +93,7 @@ function startGame(region) {
     const overlay = new Overlay(document.getElementById('overlay'), map);
     overlay.painters.push(
       regionBoundaryPainter(region.meta.bbox),
+      flowsPainter(game),
       tracksPainter(game),
       linesPainter(game),
       levelCrossingsPainter(game),
@@ -102,7 +114,7 @@ function startGame(region) {
   });
 
   wireSaveButtons(game, regionKey, panels, hud);
-  wireKeyboard(game, toolbar, panels, hud, (message) => showFeedback(message));
+  wireKeyboard(game, toolbar, panels, hud, tuning, (message) => showFeedback(message));
 
   // Keep the heat map honest as coverage changes.
   let lastHeatVersion = -1;
@@ -120,15 +132,16 @@ function startGame(region) {
     autosave(game, regionKey);
   });
 
-  // The panel follows the selection every tick while there is one — and once
-  // more when it goes away, however it went: bulldozed from the map, Esc, or
-  // deleted from its own panel. Without that last render a bulldozed stop
-  // stayed on screen in a panel of its own.
-  let shownSelection = null;
+  // The panel follows the game every tick: a selection re-renders, the
+  // finances rewrite their figures, and a selection that went away — however
+  // it went: bulldozed from the map, Esc, or deleted from its own panel —
+  // hides the panel. Without that a bulldozed stop stayed on screen in a
+  // panel of its own.
   game.onTick(() => {
     hud.update();
-    if (game.selection || shownSelection) panels.render();
-    shownSelection = game.selection;
+    legend.update();
+    panels.update();
+    tuning.update();
     if (game.economy.gameOver) showGameOver(game);
   });
 
@@ -147,14 +160,17 @@ function startGame(region) {
  * 1–4 pick modes, Space pauses, Esc cancels, Delete removes the selection,
  * Enter finishes. While track is being drawn, Backspace takes back the last
  * waypoint instead — the only way to reroute around something blocking it
- * without starting again.
+ * without starting again. ` opens the play-testing panel.
  */
-function wireKeyboard(game, toolbar, panels, hud, feedback) {
+function wireKeyboard(game, toolbar, panels, hud, tuning, feedback) {
   window.addEventListener('keydown', (event) => {
     if (event.target instanceof HTMLInputElement) return;
+    if (event.target instanceof HTMLTextAreaElement) return;
 
-    if (event.key >= '1' && event.key <= '4') {
-      toolbar.setMode(['bus', 'tram', 'metro', 'train'][Number(event.key) - 1]);
+    if (event.code === 'Backquote') {
+      tuning.toggle();
+    } else if (/^[1-9]$/.test(event.key) && Number(event.key) <= PLAYABLE_MODES.length) {
+      toolbar.setMode(PLAYABLE_MODES[Number(event.key) - 1]);
     } else if (event.code === 'Space') {
       event.preventDefault();
       game.clock.togglePause();

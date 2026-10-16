@@ -2,9 +2,10 @@
 
 Read this first in every session. Update it last.
 
-**State:** Phases 0, 1, 2, R, Q, 3 and **4** complete. Rail is in: track built with the Build track tool, the full grade rule, the rail-and-roads rules, stations, metro and train lines on track, and the height-profile strip. Every Phase 4 acceptance criterion is asserted in code (§10).
-**Last session:** Oct 15–16, 2026 — Phase 4 (rail), a real-data trial at Kiato (§10), and the decisions it led to: lines sharing stops (§12), buildings filled in from Overture, population set by the seasonal profile, and a transfer penalty on every change of vehicle (§13).
-**Earlier:** Oct 10, 2026 — Phase 0 (research), Phase 1 (region and map), Phase 2 (buses and passengers), Phase R (data architecture), first live import, Phase Q (query restructure), Phase 3 (trams).
+**State:** Phases 0–4, R, Q, **5 and 6** complete — every phase of the build plan is in. Phase 5: loans, the fare slider and a full finance panel (§11). Phase 6: existing OSM railways are free, ready-made train track, and stations on them can switch on intercity service (§14). There is also a **play-testing panel on the ` key** that tunes passenger behaviour and money live (§15). Every acceptance criterion is asserted in code; the economic half of "Hard on a small island" is measured on a real island, and holds since timetables (§15, §16).
+**Last session:** Oct 16, 2026 (evening and night) — Phase 5, Phase 6 with intercity, the tuning panel, a fix for panel buttons that could lose clicks (§11), a balance measurement on Poros (§15), then Alex's decisions on what a dot means: capacity in people, a dot sized to cap what is drawn, a legend, timetables, a Flows layer, and groundwork for ferries (§16, §17).
+**Before that:** Oct 15–16, 2026 — Phase 4 (rail), a real-data trial at Kiato (§10), lines sharing stops (§12), buildings filled in from Overture, population set by the seasonal profile, and a transfer penalty on every change of vehicle (§13).
+**Earlier still:** Oct 10, 2026 — Phase 0 (research), Phase 1 (region and map), Phase 2 (buses and passengers), Phase R (data architecture), first live import, Phase Q (query restructure), Phase 3 (trams).
 
 **Phase R is done, and it cancelled Phase D.** See [RESEARCH_TILES.md](RESEARCH_TILES.md).
 
@@ -21,7 +22,9 @@ The region comes out identical — same 51,700 buildings and 502,376 residents f
 
 | | |
 | --- | --- |
-| **Next** | **The last build session before Alex play-tests: Phase 5 (full economy), then Phase 6 (existing OSM rail) if it fits.** Phase 5 is mostly UI over plumbing that exists — loans are the one real build (§11). Phase 6 makes imported railways usable track; Phase 4's track graph was built so OSM rail can join it as train track (§10). After that: Alex's play-test, then bug fixes and tuning. |
+| **Next** | **Alex's play-test.** Open the tuning panel with **`**, change what feels wrong, press *Copy changes* and hand the list over; it becomes the new defaults in [config.js](config.js). The questions most worth answering are in §15. After that: bug fixes and the spec's polish list (side-by-side offsets for shared track, performance, small UX fixes). |
+| **Done, Oct 16 (evening)** | Phase 5 (§11), Phase 6 with intercity (§14), the tuning panel (§15). |
+| **Done, Oct 16 (night)** | Capacity counted in people; the dot sized to cap what is drawn at ~200; the legend; timetable-aware waiting; the Flows layer; which clock each number uses (§16). Ferry groundwork (§17). |
 | **Done, Oct 16** | Unmapped buildings are filled in from Overture's ML footprints, and the seasonal profile now decides how many people the buildings hold, with the curve moving the population (§13). |
 | **Decided, Oct 16** | Every change of vehicle pays the 5-minute transfer penalty, at the same stop too (§13). The town populations' ~1.5× overshoot is accepted. The stepped coastline is accepted as it is. |
 | **Still to try live** | Rail has been tried on a real import at Kiato (§10). Corinth, the case where buildings bite, has not. `tools/import-region.js` snapshots a region once for offline testing. |
@@ -82,8 +85,8 @@ Both would have reached Alex as a broken screen, and both were invisible to 272 
 ## 2. Testing
 
 ```bash
-npm test                            # 509 logic assertions, plain Node, no dependencies
-npm run test:browser                # 119 assertions in real Chromium via Playwright
+npm test                            # 642 logic assertions, plain Node, no dependencies
+npm run test:browser                # 150 assertions in real Chromium via Playwright
 npm run test:browser -- --headed    # ...and watch it
 npm run test:live                   # 24 assertions against a REAL import — hits live OSM services
 npm run test:live -- --km 5         # ...at a given size (default 5, the slider minimum)
@@ -96,7 +99,7 @@ The browser suite serves on **port 4001**, loads the fixture, and checks that Ma
 
 Playwright is a devDependency. `npm test` stays dependency-free.
 
-Each phase's acceptance criteria live in `tests/phase2.js`, `tests/phase3.js` and `tests/phase4.js` marked `ACCEPTANCE:`, so they stay checked rather than being verified once by hand. Phase 3's drag gesture and Phase 4's waypoint clicks, Enter, double-click and station clicks are additionally driven through real mouse and keyboard events in `tests/browser.js`, because MapLibre's own handling is the thing most likely to break them.
+Each phase's acceptance criteria live in `tests/phase2.js` to `tests/phase7.js` marked `ACCEPTANCE:` (phase7 is the work after Phase 6, §16–17), so they stay checked rather than being verified once by hand. Phase 3's drag gesture and Phase 4's waypoint clicks, Enter, double-click and station clicks are additionally driven through real mouse and keyboard events in `tests/browser.js`, because MapLibre's own handling is the thing most likely to break them.
 
 `npm test` takes about 35 s of wall time but only ~2 s of CPU: some Phase 1 fetch tests wait out real retry backoff. That predates Phase 4 (the suite before it measured the same) and is harmless, but it is why the suite feels slow.
 
@@ -127,7 +130,7 @@ Good news from the same research, and worth not relitigating: **the spec's cruis
 
 ### One spec amendment, applied — flag if you disagree
 
-**One dot no longer always means ten passengers.** It scales with the region: `passengersPerDot(residents)` in [config.js](config.js) — 1 up to ~150,000 residents, 10 at a million, capped at 50.
+**One dot no longer always means ten passengers.** *Revised Oct 16 2026 — see §16 for the current rule: one person per dot in small places, growing only to cap what is drawn at about 200.* It scales with the region: `passengersPerDot(residents)` in [config.js](config.js) — originally 1 up to ~150,000 residents, 10 at a million, capped at 50.
 
 The reason is arithmetic, not taste. Visible dots ≈ `(trips/day × journey length ÷ 18 h) ÷ dot size`, so at a fixed 10 a town of 40,000 showed about one dot at a time and a village showed none. That was never a bug: a village really does have about four people on its buses at any moment, and four people is less than half a dot.
 
@@ -317,7 +320,7 @@ An escape hatch, not a default. [extract.bbbike.org](https://extract.bbbike.org)
 
 ## 6. What works
 
-Verified by `npm test` (509) and `npm run test:browser` (119). Phases 3 and 4 have their own sections, §9 and §10.
+Verified by `npm test` (642) and `npm run test:browser` (150). Phases 3 to 6 have their own sections: §9, §10, §11 and §14.
 
 **Phase 1.** `LocalFrame` and the bbox/chunk maths; terrain height grid with bilinear interpolation (exact on a ramp); 200 m demand grid; 10 m occupancy bitset; Overpass parsing with road-class filtering, abandoned-rail rejection, chunk-overlap de-duplication and shared-node collapsing; Terrarium decode and tile resampling; marching-squares contours and sea polygons; the base-map GeoJSON. In the browser: the new-game screen, search firing no request while typing, MapLibre rendering real pixels, layer toggles, zoom revealing minor roads, `maxBounds`, IndexedDB round-trips, the module worker booting.
 
@@ -336,13 +339,14 @@ data/    overpass.js  terrain.js  import.worker.js  cache.js
 model/   region.js (contract, frame, grids)  population.js  network.js (stops, lines, track)  save.js
 build/   road-routing.js  track-geometry.js (spline, grade rule, structures, buildRailTrack)
          rail-roads.js (crossings, corridors)  track-routing.js (stations and paths on track)
+         osm-rail.js (existing railways → ready-made track)
 sim/     clock.js  demand.js  routing.js  vehicles.js  passengers.js
-         economy.js  game.js
+         economy.js (incl. loans)  intercity.js  tuning.js (live config, for the ` panel)  game.js
 render/  basemap.js (MapLibre style)  overlay.js (Canvas 2D)  shapes.js  profile.js (height strip)
-ui/      new-game.js  hud.js  toolbar.js  panels.js  strings.js
+ui/      new-game.js  hud.js  toolbar.js  panels.js  tuning.js (the ` panel)  strings.js
 vendor/  maplibre-gl.js  maplibre-gl.css  LICENSE.txt      (v5.24.0, UMD)
 fixtures/ make-fixture.js  test-region.json               (npm run fixture)
-tests/   run.js  phase2.js  phase3.js  phase4.js  profiles.js  browser.js  live.js  screenshots/
+tests/   run.js  phase2.js … phase7.js  profiles.js  browser.js  live.js  screenshots/
 ```
 
 The fixture is a 6×6 km synthetic coast: a bay in the south-west, a lake, a river, a ridge with a notched valley (for Phase 4's tunnels and bridges), a motorway, a pedestrian street, a road tunnel and bridge, an existing railway with three stations, and an abandoned branch the parser must reject. **41,828 residents, ~1,162/km²** — a small town, so `passengersPerDot` is 1. It carries 1,971 building outlines.
@@ -452,7 +456,7 @@ Planning a track takes 1–6 ms (the road corridor index costs ~30 ms once, on f
 - **Track cannot be edited**, only bulldozed (if unused) and redrawn.
 - **Lines sharing only part of their track are not offset side by side.** Bundling still keys on a whole segment's ends and length, which works for buses on the same road between the same stops and not for two rail lines that share half a route.
 - **The profile strip sits bottom centre over the map**, and while drawing near the bottom of the screen it hides the track being drawn. Pan, or move it, if it gets in the way.
-- **Existing OSM rail is not yet usable track**; that is Phase 6. The rail-and-roads rules also ignore it, so new track crossing OSM rail is not treated as a crossing.
+- ~~**Existing OSM rail is not yet usable track.**~~ It is, from Phase 6 (§14). **Still true:** the rail-and-roads rules ignore it, so new track drawn *across* existing rail is neither a crossing nor a junction (see the first gap above).
 - **A track whose junction partner is bulldozed becomes a dead end there**, keeping its stored end height. Correct, but nothing tells the player.
 - **The fixture is a hard place to build rail**, and that is intended: of 1,753 straight probes across it, 63 are buildable. The rest are refused for buildings, for running along the 200 m street grid, or as too steep. The tests use alignments found by search, robust to ±10 m so that browser clicks reproduce them.
 
@@ -513,22 +517,42 @@ Three traps, all measured rather than assumed:
 
 ---
 
-## 11. Phase 5 — full economy (next)
+## 11. Phase 5 — full economy. Done.
 
-Seasonal profiles, coverage subsidies, loans, all four difficulty levels, Hard's game over, the fare slider, the finance panel.
+Seasonal profiles, coverage subsidies, all four difficulty levels and Hard's game over were in place before (§13 and Phase 2). This phase added what was missing: **loans**, the **fare slider** and a **finance panel** that adds up. Asserted in [tests/phase5.js](tests/phase5.js), and through real clicks in [tests/browser.js](tests/browser.js).
 
-**Accept when:** a Tourist region visibly swells in August; Hard on a small island supports a bus line or two and little more; Creative never limits money.
+| Acceptance criterion | Where it stands |
+| --- | --- |
+| a Tourist region visibly swells in August | asserted since §13 (`tests/phase2.js`, `tests/profiles.js`) |
+| Creative never limits money | asserted: a €10¹⁵ purchase, vehicles up to the headway cap, two months of running costs, and a save and reload |
+| Hard on a small island supports a bus line or two and little more | What Hard can *afford* is asserted: two bus lines yes, a kilometre of tram or a metro station no, not even with the large loan. Whether they *pay their way* is measured on Poros: **no** as first built (§15), **yes since timetables** — about +€2k a month on Hard as Tourist (§16). That a timetabled bus keeps its riders on Hard is asserted |
 
-**Already in place**, so this phase is mostly UI and verification:
+### Loans
 
-1. **Seasonal multipliers** now move the *population* (§13), in `DemandModel.scaleResidents`, with the hemisphere flip and Tourist's summer/winter switch. `tests/phase2.js` and `tests/profiles.js` already assert that Tourist swells in August. The profile also sets how many people the buildings hold, which feeds starting capital: Hard on a small island should be tested with the profile that describes the island (Countryside or Tourist), not Urban.
-2. **The coverage subsidy** is computed daily in `Economy.endDay`, capped at running costs, from `DIFFICULTY[*].subsidyShare`.
-3. **Difficulty rules** (`DIFFICULTY` in [config.js](config.js)) drive starting capital, patience, fare evasion, build-blocking when negative and Hard's 12-month game over. `economy.gameOver` is checked every tick and `showGameOver` in [main.js](main.js) puts up the calm ending.
-4. **`economy.fareMultiplier`** exists, is saved, scales tickets and feeds the demand model's elasticity. **There is no slider for it yet.**
-5. **Loans are configured** (`LOANS` in config — 3/6/12 years at 4/6/9%, Alex's decision C4) **but not implemented**: no state, no repayment, no UI. That is the main build.
-6. **The finance panel** exists with monthly income and expenses by category, but no loans view.
+[sim/economy.js](sim/economy.js). Three slots sized 20/50/100% of starting capital, at Alex's C4 terms (3/6/12 years at 4/6/9%). Each repays in fixed monthly instalments, an ordinary annuity, and can be repaid early. The finance panel shows each slot's offer, or what is owed, the instalment and the years left.
 
-**Watch out for:** maintenance now includes metro and train track, which dwarfs everything else once rail is built. A 2.7 km tunnelled train track costs €4.2M a year to keep before a single train runs. Hard's balance will feel that, which is probably right, but check it against the "a bus line or two on a small island" criterion before retuning anything else.
+Decisions worth not relitigating:
+
+1. **Borrowing is allowed with a negative balance.** That is when a loan is most needed, and on Hard it is the way out of the game-over countdown. Repaying early needs the money in hand.
+2. **Instalments are charged whatever the balance**, at the end of each month. A debt is owed whether or not there is money for it, which is what makes the large loan a real risk on Hard.
+3. **No instalment at the end of the month the loan was taken.** Borrowing on the 29th should not cost a payment on the 30th.
+4. **No penalty for repaying early**: the outstanding principal is all that is owed.
+5. **Creative has no loans** (its money has no end), as the spec says.
+
+### The finance panel adds up
+
+The panel used to list five categories and a net that included construction it did not show. Every category is now listed — tickets, intercity tickets, advertising, subsidy, running, maintenance, construction and loans — and refunds are booked against construction, so **the rows always sum to the change in the balance**. A test checks it to the cent across a month with a loan, a refund and a purchase. Taking a loan therefore shows as income that month, which answers "why did my balance jump?" on the panel.
+
+The **fare slider** (0.5×–2×) sits in the panel and shows the fare and the demand factor it implies. It re-prices demand on the next tick.
+
+### Fixed on the way — panel buttons could lose clicks
+
+The line, stop and track panels were **rebuilt from scratch every tick**, so a button was replaced between the mouse press and its release and the click could simply vanish: +/− on a line, Delete, and a stop being renamed lost the player's typing. Every earlier test drove those panels through the model, never by clicking, so nothing caught it; the new intercity toggle could not be clicked at all, which is what exposed it. The panel now rewrites only the text that changed and rebuilds only when its structure or the selected object changes ([ui/panels.js](ui/panels.js) `patch`). The browser suite presses + three times for real with the sim at 4×, and **fails without the fix** (checked by forcing the old behaviour back in).
+
+### Known gaps
+
+- **The finance panel is one panel**, not separate Finances and Loans panels as the spec lists them. Three loans fit; it scrolls on a short screen.
+- **Hard's countdown says nothing about loans.** A player in the red may not think to borrow.
 
 ---
 
@@ -690,3 +714,153 @@ University keeps Urban's 1: a university town is a town of flats, and its curve 
 Alex's decision on §12.4: people often prefer a slightly longer trip to one with a change, however quick the change is, so a change of line at the **same** stop pays the 5-minute penalty too. Before, it cost only the wait, because the penalty sat on the walk between stops.
 
 [sim/routing.js](sim/routing.js) now gives every stop two nodes. **Start** is where a trip begins; boarding from it costs the expected wait. **Arrived** is reached by getting off; boarding from it costs the wait plus `ROUTING.TRANSFER_PENALTY_S`. Walking between interchange stops goes arrived → arrived at walking speed, and the penalty is charged on the next boarding, so walking on to the final destination after getting off costs only the walk. Changing direction on the same line counts as a change too. `tests/phase2.js` checks that a shared-stop route costs exactly two waits, the rides and one penalty, and fails 300 s short without the fix.
+
+---
+
+## 14. Phase 6 — existing OSM rail. Done.
+
+All three of the spec's bullets: the discount, ready-made track, and intercity service. Asserted in [tests/phase6.js](tests/phase6.js) marked `ACCEPTANCE:`, and through real clicks in [tests/browser.js](tests/browser.js).
+
+| Acceptance criterion (from the spec's Phase 6 bullets) | Where it is proved |
+| --- | --- |
+| the player's own track is 25% cheaper to keep where the region has OSM rail | `maintenancePerYear`, with and without |
+| existing rail is train track with no construction cost | the fixture's Coast Line, length checked against the imported rail graph |
+| its tunnels and bridges come from OSM tags, not the grade rule | a synthetic railway with a tagged tunnel and bridge over the fixture's terrain |
+| the player can join it with their own track, and run train or metro lines on it | junctions for train and metro track; a train line and a metro line placed by clicking real stations |
+| the player never pays maintenance on it | maintenance with lines on it equals the stations' upkeep alone |
+| intercity calls pay a ticket per passenger aboard, and drop some of them into the network | one call, its tickets to the cent, and its arrivals on the platform bound for the connected station |
+
+### How it works
+
+- **[build/osm-rail.js](build/osm-rail.js)** converts the imported rail graph into the same `Track` objects the player builds, so station snapping, line routing, junctions and the profile strip work on it unchanged. The graph is cut into chains at every switch, crossing and dead end; one chain is one track, and each switch becomes a junction. Each chain is resampled every 20 m without cutting any OSM vertex.
+- **Heights**: the terrain at grade, and a straight run from portal to portal across a tunnel or bridge. Only seen in the profile strip and as the height new track meets at a junction.
+- **Ids are `osm0`, `osm1`, … in an order fixed by the region alone**, so a station's stored sample key (`osm3:41`) means the same place after a reload. Existing rail is never written into a save; it is rebuilt from the region.
+- **Stations on existing rail take the real station's name** when an OSM station or halt is within 150 m (`BUILD.OSM_STATION_NAME_M`). That only helps where a real station exists — Kiato has one — so §10's "Station" fallback is still what most new stations in the countryside get.
+- **It cannot be bulldozed**, and its panel says so. The overlay does not draw it (the base map already does) except to highlight it when selected.
+
+### Intercity service
+
+[sim/intercity.js](sim/intercity.js). A station on existing rail has an **Intercity service** toggle in its panel; the map marks it with a dashed outer ring. While it is on, an NPC train calls every `INTERCITY.INTERVAL_SIM_S` of **sim** time. Each call:
+
+- pays one ticket per passenger aboard (`PASSENGERS_PER_CALL`), at the player's fare, under its own finance row. Like every daily total it is scaled by `CLOCK.DAILY_SCALE`;
+- drops `DROP_FRACTION` of them onto the platform as new trips, sent to the stations the network connects, weighted like ordinary demand (attraction × distance). The split is **by largest remainder, not random**, so a call always lands the same way. A fraction of a dot carries to the next call.
+
+**Watch this in play — probably too generous.** At the shipped values (a call every 30 sim minutes, 300 aboard) one station earns about **€16k a day, ~€5.9M a year**, and the toggle is free. A bus line costs €250k a year per bus to run. All three values are in the tuning panel's *Intercity* group. These three numbers were in config.js from Phase 0, unsourced; the spec names none.
+
+### Known gaps
+
+- **New track drawn across existing rail** is neither a junction nor a crossing (the same gap as player track, §10).
+- **No intercity train is drawn.** Its arrivals simply appear on the platform.
+- **Intercity calls continue at a station no line serves**, paying tickets with nowhere for the arrivals to go. The spec does not say otherwise; worth a decision if it is exploited.
+
+---
+
+## 15. Play-testing: the tuning panel, and what a real island showed — Oct 16 2026
+
+### The tuning panel (` key)
+
+Alex's request: passenger behaviour needs frequent tweaking during play-tests, so give it sliders, and hand back the values once they feel right.
+
+- **` opens it.** Sliders for demand (trips per resident, distance decay, walk floor, fare elasticity, catchments), routing (transfer penalty, expected wait, walking speed, interchange distance), patience and satisfaction (patience for the difficulty in play, grace, give-up penalty, floor, recovery), money (base fare, advertising, subsidy share, running cost per mode) and intercity.
+- **Changes apply live.** Each value is written straight into the config object, and the cache it feeds (demand table, routes, interchanges) is thrown away; the effect shows within a tick. A "Right now" block shows expected trips per day, waiting and on-board counts, give-ups and satisfaction, so the effect can be read without waiting for the month's books.
+- **Changes survive a reload** (localStorage), and a red **"Tuning: N changed"** badge sits in the save strip while any are active, so they are never forgotten. ↺ resets one value, *Reset all* resets everything.
+- **Copy changes** puts the hand-back list on the clipboard and in a box under the button, in the form `DEMAND.TRIPS_PER_RESIDENT: 0.4 → 0.8`. **To apply a list Alex hands over:** write each new value into [config.js](config.js) at that path, with a note on why, and update any test that pins the old value.
+- The logic is [sim/tuning.js](sim/tuning.js) (DOM-free, tested in Node); the panel is [ui/tuning.js](ui/tuning.js). Adding a tunable is one line in `TUNABLES` and one label in `STRINGS.tuning.labels`.
+
+### What Hard on a small island does — measured, not met
+
+Phase 5's criterion is "Hard on a small island supports a bus line or two and little more". To test it, **Poros** was imported once ([tools/import-region.js](tools/import-region.js) `23.47 37.505 6`): 3,688 buildings (399 from OSM, 3,297 filled in from Overture), Poros town and Galatas across the strait. Then [tools/probe-balance.js](tools/probe-balance.js) played a year with two 5-stop bus lines, one bus each, through the densest streets. It is offline and runs in about a second; rerun it after any tuning.
+
+Poros as **Tourist** (16,217 year-round residents by the model; capital €1.6M on Hard), two lines reaching 55% coverage, a month on average. **Measured before timetables (§16), which changed the answer:**
+
+| | tickets | subsidy | running | **net** | passengers who gave up |
+| --- | --- | --- | --- | --- | --- |
+| Hard, as shipped | €11k | €11k | −€42k | **−€20k** | **331 of 605** |
+| Normal | €14k | €16k | −€42k | −€12k | 285 of 628 |
+| Easy | €22k | €20k | −€42k | €0 | 186 of 720 |
+| Hard, bus running cost halved to €125k | €11k | €6k | −€21k | −€5k | 331 of 605 |
+| Hard, subsidy share 100% | €11k | €23k | −€42k | −€8k | 331 of 605 |
+| **Hard, patience 12 → 30 min** | **€32k** | €11k | −€42k | **+€2k** | **0 of 813** |
+
+On Hard as shipped, August is the best month at −€11k and November the worst at −€25k. Building both lines leaves €612k, so the network runs about two and a half years before the balance goes negative, and Hard's 12-month countdown ends it about a year after that. **So Hard can afford a bus line or two, but cannot sustain them.** Poros as **Countryside** (6,392 people, €1.0M) affords one line with one bus, sees 31 passengers all year, and loses €15k a month.
+
+**Patience is the dominant lever, by far.** One bus on a 4–5 km line comes every ~30 minutes, and Hard's passengers give up after 12. So about half of all riders give up, and every give-up also cuts that route's future demand through satisfaction. Halving running costs or doubling the subsidy does less than letting people wait.
+
+**Real people on a half-hourly rural bus check the timetable** rather than turning up at random. Alex agreed, and it is built (§16).
+
+**Two smaller things the measurement showed:**
+
+- ~~**A small island looks empty.**~~ *Overstated, corrected after measuring:* Poros spawns about two dots per *calendar* day (each standing for 324 trips a real day), but dots linger while waiting and riding, so **6 are on screen on average, 17 at most, and the screen is empty 2% of the time** (Easy: 10, 29, 1%). Sparse, not empty.
+- **Riders per day jumps in steps of 324** on a small network, because one dot in the day's sample is 324 people a day. The line panel figure is honest but coarse there.
+
+
+---
+
+## 16. What a dot means, timetables, and flows — Oct 16 2026 (night)
+
+Alex's decisions after §15, all six of the proposal built:
+
+1. **Capacity is counted in people.** It was counted in dots — an oversight, not a choice: the spec gives capacity in passengers and one dot as ten of them. In a city of 10-person dots a 50-seat bus carried 500 people. A vehicle now has `seats = capacity ÷ people per dot` ([sim/vehicles.js](sim/vehicles.js)). No effect where a dot is one person, which is everywhere the game has been played so far.
+2. **One person per dot in small places, always. The dot only grows to cap what is drawn** (Alex: "Small places will have 1 person 1 dot. Always about X dots should only exist as a rule to LIMIT the dots rendered in larger places"; X = 200). Fractional dots were considered and rejected.
+3. **A legend** bottom left: "● = N people", and a line saying which clock is which.
+4. **Timetables**: past a 10-minute headway passengers time their arrival.
+5. **A Flows layer** (toolbar *Flows*): the demand under the dots.
+6. **Which clock each number uses**: tooltips on the live and per-day figures, and the legend.
+
+### The dot rule
+
+`people per dot = ⌈ year-round residents × 3 per 1,000 ÷ 200 ⌉`, between 1 and 50 ([config.js](config.js) `passengersPerDot`, `DEMAND.VISIBLE_DOTS_*`).
+
+- **3 per 1,000 is measured**, not guessed. By Little's law the dots on screen are trips per second × how long each trip lasts ÷ dot size, so the one unknown is dots per resident for a well-built network at one person per dot. Bus grids over the fixture town: **2.8 per 1,000 covering 72% of residents** (43 stops, 8,875 trips a day), **5.4 covering 100%** (131 stops, 16,331 trips a day — 39% of residents, almost the whole 0.4-trip rate). A compact island runs lower: Poros fully gridded showed 1.6, because trips are short. So the cap is "about 200" for a well-built network; one covering every last resident can reach ~2×.
+- **Year-round population, not the busiest month.** It was first written for the busiest month, and that gave Lefkada town as Tourist (~75,000 in August by the model, ~10,000 real people) two people per dot — exactly what a small place must not get. A Tourist August now runs over 200 instead, which "about 200" allows.
+- **Results:** the fixture town, Poros, Kiato and Lefkada town stay at 1 (tested for Lefkada). Anything under ~67,000 year-round residents is 1. Central Athens (500k) is 8, up from 5. The cap of 50 is a bus: a dot must fit in the smallest vehicle.
+- **Fixed for the whole game, and kept across a rule change:** a save carries its dot size, and `Game.setDotSize` applies it to the game, the demand model, the economy and every vehicle at once. Before, a reload recomputed it from the rule — harmless only while the rule never changed.
+- `VISIBLE_DOTS_TARGET` is not in the tuning panel: it can only take effect in a new game.
+
+### Timetables
+
+[sim/routing.js](sim/routing.js), [sim/passengers.js](sim/passengers.js) `patienceFor`, threshold `ROUTING.TIMETABLE_HEADWAY_S` (10 min, in the tuning panel).
+
+- **Route choice** counts the wait as `BOARDING_WAIT_FRACTION × min(headway, threshold)`: an infrequent line costs at most what a 10-minute line does — still a little worse than a frequent one, never a half-hour stand at the stop. Continuous at the threshold.
+- **Patience** for a passenger waiting for a timetabled line is `max(difficulty patience, headway + grace)`. The stop's waiting ring uses the same, so it does not fill red for people who are fine.
+- Dots still appear at random times and wait on screen; only their patience and the route cost changed. Making them appear just before the departure would be truer to life and a bigger change.
+- **Asserted:** on Hard, one bus on a long line loses riders with the rule off and none with it on.
+
+**Poros re-measured with it** (`tools/probe-balance.js`, two lines, one bus each, a month on average):
+
+| | tickets | subsidy | running | net | gave up |
+| --- | --- | --- | --- | --- | --- |
+| Hard, Tourist | €32k | €11k | −€42k | **+€2k** | 0 of 813 |
+| Normal, Tourist | €33k | €16k | −€42k | +€7k | 0 of 813 |
+| Easy, Tourist | €33k | €20k | −€42k | +€11k | 0 of 813 |
+| Hard, Countryside | €1k | €6k | −€21k | −€14k | 0 of 32 |
+
+Hard as Tourist now runs at a loss from November to April (−€8k to −€15k a month) and makes it back in summer (+€48k in August), ending the year ahead. That is the criterion. **Countryside Poros (6,400 people) still cannot keep even one bus**, and only one is affordable; whether Countryside should be that harsh is a play-test question.
+
+### Flows
+
+`DemandModel.flows()` merges each pair of stops' demand both ways into people a day, busiest first, cached until the table rebuilds. `flowsPainter` draws the busiest 300 as arcs under the lines, width by the square root of the flow, bowed to one side so flows sharing a corridor fan apart. The flows add up exactly to the tuning panel's expected trips a day. Rare routes that hardly ever have a dot on them still show — the thing Alex wanted dots to do, which dots cannot do honestly (one Poros route in two produces a dot only every ~50 calendar days).
+
+### The two clocks, as other games handle them
+
+For the record, since Alex asked: every game in the genre has two tiers of time. **Transport Fever 2** is closest to ours and more extreme — a calendar day lasts 2 seconds by default, every resident is an individual agent, line frequency is shown in real time at normal speed, and lengthening the day scales monthly production and demand to stay balanced (our `DAILY_SCALE`). **Cities: Skylines** compresses one clock (~24 real minutes a day in CS1, ~72 in CS2). **Mini Metro** abstracts time to weekly upgrades and passengers to destination shapes. Sources: [TF2 Simulation Overview](https://wiki.transportfever2.com/doku.php?id=gamemanual%3Asimulationoverview), [TF2 Statistics and Data Layers](https://wiki.transportfever2.com/doku.php?id=gamemanual%3Astatisticsdatalayers), [Mini Metro](https://en.wikipedia.org/wiki/Mini_Metro_(video_game)), RESEARCH.md for CS.
+
+---
+
+## 17. Ferries — groundwork only
+
+Alex: "pave the way for ferries in a very basic way, but don't add anything major." Done:
+
+- `PLAYABLE_MODES` and `PLANNED_MODES` in [config.js](config.js) are the one list of modes; the toolbar and the 1–4 keys read them. Ferry is planned: a disabled toolbar button, as each mode was before its phase.
+- `FERRY` in config holds **placeholder, unsourced** figures (a small strait ferry: 250 people, ~15 knots, 3-minute dwell, €6M a boat, €1.2M a year to run, €2M a terminal, 800 m catchment). Ferry is deliberately **not** in `MODES`, so nothing that loops over the playable modes meets it half-built.
+- Asserted: the four playable modes, ferry planned and absent from `MODES`, every placeholder present; in the browser, the button is disabled and 5 does nothing.
+
+**The plan, when ferries are built:**
+
+1. **Research the figures**, as Phase 0 did for the other modes, and move ferry into `MODES`, `COSTS`, `DEMAND.CATCHMENT_M`, `RENDER.STOP_RADIUS_PX` and `PLAYABLE_MODES`.
+2. **Terminals** snap to a point that is both within `terminalShoreM` of water and on the road network, so passengers can walk to them.
+3. **Routing on water**: a path over the sea mask and the OSM water polygons. The height grid already marks the sea (`settleSea`); a grid A* over water cells, smoothed, is the counterpart of `RoadIndex` for roads. OSM's `route=ferry` ways are real crossings and could seed it the way existing rail seeds track (Phase 6) — that needs one more clause in the Overpass query.
+4. **Everything else already works for any mode**: lines, vehicles, the demand model, routing with transfers, the economy, intercity-style arrivals for a mainland connection.
+5. **The lifeline subsidy** the spec's subsidy rule is modelled on was a ferry subsidy in the first place; ferries are where it should be most generous.
+
+Known gaps for this section: none yet, since nothing is built.

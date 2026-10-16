@@ -304,25 +304,31 @@ export const DEMAND = {
    * How many real passengers one visible dot stands for.
    *
    * The spec fixes this at 10, which is right for a big city and wrong
-   * everywhere else. The number of dots visible at any moment is
+   * everywhere else. Small places get one person per dot, always (Alex, Oct 16
+   * 2026): a village really does have only a handful of people on its buses
+   * at any moment, and showing them as they are is the honest picture. The
+   * dot only grows to LIMIT how many are drawn in a big place.
    *
-   *   dots ≈ (trips per day × average journey length ÷ service hours) ÷ dot size
+   * The rule: a well-built network should show at most about
+   * VISIBLE_DOTS_TARGET dots at once, at the region's year-round population.
+   * Not the busiest month: sizing for August gave Lefkada town, a Tourist
+   * place of ~10,000 real people, two people per dot, which is exactly what
+   * small places should not get. A Tourist August runs over the target
+   * instead, which "about" allows. By Little's law the dots
+   * on screen are (trips per second × time each trip lasts) ÷ dot size, so
+   * this needs one measured figure: how many dots a well-built network shows
+   * per resident at one person per dot. Measured on the fixture town with a
+   * bus grid covering three-quarters of its residents: 2.8 per 1,000
+   * (HANDOFF.md §16). With every resident covered it was 5.4, so a network
+   * that covers absolutely everyone can reach about twice the target.
    *
-   * so it falls with the square of a region's smallness: fewer residents make
-   * fewer trips AND a smaller network captures a smaller share of them. At 10
-   * passengers per dot a town of 40,000 shows about one or two dots at a time
-   * and a village shows none at all — not because the model is wrong, but
-   * because a village really does have about four people on its buses at any
-   * moment, and four people is less than half a dot.
+   * The dot is a whole number of people, fixed at the start of a game, and
+   * never larger than a bus: a dot has to fit in the smallest vehicle.
    *
-   * So the dot size scales with the region: one dot = one passenger in towns,
-   * rising to 50 in a metropolis where thousands would be unreadable. It is
-   * fixed once at import and never changes during a game — a dot that
-   * silently changed meaning while you played would make every count lie.
-   *
-   * [spec, amended — see HANDOFF.md]
+   * [spec, amended twice — see HANDOFF.md §3 and §16]
    */
-  RESIDENTS_PER_DOT_STEP: 100000,
+  VISIBLE_DOTS_TARGET: 200,
+  VISIBLE_DOTS_PER_1000_RESIDENTS: 3,
   PASSENGERS_PER_DOT_MIN: 1,
   PASSENGERS_PER_DOT_MAX: 50,
 
@@ -391,6 +397,16 @@ export const CLOCK = {
  * out at 18.5 / 22.5 / 40 / 57.6 km/h, which matches real commercial speeds.
  * Verified in Phase 0 — see RESEARCH.md §3. [spec]
  */
+/**
+ * The modes a player can build, in toolbar and keyboard order (1–4), and the
+ * ones planned but not built yet. A planned mode shows as a disabled button,
+ * the way each mode did before its phase shipped: a dead button that names
+ * the plan tells the player more than a missing one. Making ferries playable
+ * starts by moving 'ferry' from one list to the other — see FERRY below.
+ */
+export const PLAYABLE_MODES = ['bus', 'tram', 'metro', 'train'];
+export const PLANNED_MODES = ['ferry'];
+
 export const MODES = {
   bus:   { capacity: 50,  cruiseKmh: 25, dwellS: 20 },
   tram:  { capacity: 200, cruiseKmh: 30, dwellS: 20 },
@@ -490,6 +506,12 @@ export const BUILD = {
    * by a few metres silently produces a dead end that looks connected.
    */
   JUNCTION_SNAP_M: 30,
+  /**
+   * A station placed on existing rail takes the name of a real OSM station or
+   * halt this close, m — about half a long platform. Further than that it is
+   * a new station and is named after its street like any other.
+   */
+  OSM_STATION_NAME_M: 150,
   /**
    * A waypoint closer than this to the previous one is ignored, m. A
    * double-click to finish fires two clicks on the same spot first, and two
@@ -652,10 +674,66 @@ export const ROUTING = {
   TRANSFER_PENALTY_S: 300,
   /** Expected wait when boarding = this fraction of the headway. [spec] */
   BOARDING_WAIT_FRACTION: 0.5,
+  /**
+   * Lines running less often than this keep a timetable, and passengers time
+   * their arrival to it instead of turning up at random (Alex, Oct 16 2026).
+   * Two things follow:
+   *
+   *   - Route choice counts the wait as if the line ran exactly this often,
+   *     so an infrequent line is a little less attractive than a frequent one
+   *     but is not treated as a half-hour wait at the stop. The cost is
+   *     continuous at the threshold.
+   *   - Patience: a passenger waiting for such a line gives up only after a
+   *     full headway plus the grace, if that is longer than the difficulty's
+   *     patience. A half-hourly island bus no longer loses half its riders.
+   *
+   * 10 minutes is roughly where real riders stop turning up at random and
+   * start checking the timetable. Tunable in the ` panel.
+   */
+  TIMETABLE_HEADWAY_S: 600,
+};
+
+// ─── Ferries (planned, not built) ─────────────────────────────────────────────
+
+/**
+ * Groundwork only: nothing reads these yet, and ferry is deliberately NOT in
+ * MODES, so no loop over the playable modes meets a half-built one. The plan
+ * is in HANDOFF.md §17. The spec names ferries as "the most natural fifth
+ * mode", for islands and the lifeline-subsidy idea.
+ *
+ * Every figure here is a PLACEHOLDER, unsourced — a small passenger ferry of
+ * the kind that crosses the Poros strait — to be checked when ferries are
+ * built, as Phase 0 checked the other four modes.
+ */
+export const FERRY = {
+  capacity: 250,
+  /** About 15 knots. */
+  cruiseKmh: 28,
+  /** Boarding and mooring take minutes, not seconds. */
+  dwellS: 180,
+  vehicleCost: 6e6,
+  runningPerYear: 1.2e6,
+  terminalCost: 2e6,
+  /** People walk further to a ferry than to a bus stop. */
+  catchmentM: 800,
+  /** A terminal must stand this close to water, and to a road. */
+  terminalShoreM: 60,
 };
 
 // ─── Existing OSM rail (Phase 6) ──────────────────────────────────────────────
 
+/**
+ * NPC intercity trains calling at a station on existing rail whose service the
+ * player has switched on. Each call pays one ticket per passenger aboard and
+ * drops a share of them into the network as new trips.
+ *
+ * Calls happen on the SIM clock, like everything that moves, so the tickets
+ * are a daily total and scale by CLOCK.DAILY_SCALE like any other: a call
+ * every 30 sim minutes is 36 calls over a service day, though the player sees
+ * one about every nine calendar days. At these values one station earns about
+ * €16k a day (36 × 300 × €1.50), roughly €5.9M a year — far more than a bus
+ * line, which is probably too generous. They are tunable in the ` panel.
+ */
 export const INTERCITY = {
   /** Sim seconds between intercity calls at a station with the service on. */
   INTERVAL_SIM_S: 1800,
@@ -692,6 +770,8 @@ export const COLORS = {
   stopFill: '#FFFFFF',
   stopStroke: '#2B2B2B',
   passenger: '#2B2B2B',
+  /** Flows layer arcs: the ink, faded, so lines and stops stay on top. */
+  flow: 'rgba(110, 84, 168, 0.42)',
   bareTrack: '#B5AFA4',
   /** Train track's sleeper ticks, a shade darker than the rail itself. */
   sleeper: '#9C958A',
@@ -750,6 +830,18 @@ export const RENDER = {
   /** Height-profile strip size, CSS px. */
   PROFILE_WIDTH_PX: 520,
   PROFILE_HEIGHT_PX: 110,
+
+  /**
+   * The Flows layer: one arc per pair of stops people travel between, as
+   * thick as the people a day who want that trip. Only the busiest are
+   * drawn, so a big network stays legible; the rest are thinner than a
+   * hairline anyway.
+   */
+  FLOW_MAX_ARCS: 300,
+  FLOW_MAX_PX: 14,
+  FLOW_MIN_PX: 1,
+  /** How far an arc bows out from the straight line, as a share of its length. */
+  FLOW_BOW: 0.18,
 };
 
 // ─── Saving ───────────────────────────────────────────────────────────────────
@@ -847,17 +939,15 @@ export function baselineResidents(meta) {
 }
 
 /**
- * Passengers represented by one dot, for a region of this many residents.
- *
- * Rounded to a whole number because a dot has to mean an integer of people for
- * the ticket maths to stay honest, and clamped so a village still shows its
- * handful of passengers and a metropolis does not drown in them.
+ * Passengers represented by one dot, for a region of this many year-round
+ * residents. See `DEMAND.VISIBLE_DOTS_TARGET` for the rule.
  *
  * @param {number} residents
- * @returns {number}
+ * @returns {number} a whole number, at least 1
  */
 export function passengersPerDot(residents) {
-  const raw = Math.round((residents || 0) / DEMAND.RESIDENTS_PER_DOT_STEP);
+  const expectedDots = (residents || 0) * DEMAND.VISIBLE_DOTS_PER_1000_RESIDENTS / 1000;
+  const raw = Math.ceil(expectedDots / DEMAND.VISIBLE_DOTS_TARGET);
   return Math.min(DEMAND.PASSENGERS_PER_DOT_MAX,
     Math.max(DEMAND.PASSENGERS_PER_DOT_MIN, raw));
 }

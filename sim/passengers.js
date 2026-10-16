@@ -14,7 +14,7 @@
  * near-misses and the game feels unfair rather than demanding.
  */
 
-import { PATIENCE, DIFFICULTY } from '../config.js';
+import { PATIENCE, DIFFICULTY, ROUTING } from '../config.js';
 import { secondsToStop } from './vehicles.js';
 
 let nextDotId = 1;
@@ -142,8 +142,7 @@ function boardHere(game, line, vehicle, stop, stats) {
  * they could board is within the grace window.
  */
 function expirePatience(game, simNow, stats) {
-  const { network, demand, difficulty } = game;
-  const patienceSeconds = DIFFICULTY[difficulty].patienceSimMinutes * 60;
+  const { network, demand } = game;
 
   for (const stop of network.stops.values()) {
     if (stop.waiting.length === 0) continue;
@@ -151,7 +150,7 @@ function expirePatience(game, simNow, stats) {
 
     for (const dot of stop.waiting) {
       const waited = simNow - dot.waitingSince;
-      if (waited <= patienceSeconds) { staying.push(dot); continue; }
+      if (waited <= patienceFor(game, dot)) { staying.push(dot); continue; }
 
       // Mini Metro's grace period: don't punish a near-miss.
       if (rescueIsClose(network, dot, stop)) { staying.push(dot); continue; }
@@ -163,6 +162,20 @@ function expirePatience(game, simNow, stats) {
     }
     stop.waiting = staying;
   }
+}
+
+/**
+ * How long this passenger will wait, in sim seconds. The difficulty sets it —
+ * unless the line it is waiting for keeps a timetable (ROUTING.
+ * TIMETABLE_HEADWAY_S), in which case it waits at least a full headway plus
+ * the grace: someone who checked the timetable knows the bus is coming.
+ */
+export function patienceFor(game, dot) {
+  const base = DIFFICULTY[game.difficulty].patienceSimMinutes * 60;
+  const line = dot.leg ? game.network.lines.get(dot.leg.lineId) : null;
+  const headway = line?.headwayS ?? Infinity;
+  if (!Number.isFinite(headway) || headway < ROUTING.TIMETABLE_HEADWAY_S) return base;
+  return Math.max(base, headway + PATIENCE.GRACE_SIM_S);
 }
 
 /** Is a boardable vehicle arriving within the grace window? */
@@ -187,25 +200,33 @@ function rescueIsClose(network, dot, stop) {
  * @returns {number} dots created
  */
 export function spawnDots(game, simSeconds) {
-  const { network, router, demand, clock } = game;
-  const born = demand.spawn(simSeconds);
   let created = 0;
-
-  for (const { fromId, toId } of born) {
-    const stop = network.stops.get(fromId);
-    if (!stop) continue;
-    const route = router.route(fromId, toId);
-    if (!route || route.legs.length === 0) continue;
-
-    const dot = new Dot(fromId, toId, route, clock.simSeconds);
-    // The dot must wait where its first leg actually boards, which may be a
-    // neighbouring stop in the same interchange rather than its origin.
-    const boardingStop = network.stops.get(route.legs[0].fromStop) || stop;
-    dot.atStopId = boardingStop.id;
-    boardingStop.waiting.push(dot);
-    created++;
+  for (const { fromId, toId } of game.demand.spawn(simSeconds)) {
+    if (placeDot(game, fromId, toId)) created++;
   }
   return created;
+}
+
+/**
+ * Route one new passenger and stand it at the stop its first leg boards from.
+ * Shared by ordinary demand and by intercity arrivals.
+ *
+ * @returns {Dot|null} null when the stop is gone or there is no route
+ */
+export function placeDot(game, fromId, toId) {
+  const { network, router, clock } = game;
+  const stop = network.stops.get(fromId);
+  if (!stop) return null;
+  const route = router.route(fromId, toId);
+  if (!route || route.legs.length === 0) return null;
+
+  const dot = new Dot(fromId, toId, route, clock.simSeconds);
+  // The dot must wait where its first leg actually boards, which may be a
+  // neighbouring stop in the same interchange rather than its origin.
+  const boardingStop = network.stops.get(route.legs[0].fromStop) || stop;
+  dot.atStopId = boardingStop.id;
+  boardingStop.waiting.push(dot);
+  return dot;
 }
 
 /**

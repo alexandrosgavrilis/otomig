@@ -1,4 +1,4 @@
-# tools/ — Phase R probes
+# tools/ — probes
 
 Research scripts, not part of the game. Nothing in `data/`, `model/`, `sim/`,
 `render/` or `ui/` imports from here, and `npm test` does not run them.
@@ -20,7 +20,12 @@ node tools/probe-compare.js        # same-box comparison + the alignment control
 node tools/probe-idjoin.js         # the osm_id x 10 + type id scheme
 node tools/probe-railtest.js       # where to test Phase 4: live rail, few buildings
 node tools/probe-model-joined.js 4 # the demand grid, both sources
+node tools/import-region.js 23.47 37.505 6 /tmp/poros.json   # snapshot a real region, once
+node tools/probe-balance.js /tmp/poros.json tourist hard 2 1 # a year of money, offline
 ```
+
+`probe-balance.js` is the odd one out: it is offline and takes a snapshot
+from `import-region.js`, so it can be run as often as a tuning question needs.
 
 Two things to know before adding more:
 

@@ -16,13 +16,14 @@
  * projection and the device-pixel scaling are right. Phase 2 fills it in.
  */
 
-import { COLORS, RENDER, DIFFICULTY } from '../config.js';
+import { COLORS, RENDER } from '../config.js';
 import { STRINGS } from '../ui/strings.js';
 import { formatMoney } from '../sim/economy.js';
+import { patienceFor } from '../sim/passengers.js';
 import {
   strokePath, drawLinePattern, drawVehicle, drawStop, drawInterchange,
   drawTrackStructure, drawDragPreview, drawBareTrack, drawLevelCrossing,
-  drawTrackPreview, drawWaypoint,
+  drawTrackPreview, drawWaypoint, drawIntercityMark,
   drawWaiting, drawWaitRing, offsetPolyline, shade,
 } from './shapes.js';
 
@@ -184,6 +185,9 @@ export function tracksPainter(game) {
     const zoomScale = Math.min(2, Math.max(0.6, overlay.map.getZoom() / 14));
     const width = RENDER.BARE_TRACK_PX * zoomScale;
     for (const track of game.network.tracks.values()) {
+      // Existing railways are already on the base map; draw one here only to
+      // show it selected.
+      if (track.osm && game.selection !== track) continue;
       const points = track.points.map(([lon, lat]) => overlay.project(lon, lat));
       if (game.selection === track) {
         strokePath(ctx, points, shade(COLORS.stopStroke, 0.55), width * 5);
@@ -292,26 +296,66 @@ export function interchangesPainter(game) {
 /** Stops, their waiting passengers, and the patience ring. */
 export function stopsPainter(game) {
   return (ctx, overlay) => {
-    const patienceSeconds = DIFFICULTY[game.difficulty].patienceSimMinutes * 60;
     const simNow = game.clock.simSeconds;
 
     for (const stop of game.network.stops.values()) {
       const [x, y] = overlay.project(stop.lon, stop.lat);
       const radius = RENDER.STOP_RADIUS_PX[stop.mode] ?? 4;
 
-      // The ring tracks the OLDEST waiting passenger, because that is the one
-      // about to give up.
+      // The ring tracks the passenger nearest to giving up. Patience differs
+      // by line — longer for one that keeps a timetable — so that is the
+      // largest share of patience used, not simply the longest wait.
       if (stop.waiting.length > 0) {
-        let oldest = 0;
+        let nearest = 0;
         for (const dot of stop.waiting) {
-          oldest = Math.max(oldest, simNow - dot.waitingSince);
+          nearest = Math.max(nearest, (simNow - dot.waitingSince) / patienceFor(game, dot));
         }
-        drawWaitRing(ctx, x, y, radius, oldest / patienceSeconds);
+        drawWaitRing(ctx, x, y, radius, nearest);
       }
 
+      if (stop.intercity) drawIntercityMark(ctx, x, y, stop.mode);
       drawStop(ctx, x, y, stop.mode, game.selection?.id === stop.id);
       drawWaiting(ctx, x, y, stop.waiting.length, radius);
     }
+  };
+}
+
+/**
+ * The Flows layer: an arc between every pair of stops people travel between,
+ * as thick as the people a day who want that trip. Dots show who is moving
+ * right now; this shows the demand underneath, including routes too quiet to
+ * have a dot on them most of the time. Drawn under the lines.
+ */
+export function flowsPainter(game) {
+  return (ctx, overlay) => {
+    if (!game.showFlows) return;
+    const flows = game.demand.flows(RENDER.FLOW_MAX_ARCS);
+    if (flows.length === 0) return;
+    const busiest = flows[0].perDay;
+
+    ctx.save();
+    ctx.strokeStyle = COLORS.flow;
+    ctx.lineCap = 'round';
+    for (const flow of flows) {
+      const a = game.network.stops.get(flow.a);
+      const b = game.network.stops.get(flow.b);
+      if (!a || !b) continue;
+      const [x1, y1] = overlay.project(a.lon, a.lat);
+      const [x2, y2] = overlay.project(b.lon, b.lat);
+      // Bow every arc to the same side of its chord, so flows that share a
+      // corridor fan apart instead of drawing over one another.
+      const mx = (x1 + x2) / 2 - (y2 - y1) * RENDER.FLOW_BOW;
+      const my = (y1 + y2) / 2 + (x2 - x1) * RENDER.FLOW_BOW;
+      // Area-true: width by the square root, so a flow ten times busier is
+      // about three times as wide, not ten.
+      ctx.lineWidth = Math.max(RENDER.FLOW_MIN_PX,
+        RENDER.FLOW_MAX_PX * Math.sqrt(flow.perDay / busiest));
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.quadraticCurveTo(mx, my, x2, y2);
+      ctx.stroke();
+    }
+    ctx.restore();
   };
 }
 

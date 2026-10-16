@@ -87,7 +87,10 @@ export class Router {
     }
 
     for (const line of network.activeLines) {
-      const headwayWait = line.headwayS * ROUTING.BOARDING_WAIT_FRACTION;
+      // Past the timetable threshold people arrive for the departure rather
+      // than at random, so the wait stops growing with the headway.
+      const headwayWait = ROUTING.BOARDING_WAIT_FRACTION
+        * Math.min(line.headwayS, ROUTING.TIMETABLE_HEADWAY_S);
       if (!Number.isFinite(headwayWait)) continue;
 
       for (const direction of directionsServed(line)) {

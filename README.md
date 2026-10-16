@@ -4,7 +4,7 @@ A transit sandbox with Mini Metro's look and drawing feel and Cities: Skylines' 
 
 You draw bus, tram, metro and train lines. Passengers appear where people live and want to go. Money comes from tickets, coverage subsidies and advertising. There is no win condition — a good network settles into balance. Some places can only ever support a bus line or two, and that is fine.
 
-**Status:** Phases 0–4 of 7 done — region import, base map, the bus core loop (lines, passengers, transfers, money, save/load), trams with on-street track and off-road dragged segments, and metro and train: track built through waypoints, stations on it, and lines that route on compatible track. Wherever track leaves the street, the terrain decides where it tunnels and bridges, and a height-profile strip shows why while you draw. The import is verified against live OpenStreetMap data: a 5 km slice of central Athens imports in about 20 seconds and two Overpass requests. The full economy (loans, the fare slider) is next — see [HANDOFF.md](HANDOFF.md).
+**Status:** every phase of the build plan is in (0–6 of 7, the seventh being polish) — region import, base map, the bus core loop (lines, passengers, transfers, money, save/load), trams with on-street track and off-road dragged segments, metro and train on track built through waypoints, the full economy (loans, the fare slider, a finance panel that adds up), and existing railways as free, ready-made track with intercity service. Wherever track leaves the street, the terrain decides where it tunnels and bridges, and a height-profile strip shows why while you draw. The import is verified against live OpenStreetMap data: a 5 km slice of central Athens imports in about 20 seconds and two Overpass requests. Next is play-testing — see [HANDOFF.md](HANDOFF.md).
 
 ## Running it
 
@@ -17,11 +17,15 @@ npm start          # python3 -m http.server 8000
 
 Click **Use the test region** for a synthetic region that needs no network at all, or search a real place and import it. Regions default to 6 × 6 km; the slider reaches 15 km. A dense 5 km import takes about 20 seconds and two Overpass requests, a 10 km one about two minutes; rural areas are much faster. Overpass's own query time dominates and is variable, so an occasional retry in the progress text is normal.
 
+**On screen:** a dot is one person in a town; in a big city it grows so that no more than about 200 are drawn, and the legend in the bottom-left corner says what a dot is worth. The **Flows** toggle draws where people on your network want to go, one arc per pair of stops. Buses running less often than every 10 minutes keep a timetable, and their passengers wait for them.
+
+**Play-testing:** press **`** in a game for the tuning panel — live sliders for passenger behaviour and money. Changes survive a reload, a red badge shows while any are active, and *Copy changes* gives the list of new values to make the defaults.
+
 Serve it over `http://` — don't open `index.html` as a `file://` URL. ES modules, the import worker and the OSM services all need a real origin.
 
 ```bash
-npm test               # 509 logic assertions, plain Node, no framework, no dependencies
-npm run test:browser   # 119 assertions driving real Chromium (needs: npm install)
+npm test               # 642 logic assertions, plain Node, no framework, no dependencies
+npm run test:browser   # 150 assertions driving real Chromium (needs: npm install)
 npm run test:live      # 25 assertions against a REAL import — hits live OSM services
 npm run fixture        # regenerate fixtures/test-region.json
 ```

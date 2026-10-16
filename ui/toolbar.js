@@ -20,11 +20,11 @@
  */
 
 import { STRINGS } from './strings.js';
-import { MODES, COSTS, BUILD } from '../config.js';
+import { MODES, COSTS, BUILD, PLAYABLE_MODES, PLANNED_MODES } from '../config.js';
 import { formatMoney } from '../sim/economy.js';
 
 export const TOOLS = ['newLine', 'extendLine', 'editStops', 'buildTrack', 'bulldoze'];
-const MODE_LIST = ['bus', 'tram', 'metro', 'train'];
+const MODE_LIST = PLAYABLE_MODES;
 const RAIL_MODES = ['metro', 'train'];
 
 export function mountToolbar(root, game, { onChange, onToggleLayer }) {
@@ -43,6 +43,11 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
             class="${mode === state.mode ? 'on' : ''}">
             <span class="key">${index + 1}</span> ${STRINGS.toolbar[mode]}
           </button>`).join('')}
+        ${PLANNED_MODES.map((mode) => `
+          <button type="button" data-mode="${mode}" disabled
+            title="${STRINGS.toolbar.planned}">
+            <span class="key"></span> ${STRINGS.toolbar[mode]}
+          </button>`).join('')}
       </div>
       <hr />
       <div class="group" id="tb-tools">
@@ -54,6 +59,7 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
       <hr />
       <div class="group">
         <button type="button" id="t-heat">${STRINGS.toolbar.heatMap}</button>
+        <button type="button" id="t-flows" title="${STRINGS.toolbar.flowsHint}">${STRINGS.toolbar.flows}</button>
         <button type="button" id="t-buildings" class="on">${STRINGS.toolbar.buildings}</button>
         <button type="button" id="t-contours" class="on">${STRINGS.toolbar.contours}</button>
         <button type="button" id="t-underlay">${STRINGS.toolbar.underlay}</button>
@@ -122,6 +128,14 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
     game.cancelTrack();
     state.extendTarget = null;
   }
+
+  // Flows are drawn by the overlay, not MapLibre, so they are a game flag.
+  const flowsButton = root.querySelector('#t-flows');
+  flowsButton.addEventListener('click', () => {
+    game.showFlows = !game.showFlows;
+    flowsButton.classList.toggle('on', game.showFlows);
+    onToggleLayer?.(['flows'], game.showFlows);
+  });
 
   for (const [id, layers] of [
     ['t-heat', ['heat']],

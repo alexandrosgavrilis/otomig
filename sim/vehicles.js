@@ -36,15 +36,27 @@ export class Vehicle {
     this.passengers = [];
     /** Set for the tick in which the vehicle reaches a stop. */
     this.justArrivedAt = null;
+    /**
+     * People per dot in this game. Capacity is in people, and a dot can stand
+     * for several, so the seats a vehicle has for dots depend on it. Set by
+     * the Game; 1 when a vehicle is made on its own, as in tests.
+     */
+    this.dotSize = 1;
     /** Lon/lat and bearing, refreshed each tick for the renderer. */
     this.lon = 0;
     this.lat = 0;
     this.bearing = 0;
   }
 
+  /** Capacity in people. */
   get capacity() { return MODES[this.mode].capacity; }
-  get hasRoom() { return this.passengers.length < this.capacity; }
-  get load() { return this.passengers.length / this.capacity; }
+  /**
+   * Capacity in dots. Until Phase 6 a vehicle took one dot per seat, so a
+   * 50-person bus in a city of 10-person dots carried 500 people.
+   */
+  get seats() { return Math.max(1, Math.floor(this.capacity / this.dotSize)); }
+  get hasRoom() { return this.passengers.length < this.seats; }
+  get load() { return this.passengers.length / this.seats; }
   static price(mode) { return COSTS.VEHICLE[mode]; }
 }
 

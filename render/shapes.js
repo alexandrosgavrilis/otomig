@@ -197,6 +197,22 @@ export function drawStop(ctx, x, y, mode, selected = false) {
   ctx.restore();
 }
 
+/**
+ * A station intercity trains call at: a second, dashed ring outside it, in the
+ * stop's own ink — the main-line station on a Mini Metro map.
+ */
+export function drawIntercityMark(ctx, x, y, mode) {
+  const radius = (RENDER.STOP_RADIUS_PX[mode] ?? 4) + 3.5;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.setLineDash([3, 2]);
+  ctx.lineWidth = 1.6;
+  ctx.strokeStyle = COLORS.stopStroke;
+  ctx.stroke();
+  ctx.restore();
+}
+
 /** One outlined ring around the stops an interchange joins. */
 export function drawInterchange(ctx, points) {
   if (points.length < 2) return;

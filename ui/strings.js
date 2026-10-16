@@ -94,6 +94,16 @@ export const STRINGS = {
     maintenance: 'Upkeep per year',
     junctions: 'Junctions',
     deleteTrack: 'Remove track',
+    existingRail: 'Existing railway',
+    intercity: 'Intercity service',
+    intercityOn: 'On',
+    intercityOff: 'Off',
+    intercityHint: 'Intercity trains stop here on their own timetable. Every '
+      + 'passenger aboard pays a ticket, and some get off to travel on your network.',
+    intercityCalls: 'Intercity calls',
+    intercityNext: 'Next intercity in',
+    existingRailHint: 'Free to run train and metro lines on, and to join with '
+      + 'your own track. Kept by its owner: no upkeep, and it cannot be removed.',
     station: 'Station',
     structure: 'Built',
     structureNames: { atGrade: 'At grade', tunnel: 'Underground', bridge: 'Elevated' },
@@ -103,15 +113,30 @@ export const STRINGS = {
 
   finance: {
     tickets: 'Tickets',
+    intercity: 'Intercity tickets',
     advertising: 'Advertising',
     subsidy: 'Coverage subsidy',
     running: 'Running costs',
     maintenance: 'Maintenance',
     construction: 'Construction',
+    loans: 'Loans',
     net: 'Net this month',
     lastMonth: 'Last month',
     coverage: 'Residents covered',
     difficulty: 'Difficulty',
+    balance: 'Balance',
+    thisMonth: 'This month',
+    ticketPrice: 'Ticket price',
+    fareDemand: 'demand',
+    loanSlots: { small: 'Small loan', medium: 'Medium loan', large: 'Large loan' },
+    borrow: 'Borrow',
+    repay: 'Repay early',
+    repayHint: 'Pay off what is still owed. No penalty — it saves the interest to come.',
+    owed: 'owed',
+    perMonth: '/month',
+    years: 'years',
+    yearsLeft: 'years left',
+    debt: 'Still owed',
   },
 
   saves: {
@@ -134,16 +159,36 @@ export const STRINGS = {
     tram: 'Tram',
     metro: 'Metro',
     train: 'Train',
+    ferry: 'Ferry',
+    planned: 'Ferries are planned for a later version.',
     newLine: 'New line',
     extendLine: 'Extend line',
     editStops: 'Edit stops',
     buildTrack: 'Build track',
     bulldoze: 'Bulldoze',
     heatMap: 'Demand',
+    flows: 'Flows',
+    flowsHint: 'Where people on your network want to go: one arc per pair of '
+      + 'stops, as thick as the people a day making that trip.',
     buildings: 'Buildings',
     contours: 'Contours',
     underlay: 'Real map',
     finances: 'Finances',
+  },
+
+  legend: {
+    person: 'person',
+    people: 'people',
+    flows: 'people a day wanting each trip',
+    clocks: (sampleMinutes, serviceHours) => `Vehicles and passengers move in real minutes. `
+      + `Each calendar day shows ${sampleMinutes} minutes of service; money and daily `
+      + `totals count all ${serviceHours} hours.`,
+  },
+
+  /** Tooltips saying which clock a figure runs on. */
+  clocks: {
+    live: 'Right now, in real minutes of service.',
+    perDay: 'Counted over whole service days, not just the few minutes each day shows.',
   },
 
   region: {
@@ -182,6 +227,76 @@ export const STRINGS = {
     trackInUse: 'A station or line still uses this track.',
     tooShort: 'Too short to build.',
     trackOnlyRail: 'Build track is for metro and train.',
+    osmTrack: 'An existing railway cannot be removed.',
+    intercityNeedsRail: 'Intercity trains only call at stations on existing rail.',
+    noLoans: 'No loans in this mode.',
+    loanTaken: 'That loan is already taken.',
+    noLoan: 'There is no loan to repay.',
+  },
+
+  /**
+   * The play-testing panel (` key). Labels are keyed by config path, so a
+   * tunable added to sim/tuning.js without a label shows its path instead.
+   */
+  tuning: {
+    title: 'Tuning',
+    hint: 'Changes apply live and survive a reload. Copy the list and hand it '
+      + 'over when you are happy; it becomes the new defaults.',
+    badge: (count) => `Tuning: ${count} changed`,
+    copy: 'Copy changes',
+    copied: 'Copied.',
+    reset: 'Reset all',
+    resetOne: 'Reset to default',
+    groups: {
+      demand: 'Demand',
+      routing: 'Routing and walking',
+      patience: 'Patience and satisfaction',
+      money: 'Money',
+      intercity: 'Intercity',
+      live: 'Right now',
+    },
+    labels: {
+      'DEMAND.TRIPS_PER_RESIDENT': 'Trips per resident per day',
+      'DEMAND.DECAY_KM': 'Distance decay',
+      'DEMAND.WALK_FLOOR_M': 'Walk instead below',
+      'DEMAND.FARE_EXPONENT': 'Fare elasticity',
+      'DEMAND.CATCHMENT_M.bus': 'Catchment, bus',
+      'DEMAND.CATCHMENT_M.tram': 'Catchment, tram',
+      'DEMAND.CATCHMENT_M.metro': 'Catchment, metro',
+      'DEMAND.CATCHMENT_M.train': 'Catchment, train',
+      'ROUTING.TRANSFER_PENALTY_S': 'Transfer penalty',
+      'ROUTING.TIMETABLE_HEADWAY_S': 'Timetable from (headway)',
+      'ROUTING.BOARDING_WAIT_FRACTION': 'Expected wait, share of headway',
+      'DEMAND.WALK_SPEED_MS': 'Walking speed',
+      'DEMAND.INTERCHANGE_M': 'Interchange walk, up to',
+      'DIFFICULTY.{difficulty}.patienceSimMinutes': 'Patience (this difficulty)',
+      'PATIENCE.GRACE_SIM_S': 'Grace for an arriving vehicle',
+      'PATIENCE.GIVE_UP_PENALTY': 'Satisfaction lost per give-up',
+      'PATIENCE.SATISFACTION_FLOOR': 'Satisfaction floor',
+      'PATIENCE.RECOVERY_PER_DAY': 'Satisfaction regained per day',
+      'INCOME.FARE': 'Base fare',
+      'INCOME.ADVERTISING_PER_TRIP': 'Advertising per trip',
+      'DIFFICULTY.{difficulty}.subsidyShare': 'Subsidy share (this difficulty)',
+      'COSTS.RUNNING_PER_VEHICLE_YEAR.bus': 'Running cost, bus',
+      'COSTS.RUNNING_PER_VEHICLE_YEAR.tram': 'Running cost, tram',
+      'COSTS.RUNNING_PER_VEHICLE_YEAR.metro': 'Running cost, metro',
+      'COSTS.RUNNING_PER_VEHICLE_YEAR.train': 'Running cost, train',
+      'INTERCITY.INTERVAL_SIM_S': 'Time between calls',
+      'INTERCITY.PASSENGERS_PER_CALL': 'Passengers aboard',
+      'INTERCITY.DROP_FRACTION': 'Share who get off',
+    },
+    readout: {
+      tripsPerDay: 'Expected trips per day',
+      pairs: 'Stop pairs with demand',
+      waiting: 'Waiting now',
+      onBoard: 'On board now',
+      spawned: 'Spawned, all game',
+      arrived: 'Arrived, all game',
+      gaveUp: 'Gave up, all game',
+      unhappyPairs: 'Pairs below full satisfaction',
+      meanUnhappySatisfaction: '…their mean satisfaction',
+      coverage: 'Residents covered',
+    },
   },
 
   build: {

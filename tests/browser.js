@@ -805,7 +805,7 @@ try {
         profileShown: profile ? !profile.hidden : false,
         profileText: profile?.querySelector('.profile-meta')?.textContent || '',
         inked,
-        built: window.otomig.game.network.tracks.size,
+        built: [...window.otomig.game.network.tracks.values()].filter((t) => !t.osm).length,
       };
     });
     check('moving the cursor previews the track before anything is built',
@@ -823,7 +823,8 @@ try {
     await page.waitForTimeout(150);
     const trainTrack = await page.evaluate((before) => {
       const game = window.otomig.game;
-      const track = [...game.network.tracks.values()][0];
+      // The player's first track: existing railways come before it.
+      const track = [...game.network.tracks.values()].filter((t) => !t.osm)[0];
       return track ? {
         kinds: [...new Set(track.kinds)], mode: track.mode,
         paid: before - game.economy.balance, cost: track.cost,
@@ -861,7 +862,7 @@ try {
     await page.mouse.dblclick(last.x, last.y);
     await page.waitForTimeout(200);
     const metroTrack = await page.evaluate(() => {
-      const tracks = [...window.otomig.game.network.tracks.values()];
+      const tracks = [...window.otomig.game.network.tracks.values()].filter((t) => !t.osm);
       const metro = tracks.filter((t) => t.mode === 'metro')[1];
       return metro ? { start: metro.start, firstKind: metro.kinds[0],
         joined: metro.start?.trackId === tracks[0].id } : null;
@@ -940,6 +941,240 @@ try {
     });
     await page.waitForTimeout(600);
     await page.screenshot({ path: join(SHOTS, '13-rail.png') });
+  }
+
+  // ─── Phase 6: existing rail is usable track ───────────────────────────────
+  {
+    // Points on the fixture's Coast Line: y = 1500 + 160·sin(1.5πx / 6000).
+    const coast = (x) => [x, 1500 + 160 * Math.sin((x / 6000) * Math.PI * 1.5)];
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => {
+      const [w, s, e, n] = window.otomig.region.meta.bbox;
+      window.otomig.map.fitBounds([[w, s], [e, n]], { padding: 30, duration: 0 });
+    });
+    await page.waitForTimeout(300);
+
+    await page.click('#tb-tools button[data-tool="editStops"]');
+    await clickAt(...coast(4400));
+    await page.waitForTimeout(150);
+    const selected = await page.evaluate(() => ({
+      title: document.querySelector('.panel h3')?.textContent || '',
+      osm: Boolean(window.otomig.game.selection?.osm),
+      remove: document.querySelectorAll('.panel [data-act="delete"]').length,
+    }));
+    check('Edit stops selects the existing railway', selected.osm
+      && /existing railway/i.test(selected.title), selected.title);
+    check('…whose panel offers no way to remove it', selected.remove === 0);
+
+    await page.keyboard.press('4');
+    await page.click('#tb-tools button[data-tool="newLine"]');
+    await clickAt(...coast(900));
+    await clickAt(...coast(3000));
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(150);
+    const line = await page.evaluate(() => {
+      const game = window.otomig.game;
+      const lines = [...game.network.lines.values()].filter((l) => l.mode === 'train');
+      const last = lines.at(-1);
+      return last ? {
+        names: last.stops.map((id) => game.network.stops.get(id).name),
+        onOsm: last.segments.every((s) => s.onTrack && s.tracks.every((t) => t.startsWith('osm'))),
+        vehicles: last.vehicles.length,
+      } : null;
+    });
+    check('ACCEPTANCE: clicking two stations on existing rail makes a train line on it',
+      line?.onOsm && line.vehicles === 1, JSON.stringify(line));
+    check('…and its stations take the real stations\' names',
+      line?.names.join() === 'Harbour West,Central', line?.names.join());
+    // Intercity service, switched on from the station's own panel.
+    await page.click('#tb-tools button[data-tool="editStops"]');
+    await clickAt(...coast(900));
+    await page.waitForTimeout(150);
+    await page.click('.panel [data-act="intercity"]');
+    await page.waitForTimeout(100);
+    const intercity = await page.evaluate(() => {
+      const stop = window.otomig.game.selection;
+      return { on: Boolean(stop?.intercity), name: stop?.name,
+        button: document.querySelector('.panel [data-act="intercity"]')?.classList.contains('on') };
+    });
+    check('a station on existing rail switches intercity service on from its panel',
+      intercity.on && intercity.button, JSON.stringify(intercity));
+    await page.screenshot({ path: join(SHOTS, '14-existing-rail.png') });
+
+    // The panel used to be rebuilt every tick, detaching its buttons between
+    // press and release. Press + three times, for real, with the sim at 4×.
+    const vehiclesBefore = await page.evaluate(() => {
+      const game = window.otomig.game;
+      const line = [...game.network.lines.values()].filter((l) => l.mode === 'train').at(-1);
+      game.selection = line;
+      game.clock.setSpeedIndex(3);
+      return line.vehicles.length;
+    });
+    await page.waitForTimeout(200);
+    for (let i = 0; i < 3; i++) await page.click('.panel [data-act="add-vehicle"]', { timeout: 3000 });
+    const vehiclesAfter = await page.evaluate(() => window.otomig.game.selection.vehicles.length);
+    check('the line panel\'s + works by real clicks while the sim runs',
+      vehiclesAfter === vehiclesBefore + 3, `${vehiclesBefore} → ${vehiclesAfter}`);
+
+    await page.click('#tb-tools button[data-tool="bulldoze"]');
+    await clickAt(...coast(4400));
+    await page.waitForTimeout(100);
+    const refused = await page.evaluate(() => ({
+      text: document.querySelector('.feedback')?.textContent || '',
+      still: [...window.otomig.game.network.tracks.values()].some((t) => t.osm),
+    }));
+    check('bulldozing the existing railway is refused, with a message',
+      refused.still && /existing railway/i.test(refused.text), refused.text);
+    await page.click('#tb-tools button[data-tool="editStops"]');
+  }
+
+  // ─── Phase 5: finances, the fare slider, loans ────────────────────────────
+  {
+    await page.keyboard.press('Escape');
+    await page.click('#s-finances');
+    await page.waitForTimeout(150);
+    const panel = await page.evaluate(() => ({
+      title: document.querySelector('.panel h3')?.textContent || '',
+      rows: document.querySelectorAll('.panel [data-live]').length,
+      canBorrow: window.otomig.game.economy.canBorrow,
+      borrowButtons: document.querySelectorAll('.panel [data-act="take-loan"]').length,
+    }));
+    check('the Finances button opens the finances panel', /finances/i.test(panel.title), panel.title);
+    check('…listing every category with live figures', panel.rows >= 10, `${panel.rows}`);
+    check('…and three loan slots on Normal', panel.canBorrow && panel.borrowButtons === 3,
+      JSON.stringify(panel));
+
+    // The slider must survive the panel's every-tick refresh, or a drag would
+    // end the moment the game ticked.
+    await page.evaluate(() => {
+      document.querySelector('.panel [data-act="fare"]').dataset.marker = 'same';
+      window.otomig.game.clock.setSpeedIndex(3);
+    });
+    await page.waitForTimeout(600);
+    await page.locator('.panel [data-act="fare"]').fill('1.5');
+    await page.waitForTimeout(150);
+    const fare = await page.evaluate(() => ({
+      multiplier: window.otomig.game.economy.fareMultiplier,
+      kept: document.querySelector('.panel [data-act="fare"]')?.dataset.marker === 'same',
+      shown: document.querySelector('.panel [data-live="fare"]')?.textContent || '',
+      focused: document.activeElement?.dataset?.act === 'fare',
+    }));
+    check('the fare slider sets the ticket price', Math.abs(fare.multiplier - 1.5) < 1e-9,
+      `${fare.multiplier}`);
+    check('…and the panel shows it', /€2\.25/.test(fare.shown), fare.shown);
+    check('…while the slider survives the panel\'s live refresh', fare.kept);
+    check('…and hands the keyboard back once moved', !fare.focused);
+
+    await page.click('.panel [data-act="take-loan"][data-loan="small"]');
+    await page.waitForTimeout(150);
+    const loan = await page.evaluate(() => ({
+      taken: Boolean(window.otomig.game.economy.loanIn('small')),
+      repay: document.querySelectorAll('.panel [data-act="repay-loan"]').length,
+      owed: document.querySelector('.panel [data-live="loan-small"]')?.textContent || '',
+    }));
+    check('clicking Borrow takes the loan', loan.taken);
+    check('…and the slot offers early repayment, with what is owed',
+      loan.repay === 1 && /owed/.test(loan.owed), loan.owed);
+    await page.screenshot({ path: join(SHOTS, '15-finances.png') });
+    await page.click('.panel [data-act="repay-loan"][data-loan="small"]');
+    await page.waitForTimeout(150);
+    check('Repay early clears the loan',
+      await page.evaluate(() => !window.otomig.game.economy.loanIn('small')));
+  }
+
+  // ─── The tuning panel (` key) ─────────────────────────────────────────────
+  {
+    await page.keyboard.press('Backquote');
+    await page.waitForTimeout(100);
+    check('` opens the tuning panel', await page.locator('.tuning').isVisible());
+
+    const path = 'DEMAND.TRIPS_PER_RESIDENT';
+    await page.locator(`.tuning [data-path="${path}"] input`).fill('0.8');
+    await page.waitForTimeout(150);
+    const tuned = await page.evaluate(async (key) => {
+      const config = await import('/config.js');
+      return {
+        value: config.DEMAND.TRIPS_PER_RESIDENT,
+        badge: document.querySelector('.tuning-badge')?.hidden === false
+          ? document.querySelector('.tuning-badge').textContent : '',
+        saved: localStorage.getItem('otomig.tuning') || '',
+        changed: document.querySelector(`.tuning [data-path="${key}"]`).classList.contains('changed'),
+      };
+    }, path);
+    check('a tuning slider writes the live config value', tuned.value === 0.8, `${tuned.value}`);
+    check('…marks itself changed and shows the badge', tuned.changed && /1 changed/.test(tuned.badge),
+      tuned.badge);
+    check('…and is kept for the next reload', JSON.parse(tuned.saved || '{}')[path] === 0.8);
+
+    const paused = await page.evaluate(() => window.otomig.game.clock.paused);
+    await page.keyboard.press('Space');
+    check('Space still pauses after moving a tuning slider',
+      await page.evaluate((was) => window.otomig.game.clock.paused !== was, paused));
+
+    await page.click('.tuning [data-act="copy"]');
+    const exported = await page.locator('.tuning textarea').inputValue();
+    check('Copy changes lists old → new', exported.includes(`${path}: 0.4 → 0.8`), exported);
+    await page.screenshot({ path: join(SHOTS, '16-tuning.png') });
+
+    await page.click('.tuning [data-act="reset"]');
+    await page.waitForTimeout(100);
+    const reset = await page.evaluate(async () => ({
+      value: (await import('/config.js')).DEMAND.TRIPS_PER_RESIDENT,
+      badge: document.querySelector('.tuning-badge')?.hidden,
+      saved: localStorage.getItem('otomig.tuning'),
+    }));
+    check('Reset all restores the defaults, hides the badge and clears the saved copy',
+      reset.value === 0.4 && reset.badge === true && reset.saved === null, JSON.stringify(reset));
+    await page.keyboard.press('Backquote');
+    check('` closes it again', !(await page.locator('.tuning').isVisible()));
+  }
+
+  // ─── The legend, the Flows layer, the ferry placeholder ───────────────────
+  {
+    const legend = await page.evaluate(() => ({
+      text: document.querySelector('.legend')?.textContent.replace(/\s+/g, ' ') || '',
+      visible: document.querySelector('.legend')?.checkVisibility(),
+    }));
+    check('the legend says what a dot is worth', legend.visible && /= 1 person/.test(legend.text),
+      legend.text);
+    check('…and which clock the numbers run on', /18 hours/.test(legend.text), legend.text);
+
+    // Arcs are drawn in the Flows colour; count overlay pixels close to it.
+    const flowPixels = () => page.evaluate(() => {
+      const canvas = document.getElementById('overlay');
+      const { data } = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+      let count = 0;
+      for (let i = 0; i < data.length; i += 4 * 7) {
+        const [r, g, b, a] = [data[i], data[i + 1], data[i + 2], data[i + 3]];
+        if (a > 40 && b > r + 30 && b > g + 50 && r > g) count++;
+      }
+      return count;
+    });
+    await page.keyboard.press('Escape');
+    const before = await flowPixels();
+    await page.click('#t-flows');
+    await page.waitForTimeout(300);
+    const after = await flowPixels();
+    const flowsLegend = await page.evaluate(() =>
+      document.querySelector('.legend-flows')?.checkVisibility());
+    check('the Flows toggle draws arcs between the stops people travel between',
+      after > before + 50, `${before} → ${after}`);
+    check('…and adds its line to the legend', flowsLegend === true);
+    await page.screenshot({ path: join(SHOTS, '17-flows.png') });
+    await page.click('#t-flows');
+
+    const ferry = await page.evaluate(() => {
+      const button = document.querySelector('#tb-modes button[data-mode="ferry"]');
+      return { exists: Boolean(button), disabled: button?.disabled, title: button?.title || '' };
+    });
+    const modeBefore = await page.evaluate(() =>
+      document.querySelector('#tb-modes button.on')?.dataset.mode);
+    await page.keyboard.press('5');
+    const modeAfter = await page.evaluate(() =>
+      document.querySelector('#tb-modes button.on')?.dataset.mode);
+    check('Ferry shows in the toolbar as planned, and cannot be picked',
+      ferry.exists && ferry.disabled && /later/i.test(ferry.title), JSON.stringify(ferry));
+    check('…not even with the 5 key', modeBefore === modeAfter, `${modeBefore} → ${modeAfter}`);
   }
 
   // ─── Nothing threw ────────────────────────────────────────────────────────

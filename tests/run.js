@@ -30,6 +30,9 @@ import { runPhase2Tests } from './phase2.js';
 import { runPhase3Tests } from './phase3.js';
 import { runPhase4Tests } from './phase4.js';
 import { runProfileTests } from './profiles.js';
+import { runPhase5Tests } from './phase5.js';
+import { runPhase6Tests } from './phase6.js';
+import { runPhase7Tests } from './phase7.js';
 
 let passed = 0;
 const failures = [];
@@ -618,6 +621,9 @@ runPhase2Tests(check, near);
 runPhase3Tests(check, near);
 runPhase4Tests(check, near);
 runProfileTests(check, near);
+runPhase5Tests(check, near);
+runPhase6Tests(check, near);
+runPhase7Tests(check, near);
 
 // ─── report ───────────────────────────────────────────────────────────────────
 

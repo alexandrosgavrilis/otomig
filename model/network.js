@@ -74,6 +74,15 @@ export class Stop {
      * @type {import('../sim/passengers.js').Dot[]}
      */
     this.waiting = [];
+    /**
+     * Intercity service, for a station on existing rail only (Phase 6). The
+     * timer counts sim seconds toward the next call; `carry` holds the
+     * fraction of a dot left over from the last drop.
+     */
+    this.intercity = false;
+    this.intercityTimer = 0;
+    this.intercityCarry = 0;
+    this.intercityCalls = 0;
   }
 
   /**
@@ -268,6 +277,17 @@ export class Network {
 
   touch() { this.version++; }
 
+  /**
+   * Add the region's existing railways as free, ready-made train track. Done
+   * once, before any player track, so they come first in every iteration.
+   * @param {Track[]} tracks from build/osm-rail.js
+   */
+  addOsmRail(tracks) {
+    for (const track of tracks) this.tracks.set(track.id, track);
+    this._trackGraph = null;
+    this.touch();
+  }
+
   /** Routing over every piece of built track. */
   get trackGraph() {
     if (!this._trackGraph) this._trackGraph = new TrackGraph(this.tracks.values(), this.frame);
@@ -332,15 +352,35 @@ export class Network {
     const existing = this.stopAtNode(snapped.key, mode);
     if (existing) return { stop: existing, reused: true };
 
-    // Named after the nearest street, like a bus stop, looking a little wider:
-    // a station is often set back from the road.
+    // On existing rail, named after the real station there if there is one.
+    // Otherwise after the nearest street, like a bus stop, looking a little
+    // wider: a station is often set back from the road.
     const street = this.roadIndex.snap(snapped.lon, snapped.lat, 'bus', BUILD.STOP_SNAP_M * 4);
     const stop = new Stop(mode, snapped.lon, snapped.lat, snapped.key,
-      street?.name || 'Station', snapped.kind);
+      this.osmStationName(snapped.lon, snapped.lat) || street?.name || 'Station', snapped.kind);
     this.stops.set(stop.id, stop);
     this.recomputeInterchanges();
     this.touch();
     return { stop, reused: false };
+  }
+
+  /** Is this a station on an existing railway, where intercity trains may call? */
+  onOsmRail(stop) {
+    if (!isRail(stop.mode) || typeof stop.node !== 'string') return false;
+    const trackId = stop.node.slice(0, stop.node.lastIndexOf(':'));
+    return Boolean(this.tracks.get(trackId)?.osm);
+  }
+
+  /** Name of the nearest real OSM station or halt, within a platform's length. */
+  osmStationName(lon, lat) {
+    let best = null;
+    let bestDist = BUILD.OSM_STATION_NAME_M;
+    for (const station of this.region?.stations || []) {
+      if (!station.name) continue;
+      const distance = this.frame.distance(lon, lat, station.lon, station.lat);
+      if (distance < bestDist) { bestDist = distance; best = station.name; }
+    }
+    return best;
   }
 
   stopAtNode(node, mode) {
@@ -643,6 +683,8 @@ export class Network {
    */
   removeTrack(trackId) {
     if (!this.tracks.has(trackId)) return { error: 'nothingThere' };
+    // Existing railways belong to someone else; the player only runs on them.
+    if (this.tracks.get(trackId).osm) return { error: 'osmTrack' };
     const prefix = `${trackId}:`;
     const stationOnIt = [...this.stops.values()].some((stop) =>
       typeof stop.node === 'string' && stop.node.startsWith(prefix));

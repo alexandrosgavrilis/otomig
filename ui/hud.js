@@ -9,6 +9,7 @@
  */
 
 import { CLOCK } from '../config.js';
+import { Clock } from '../sim/clock.js';
 import { formatMoney, formatThousands } from '../sim/economy.js';
 import { formatDate } from '../sim/clock.js';
 import { STRINGS } from './strings.js';
@@ -30,10 +31,10 @@ export function mountHud(root, game) {
           </button>`).join('')}
       </div>
       <div class="spacer"></div>
-      <div class="stat">
+      <div class="stat" title="${STRINGS.clocks.perDay}">
         <b id="hud-transported">0k</b><span>${STRINGS.hud.transported}</span>
       </div>
-      <div class="stat">
+      <div class="stat" title="${STRINGS.clocks.live}">
         <b id="hud-onnetwork">0</b><span>${STRINGS.hud.onNetwork}</span>
       </div>
       <div class="stat" id="hud-lastmonth-wrap">
@@ -86,4 +87,30 @@ export function mountHud(root, game) {
 
   update();
   return { update, syncSpeedButtons };
+}
+
+/**
+ * The legend, bottom left: what one dot is worth in this game, and which of
+ * the two clocks the numbers on screen run on. The dot size is fixed for the
+ * whole game, so the first line never changes; the Flows line shows only
+ * while that layer is on.
+ */
+export function mountLegend(root, game) {
+  const people = game.passengersPerDot;
+  const sampleMinutes = Math.round(Clock.simSecondsPerDay / 60);
+  root.innerHTML = `
+    <div class="legend">
+      <div class="legend-row"><span class="legend-dot"></span>
+        <b>= ${people} ${people === 1 ? STRINGS.legend.person : STRINGS.legend.people}</b></div>
+      <div class="legend-row legend-flows" hidden><span class="legend-arc"></span>
+        <span>${STRINGS.legend.flows}</span></div>
+      <div class="legend-clocks">${STRINGS.legend.clocks(sampleMinutes, CLOCK.SERVICE_HOURS_PER_DAY)}</div>
+    </div>
+  `;
+  const flows = root.querySelector('.legend-flows');
+  function update() {
+    if (flows.hidden === game.showFlows) flows.hidden = !game.showFlows;
+  }
+  update();
+  return { update };
 }
