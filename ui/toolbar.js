@@ -20,7 +20,7 @@
  */
 
 import { STRINGS } from './strings.js';
-import { MODES, COSTS, BUILD, PLAYABLE_MODES, PLANNED_MODES } from '../config.js';
+import { MODES, COSTS, BUILD, INPUT, PLAYABLE_MODES, PLANNED_MODES } from '../config.js';
 import { formatMoney } from '../sim/economy.js';
 
 export const TOOLS = ['newLine', 'extendLine', 'editStops', 'buildTrack', 'bulldoze'];
@@ -313,46 +313,45 @@ export function wireMapInteraction(map, game, toolbar, { onFeedback, onSelect })
     toolbar.state.extendTarget = null;
   });
 
-  // ─── Dragging a segment ───────────────────────────────────────────────────
-  // Press on a line between two stops and pull. For a bus this forces a
-  // different road route; for a tram it pulls the segment off the road into
-  // dedicated track. MapLibre's own drag-pan has to be suspended for the
-  // duration, or the map slides out from under the gesture.
-  map.on('mousedown', (event) => {
-    if (game.draft || game.trackDraft) return;
-    if (state.tool === 'bulldoze' || state.tool === 'buildTrack') return;
-    const { lng: lon, lat } = event.lngLat;
+  // ─── Dragging a stop or a segment ─────────────────────────────────────────
+  // Press on a line between two stops and pull: for a bus this forces a
+  // different road route, for a tram it pulls the segment off the road into
+  // dedicated track. With Edit stops, press on a stop and pull to move it.
+  // MapLibre's own drag-pan is suspended for the duration, or the map slides
+  // out from under the gesture.
+  //
+  // A mouse picks things up the moment it presses. A finger has to HOLD
+  // first (INPUT.TOUCH_HOLD_MS), because on a tablet the same swipe also pans
+  // the map, and lines are everywhere: a quick swipe pans, a press held still
+  // on a stop or a line picks it up.
 
-    // Edit stops: a press on a stop picks the stop up. Checked before the
-    // segment, because every stop sits on its own line's segments.
+  /** What a press here would pick up, or null. */
+  function grabbable(lon, lat) {
+    if (game.draft || game.trackDraft) return null;
+    if (state.tool === 'bulldoze' || state.tool === 'buildTrack') return null;
+    // A stop first: every stop sits on its own line's segments.
     if (state.tool === 'editStops') {
       const stop = game.network.stopNear(lon, lat, pixelsToMetres(map, 12));
-      if (stop) {
-        event.preventDefault();
-        map.dragPan.disable();
-        game.stopDrag = { stop, preview: null };
-        return;
-      }
+      if (stop) return { stop };
     }
-
     const hit = segmentAt(game, lon, lat, pixelsToMetres(map, 10));
-    if (!hit) return;
+    return hit ? { segment: hit, lonLat: [lon, lat] } : null;
+  }
 
-    event.preventDefault();
+  function startDrag(grab) {
     map.dragPan.disable();
-    game.drag = { ...hit, via: [lon, lat], preview: null };
-  });
+    if (grab.stop) game.stopDrag = { stop: grab.stop, preview: null };
+    else game.drag = { ...grab.segment, via: grab.lonLat, preview: null };
+  }
 
-  map.on('mousemove', (event) => {
+  function moveDrag(lon, lat) {
     if (game.stopDrag) {
-      const { lng, lat } = event.lngLat;
-      game.stopDrag.preview = game.previewStopMove(game.stopDrag.stop, lng, lat)
-        || { lon: lng, lat, valid: false };
-      game.stopDrag.cursor = [lng, lat];
+      game.stopDrag.preview = game.previewStopMove(game.stopDrag.stop, lon, lat)
+        || { lon, lat, valid: false };
+      game.stopDrag.cursor = [lon, lat];
       return;
     }
     if (!game.drag) return;
-    const { lng: lon, lat } = event.lngLat;
     game.drag.via = [lon, lat];
     game.drag.preview = game.previewVia(
       game.drag.line, game.drag.fromId, game.drag.toId, game.drag.via);
@@ -361,7 +360,7 @@ export function wireMapInteraction(map, game, toolbar, { onFeedback, onSelect })
     // one gesture that can cost money without placing a stop.
     game.drag.costDelta = game.dragCostDelta(
       game.drag.line, game.drag.fromId, game.drag.toId, game.drag.preview);
-  });
+  }
 
   const endDrag = (event) => {
     if (game.stopDrag) {
@@ -389,11 +388,56 @@ export function wireMapInteraction(map, game, toolbar, { onFeedback, onSelect })
       onFeedback?.(`${STRINGS.build.trackBuilt} ${formatMoney(result.cost)}`, event?.point);
     }
   };
+
+  // Mouse.
+  map.on('mousedown', (event) => {
+    const grab = grabbable(event.lngLat.lng, event.lngLat.lat);
+    if (!grab) return;
+    event.preventDefault();
+    startDrag(grab);
+  });
+  map.on('mousemove', (event) => moveDrag(event.lngLat.lng, event.lngLat.lat));
   map.on('mouseup', endDrag);
   // Releasing outside the canvas must not leave the map un-pannable.
   map.getCanvas().addEventListener('mouseleave', () => {
     if (game.drag || game.stopDrag) endDrag(null);
   });
+
+  // Touch: hold, then drag.
+  let hold = null;
+  const cancelHold = () => { if (hold) clearTimeout(hold.timer); hold = null; };
+  map.on('touchstart', (event) => {
+    cancelHold();
+    // Two fingers are a pinch, never a drag.
+    if (event.points.length !== 1) return;
+    const grab = grabbable(event.lngLat.lng, event.lngLat.lat);
+    if (!grab) return;
+    hold = {
+      grab,
+      point: event.point,
+      timer: setTimeout(() => {
+        const held = hold;
+        hold = null;
+        if (!held) return;
+        startDrag(held.grab);
+        // A tick under the finger says "picked up", where the device can.
+        globalThis.navigator?.vibrate?.(15);
+      }, INPUT.TOUCH_HOLD_MS),
+    };
+  });
+  map.on('touchmove', (event) => {
+    if (hold) {
+      // Moved before the hold completed: it was a pan after all.
+      const moved = Math.hypot(event.point.x - hold.point.x, event.point.y - hold.point.y);
+      if (moved > INPUT.TOUCH_SLOP_PX || event.points.length !== 1) cancelHold();
+      return;
+    }
+    if (!game.drag && !game.stopDrag) return;
+    event.preventDefault();
+    moveDrag(event.lngLat.lng, event.lngLat.lat);
+  });
+  map.on('touchend', (event) => { cancelHold(); endDrag(event); });
+  map.on('touchcancel', () => { cancelHold(); if (game.drag || game.stopDrag) endDrag(null); });
 }
 
 /**

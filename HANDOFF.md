@@ -87,7 +87,7 @@ Both would have reached Alex as a broken screen, and both were invisible to 272 
 
 ```bash
 npm test                            # 695 logic assertions, plain Node, no dependencies
-npm run test:browser                # 155 assertions in real Chromium via Playwright
+npm run test:browser                # 158 assertions in real Chromium via Playwright
 npm run test:browser -- --headed    # ...and watch it
 npm run test:live                   # 24 assertions against a REAL import — hits live OSM services
 npm run test:live -- --km 5         # ...at a given size (default 5, the slider minimum)
@@ -321,7 +321,7 @@ An escape hatch, not a default. [extract.bbbike.org](https://extract.bbbike.org)
 
 ## 6. What works
 
-Verified by `npm test` (695) and `npm run test:browser` (155). Phases 3 to 6 have their own sections: §9, §10, §11 and §14.
+Verified by `npm test` (695) and `npm run test:browser` (158). Phases 3 to 6 have their own sections: §9, §10, §11 and §14.
 
 **Phase 1.** `LocalFrame` and the bbox/chunk maths; terrain height grid with bilinear interpolation (exact on a ramp); 200 m demand grid; 10 m occupancy bitset; Overpass parsing with road-class filtering, abandoned-rail rejection, chunk-overlap de-duplication and shared-node collapsing; Terrarium decode and tile resampling; marching-squares contours and sea polygons; the base-map GeoJSON. In the browser: the new-game screen, search firing no request while typing, MapLibre rendering real pixels, layer toggles, zoom revealing minor roads, `maxBounds`, IndexedDB round-trips, the module worker booting.
 
@@ -900,7 +900,7 @@ Fourteen items, all done. Asserted in [tests/phase7.js](tests/phase7.js) (`#1`�
 
 ### Known gaps
 
-- **Dragging a stop or a segment needs a mouse.** Touch has the draft buttons, not drags.
+- ~~**Dragging a stop or a segment needs a mouse.**~~ *Fixed the same day, on Alex's word ("hold and drag, like you would with your mouse"):* on a touch screen, hold a finger still on a stop or a line for `INPUT.TOUCH_HOLD_MS` (350 ms), then drag. A swipe that moves sooner pans the map, so lines everywhere do not steal panning; a mouse still picks up at once. Two fingers never drag. The browser suite drives both through real touch events (the DevTools protocol; Playwright itself can only tap).
 - **Dots still appear at random times**, even for a timetabled line (§16).
 - **The fixture has no coastline**, so the browser suite runs the elevation fallback; the OSM path is covered by synthetic coasts in the logic suite and by Patras.
 - **A tram on a one-way street pays for track both ways** where the way back runs elsewhere — right for a tram, which needs rails on both streets.

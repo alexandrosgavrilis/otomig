@@ -1241,6 +1241,68 @@ try {
     check('Edit stops drags a stop to a new place on the roads', movedM > 200, `${Math.round(movedM)} m`);
     check('…and the map pans again afterwards', after.pannable);
 
+    // On a tablet: hold a stop, then drag it. Real touch events through the
+    // DevTools protocol, since Playwright's own touch API can only tap.
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+    const touch = (type, points) => cdp.send('Input.dispatchTouchEvent', {
+      type, touchPoints: points.map(({ x, y }) => ({ x, y })),
+    });
+    const held = await page.evaluate((id) => {
+      const stop = window.otomig.game.network.stops.get(id);
+      const p = window.otomig.map.project([stop.lon, stop.lat]);
+      return { x: p.x, y: p.y, lon: stop.lon, lat: stop.lat };
+    }, before.id);
+    const dest = await pointOf(2200, 4800);
+    await touch('touchStart', [held]);
+    await page.waitForTimeout(600); // the hold
+    for (let i = 1; i <= 6; i++) {
+      await touch('touchMove', [{ x: held.x + (dest.x - held.x) * i / 6, y: held.y + (dest.y - held.y) * i / 6 }]);
+      await page.waitForTimeout(30);
+    }
+    await touch('touchEnd', []);
+    await page.waitForTimeout(150);
+    const touched = await page.evaluate((id) => {
+      const stop = window.otomig.game.network.stops.get(id);
+      return { lon: stop.lon, lat: stop.lat, pannable: window.otomig.map.dragPan.isEnabled() };
+    }, before.id);
+    const touchMovedM = await page.evaluate(([a, b]) =>
+      window.otomig.frame.distance(a.lon, a.lat, b.lon, b.lat), [held, touched]);
+    check('on a touch screen, holding a stop and dragging moves it', touchMovedM > 200,
+      `${Math.round(touchMovedM)} m`);
+    check('…and the map pans again afterwards', touched.pannable);
+
+    // A quick swipe over a line is still a pan, not a drag. Zoomed in first:
+    // at the whole-region view the map's bounds leave nowhere to pan to.
+    await page.evaluate(() => {
+      const line = [...window.otomig.game.network.lines.values()].filter((l) => l.mode === 'bus').at(-1);
+      const points = line.segments[0].points;
+      window.otomig.map.jumpTo({ center: points[Math.floor(points.length / 2)], zoom: 16 });
+    });
+    await page.waitForTimeout(300);
+    const lineMid = await page.evaluate((id) => {
+      const line = [...window.otomig.game.network.lines.values()].filter((l) => l.mode === 'bus').at(-1);
+      const [lon, lat] = line.segments[0].points[Math.floor(line.segments[0].points.length / 2)];
+      const p = window.otomig.map.project([lon, lat]);
+      return { x: p.x, y: p.y, vias: line.vias.size };
+    });
+    const centreBefore = await page.evaluate(() => window.otomig.map.getCenter().toArray());
+    await touch('touchStart', [lineMid]);
+    for (let i = 1; i <= 8; i++) {
+      await touch('touchMove', [{ x: lineMid.x + 15 * i, y: lineMid.y }]);
+      await page.waitForTimeout(16);
+    }
+    await touch('touchEnd', []);
+    await page.waitForTimeout(400);
+    const swiped = await page.evaluate(() => ({
+      centre: window.otomig.map.getCenter().toArray(),
+      vias: [...window.otomig.game.network.lines.values()].filter((l) => l.mode === 'bus').at(-1).vias.size,
+    }));
+    check('a quick swipe across a line pans the map instead of dragging the line',
+      Math.abs(swiped.centre[0] - centreBefore[0]) > 1e-5 && swiped.vias === lineMid.vias,
+      JSON.stringify({ centreBefore, ...swiped }));
+    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false });
+
     // The day bar moves as the day goes by.
     const widths = [];
     await page.evaluate(() => window.otomig.game.clock.setSpeedIndex(3));

@@ -785,6 +785,19 @@ export const INTERCITY = {
   DROP_FRACTION: 0.3,
 };
 
+// ─── Input ────────────────────────────────────────────────────────────────────
+
+export const INPUT = {
+  /**
+   * On a touch screen a stop or a line is picked up by holding a finger on it
+   * this long, then dragging. A quick swipe pans the map as usual. A mouse
+   * picks up at once.
+   */
+  TOUCH_HOLD_MS: 350,
+  /** A finger moving further than this before the hold completes is panning. */
+  TOUCH_SLOP_PX: 10,
+};
+
 // ─── Visual design ────────────────────────────────────────────────────────────
 
 export const COLORS = {

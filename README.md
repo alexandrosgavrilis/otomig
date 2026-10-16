@@ -25,7 +25,7 @@ Serve it over `http://` — don't open `index.html` as a `file://` URL. ES modul
 
 ```bash
 npm test               # 695 logic assertions, plain Node, no framework, no dependencies
-npm run test:browser   # 155 assertions driving real Chromium (needs: npm install)
+npm run test:browser   # 158 assertions driving real Chromium (needs: npm install)
 npm run test:live      # 25 assertions against a REAL import — hits live OSM services
 npm run fixture        # regenerate fixtures/test-region.json
 ```
