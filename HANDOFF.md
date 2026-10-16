@@ -3,7 +3,7 @@
 Read this first in every session. Update it last.
 
 **State:** Phases 0, 1, 2, R, Q, 3 and **4** complete. Rail is in: track built with the Build track tool, the full grade rule, the rail-and-roads rules, stations, metro and train lines on track, and the height-profile strip. Every Phase 4 acceptance criterion is asserted in code (§10).
-**Last session:** Oct 15, 2026 — Phase 4 (rail), plus three bugs it turned up in earlier phases (§10, "Fixed on the way").
+**Last session:** Oct 15–16, 2026 — Phase 4 (rail), a real-data trial at Kiato (§10), and the decisions it led to: lines sharing stops (§12), buildings filled in from Overture, population set by the seasonal profile, and a transfer penalty on every change of vehicle (§13).
 **Earlier:** Oct 10, 2026 — Phase 0 (research), Phase 1 (region and map), Phase 2 (buses and passengers), Phase R (data architecture), first live import, Phase Q (query restructure), Phase 3 (trams).
 
 **Phase R is done, and it cancelled Phase D.** See [RESEARCH_TILES.md](RESEARCH_TILES.md).
@@ -21,11 +21,11 @@ The region comes out identical — same 51,700 buildings and 502,376 residents f
 
 | | |
 | --- | --- |
-| **Next** | **Phase 5 — full economy.** Loans, the fare slider, the finance panel, all four difficulties end to end, Hard's game over. Much of the plumbing already exists — see §11. |
+| **Next** | **The last build session before Alex play-tests: Phase 5 (full economy), then Phase 6 (existing OSM rail) if it fits.** Phase 5 is mostly UI over plumbing that exists — loans are the one real build (§11). Phase 6 makes imported railways usable track; Phase 4's track graph was built so OSM rail can join it as train track (§10). After that: Alex's play-test, then bug fixes and tuning. |
 | **Done, Oct 16** | Unmapped buildings are filled in from Overture's ML footprints, and the seasonal profile now decides how many people the buildings hold, with the curve moving the population (§13). |
-| **Decide** | One question left from §12.4: should a change of line at the *same* stop carry the 5-minute transfer penalty? |
+| **Decided, Oct 16** | Every change of vehicle pays the 5-minute transfer penalty, at the same stop too (§13). The town populations' ~1.5× overshoot is accepted. The stepped coastline is accepted as it is. |
 | **Still to try live** | Rail has been tried on a real import at Kiato (§10). Corinth, the case where buildings bite, has not. `tools/import-region.js` snapshots a region once for offline testing. |
-| Shelved | Vector tiles for building geometry. Viable and fully costed ([RESEARCH_TILES.md](RESEARCH_TILES.md) §8), purely additive, worth it only if dense 15 km imports become the priority. |
+| Shelved | Vector tiles for *all* building geometry (Overture now fills only the gaps, §13). Viable and fully costed ([RESEARCH_TILES.md](RESEARCH_TILES.md) §8), worth it only if dense 15 km imports become the priority. |
 
 The reason Phase R was ordered before Phase 3 was that a data-layer rewrite would change the occupancy raster's provenance. It never happened, so the raster is exactly what it was.
 
@@ -82,7 +82,7 @@ Both would have reached Alex as a broken screen, and both were invisible to 272 
 ## 2. Testing
 
 ```bash
-npm test                            # 507 logic assertions, plain Node, no dependencies
+npm test                            # 509 logic assertions, plain Node, no dependencies
 npm run test:browser                # 119 assertions in real Chromium via Playwright
 npm run test:browser -- --headed    # ...and watch it
 npm run test:live                   # 24 assertions against a REAL import — hits live OSM services
@@ -153,7 +153,7 @@ The scale is fixed at import and never changes mid-game — a dot that silently 
 11. **MapLibre's keyboard handling is disabled**, so 1–4, Space and Esc belong to the game.
 12. **Passengers are not saved.** Transient, would multiply save size, and a reloaded network refills within seconds. Structure, money and satisfaction history survive. A save is under 20 kB and a test enforces it.
 13. **Line segments are re-routed on load, not stored** — derived from stops plus the road graph, so storing them would be larger and a chance to go stale.
-14. **The transfer penalty sits on the walking edge, not on boarding**, so a passenger's first boarding is never penalised. *Correction, Oct 15 2026:* this also means a change of line at the **same** stop is not penalised — only a change that walks between stops. See §12.4.
+14. **Every change of vehicle pays the transfer penalty; a first boarding never does.** *Changed Oct 16 2026, Alex's decision:* the penalty used to sit on the walk between two stops, so changing lines at the same stop was free. Each stop now has a "start" node and an "arrived" node, and boarding from "arrived" — at the same stop or after walking to the next one — adds the penalty. See §13.
 15. **A finished line is given one vehicle automatically** if affordable. A line with no vehicles carries nobody, and a player who draws one and sees nothing happen has no way to tell what is wrong.
 16. **Lifetime counters** (`game.totals`) alongside instantaneous state. On a sparse network the instant you look is usually between passengers.
 17. **Vehicles are spaced evenly in time, not distance.** Hops differ in length, so distance spacing still bunches vehicles where stops are close.
@@ -317,7 +317,7 @@ An escape hatch, not a default. [extract.bbbike.org](https://extract.bbbike.org)
 
 ## 6. What works
 
-Verified by `npm test` (507) and `npm run test:browser` (119). Phases 3 and 4 have their own sections, §9 and §10.
+Verified by `npm test` (509) and `npm run test:browser` (119). Phases 3 and 4 have their own sections, §9 and §10.
 
 **Phase 1.** `LocalFrame` and the bbox/chunk maths; terrain height grid with bilinear interpolation (exact on a ramp); 200 m demand grid; 10 m occupancy bitset; Overpass parsing with road-class filtering, abandoned-rail rejection, chunk-overlap de-duplication and shared-node collapsing; Terrarium decode and tile resampling; marching-squares contours and sea polygons; the base-map GeoJSON. In the browser: the new-game screen, search firing no request while typing, MapLibre rendering real pixels, layer toggles, zoom revealing minor roads, `maxBounds`, IndexedDB round-trips, the module worker booting.
 
@@ -521,7 +521,7 @@ Seasonal profiles, coverage subsidies, loans, all four difficulty levels, Hard's
 
 **Already in place**, so this phase is mostly UI and verification:
 
-1. **Seasonal multipliers** are applied to trip generation in `sim/demand.js`, and `tests/phase2.js` already asserts Tourist swells in August.
+1. **Seasonal multipliers** now move the *population* (§13), in `DemandModel.scaleResidents`, with the hemisphere flip and Tourist's summer/winter switch. `tests/phase2.js` and `tests/profiles.js` already assert that Tourist swells in August. The profile also sets how many people the buildings hold, which feeds starting capital: Hard on a small island should be tested with the profile that describes the island (Countryside or Tourist), not Urban.
 2. **The coverage subsidy** is computed daily in `Economy.endDay`, capped at running costs, from `DIFFICULTY[*].subsidyShare`.
 3. **Difficulty rules** (`DIFFICULTY` in [config.js](config.js)) drive starting capital, patience, fare evasion, build-blocking when negative and Hard's 12-month game over. `economy.gameOver` is checked every tick and `showGameOver` in [main.js](main.js) puts up the calm ending.
 4. **`economy.fareMultiplier`** exists, is saved, scales tickets and feeds the demand model's elasticity. **There is no slider for it yet.**
@@ -606,7 +606,7 @@ The options, cheapest first:
 
 Selecting is now Edit stops' job alone. That departs from the spec's "clicking any game object selects it", on Alex's instruction that lines share stops. The browser suite drives all four tools through real clicks.
 
-**Decide — the transfer penalty at a shared stop.** Changing lines *at the same stop* costs a passenger the expected wait (half the headway) and nothing more. Changing between two *nearby* stops costs the walk **plus the spec's 5-minute transfer penalty**. HANDOFF decision 14 says "only an actual change of vehicle is penalised", but a same-stop change of vehicle isn't. Either is defensible: a cross-platform change really is easier than a walk. But it is a gameplay choice. It decides whether players funnel lines through shared stops, and the code and its documentation disagree. Options: keep it and correct decision 14's wording, or add the penalty to every change of line.
+**Decided Oct 16 — every change pays the penalty, implemented in §13.** The question as it was put: Changing lines *at the same stop* costs a passenger the expected wait (half the headway) and nothing more. Changing between two *nearby* stops costs the walk **plus the spec's 5-minute transfer penalty**. HANDOFF decision 14 says "only an actual change of vehicle is penalised", but a same-stop change of vehicle isn't. Either is defensible: a cross-platform change really is easier than a walk. But it is a gameplay choice. It decides whether players funnel lines through shared stops, and the code and its documentation disagree. Options: keep it and correct decision 14's wording, or add the penalty to every change of line.
 
 **Not done:** one stop shared by two *modes* (a bus and a tram at one platform, or metro and train at one station). A stop has exactly one mode, which sets its price, size, drawing and catchment; sharing across modes is a model change. Cross-mode transfers go through an interchange, with the walk and the penalty.
 
@@ -667,13 +667,13 @@ University keeps Urban's 1: a university town is a town of flats, and its curve 
 | Kiato, Countryside | 15,649 | ~11,000–12,000 (OSM tags 11,149, plus untagged villages) | 49,412 |
 | Lefkada town, Tourist | 14,935 | ~9,300–11,000 (2021 census, town 9,253) | 33,456 |
 
-**Both towns land about 1.4–1.6× over, from 3–4× before.** That's within "plausible, not accurate". If it ever needs tightening, the two assumptions (storeys, homes share) are the parts to revisit, ideally with published figures rather than by fitting these towns.
+**Both towns land about 1.4–1.6× over, from 3–4× before. Alex, Oct 16: accepted — "we will never get more exact than this, and we don't have to."** Leave it. If it ever needs revisiting, the two assumptions (storeys, homes share) are the parts to look at, with published figures rather than by fitting these towns.
 
 **The profile is now the player's statement about the place.** Kiato as Urban holds 49,000 people and starts with €24.7M (Normal); as Countryside, 15,600 and €8.7M. A real total from Nominatim (`meta.populationScaled`) still wins over the profile.
 
 ### Seasons on people, and the calendar
 
-- **The curve multiplies residents, not the trip rate** (`DemandModel.scaleResidents`). For trip counts it is the same arithmetic. The difference is that residents in a catchment, the heat map and anything that counts people now swell and shrink with the season. Tested: the trip rate and the catchments move by exactly the population's ratio.
+- **The curve multiplies residents, not the trip rate** (`DemandModel.scaleResidents`). **More people make more trips**: a tourist town in August produces about five times January's trips, each person travelling at the usual rate. The totals match what the old model gave (there the curve multiplied the trip rate). The difference is that the people themselves are now counted: catchments, the heat map and everything else that counts people swell and shrink with the season. Tested: trips and catchments move by exactly the population's ratio.
 - **The import's resident grid is never modified**, so a cached region can be replayed under another profile without re-importing.
 - **Dot size and starting capital use the year-round baseline** (`baselineResidents`), not the raw building count.
 - **The seasons flip south of the equator automatically**, and **Tourist has a Summer peak / Winter peak switch** on the new-game screen, offered with Tourist on every difficulty. Alex's "depending on difficulty" was read as "depending on the destination". The two flips combine, so a southern winter resort peaks in July.
@@ -681,6 +681,12 @@ University keeps Urban's 1: a university town is a town of flats, and its curve 
 
 ### Known gaps
 
-- **The coastline is visibly stepped at street zoom.** The sea is traced from the 30 m elevation grid, and the flat-sea fix makes much more coast visible than before. OSM's coastline would draw it properly; cosmetic, not done.
+- **The coastline is visibly stepped at street zoom.** The sea is traced from the 30 m elevation grid. **Won't fix (Alex, Oct 16):** cosmetic, and tokens belong to more pressing things. Do not spend a session on it.
 - **ML footprints newer than Overture's OSM snapshot are not de-duplicated** against OSM buildings mapped since then. Overture releases monthly, so the overlap is small.
 - **The Overture archive is 181 GB and release-named.** We always read the latest. If Overture stops publishing PMTiles, the import silently falls back to OSM only and says so.
+
+### Every change of vehicle pays the transfer penalty — Oct 16 2026
+
+Alex's decision on §12.4: people often prefer a slightly longer trip to one with a change, however quick the change is, so a change of line at the **same** stop pays the 5-minute penalty too. Before, it cost only the wait, because the penalty sat on the walk between stops.
+
+[sim/routing.js](sim/routing.js) now gives every stop two nodes. **Start** is where a trip begins; boarding from it costs the expected wait. **Arrived** is reached by getting off; boarding from it costs the wait plus `ROUTING.TRANSFER_PENALTY_S`. Walking between interchange stops goes arrived → arrived at walking speed, and the penalty is charged on the next boarding, so walking on to the final destination after getting off costs only the walk. Changing direction on the same line counts as a change too. `tests/phase2.js` checks that a shared-stop route costs exactly two waits, the rides and one penalty, and fails 300 s short without the fix.

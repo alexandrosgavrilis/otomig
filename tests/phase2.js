@@ -17,6 +17,7 @@ import { dirname, join } from 'node:path';
 import {
   CLOCK, COSTS, DIFFICULTY, MODES, VEHICLES, DEMAND, PATIENCE, LOANS,
   passengersPerDot, buildingChunkCount,
+  ROUTING,
 } from '../config.js';
 import { LocalFrame, reviveRegion } from '../model/region.js';
 import { Network } from '../model/network.js';
@@ -24,7 +25,7 @@ import { RoadIndex } from '../build/road-routing.js';
 import { Clock, daysInMonth, formatDate } from '../sim/clock.js';
 import { Game } from '../sim/game.js';
 import { Economy, formatMoney, formatThousands } from '../sim/economy.js';
-import { stopOrder, directionsServed } from '../sim/routing.js';
+import { stopOrder, directionsServed, hopSeconds } from '../sim/routing.js';
 import { respaceVehicles } from '../sim/vehicles.js';
 import { offsetPolyline, shade } from '../render/shapes.js';
 
@@ -94,6 +95,25 @@ export function runPhase2Tests(check, near) {
       route?.legs.length === 2 && route.legs[0].toStop === shared
       && route.legs[1].fromStop === shared && route.legs[0].lineId !== route.legs[1].lineId,
       JSON.stringify(route?.legs));
+
+    // A change at the same stop is still a change: it pays the transfer
+    // penalty, exactly once, on top of the two waits and the rides (Alex,
+    // Oct 16 2026). It used to cost only the wait.
+    const legCost = (leg) => {
+      const line = game.network.lines.get(leg.lineId);
+      const order = stopOrder(line, leg.direction);
+      let seconds = line.headwayS * ROUTING.BOARDING_WAIT_FRACTION;
+      for (let i = order.indexOf(leg.fromStop); order[i] !== leg.toStop; i++) {
+        seconds += hopSeconds(line, leg.direction, i);
+      }
+      return seconds;
+    };
+    near('changing lines at a shared stop pays the transfer penalty, once',
+      route.seconds, legCost(route.legs[0]) + legCost(route.legs[1]) + ROUTING.TRANSFER_PENALTY_S,
+      1e-6);
+    const direct = game.router.route(east.stops[0], east.stops[2]);
+    near('…while a trip on one line pays only its wait and its ride',
+      direct.seconds, legCost(direct.legs[0]), 1e-6);
   }
 
   // ─── Clock ──────────────────────────────────────────────────────────────

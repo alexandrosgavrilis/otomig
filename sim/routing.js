@@ -2,16 +2,27 @@
  * How a passenger gets from A to B.
  *
  * The graph is not the map. Its nodes are *platforms* — a (stop, line,
- * direction) triple — plus one street node per stop. Three kinds of edge:
+ * direction) triple — plus two nodes per stop: where a trip STARTS, and where
+ * a passenger has ARRIVED by getting off something. The edges:
  *
- *   street → platform   boarding, costing half the headway (expected wait)
+ *   start → platform    first boarding, costing half the headway (expected wait)
+ *   arrived → platform  a change of vehicle: the wait plus the transfer penalty
  *   platform → platform riding one hop, costing travel time plus the dwell
- *   platform → street   alighting, free
- *   street → street     walking inside an interchange, plus a transfer penalty
+ *   platform → arrived  alighting, free
+ *   arrived → arrived   walking inside an interchange, at walking speed
  *
  * Modelling platforms rather than stops is what makes transfers honest: staying
- * on a vehicle costs nothing, while changing lines costs a wait and a penalty,
- * so the router stops proposing silly four-leg trips.
+ * on a vehicle costs nothing, while changing costs a wait and a penalty, so
+ * the router stops proposing silly four-leg trips.
+ *
+ * **Every change of vehicle pays the penalty — including at the same stop.**
+ * Splitting each stop into "start" and "arrived" is what makes that possible:
+ * with one node per stop, getting off and back on at the same stop looked
+ * like a first boarding and cost only the wait, so a shared stop was a free
+ * transfer while a stop 50 m away cost five minutes. In reality people often
+ * prefer a slightly longer ride to a change, however quick the change is
+ * (Alex, Oct 16 2026). Walking to the final destination after getting off is
+ * not a change and pays nothing extra.
  *
  * Routes are Dijkstra from one origin to everywhere, computed on demand and
  * cached until the network changes.
@@ -69,8 +80,11 @@ export class Router {
 
     const { network } = this;
 
-    // Street nodes first, so every stop exists even with no lines.
-    for (const stop of network.stops.values()) this.nodeFor(streetNode(stop.id));
+    // Stop nodes first, so every stop exists even with no lines.
+    for (const stop of network.stops.values()) {
+      this.nodeFor(startNode(stop.id));
+      this.nodeFor(arrivedNode(stop.id));
+    }
 
     for (const line of network.activeLines) {
       const headwayWait = line.headwayS * ROUTING.BOARDING_WAIT_FRACTION;
@@ -83,10 +97,14 @@ export class Router {
           const stopId = order[i];
           const platform = platformNode(stopId, line.id, direction);
 
-          // Board here, then alight here. Boarding costs the expected wait.
-          this.edge(streetNode(stopId), platform, headwayWait, 'board',
+          // Board here as the trip's first vehicle, or as a change; alight
+          // here. Boarding costs the expected wait, and a change adds the
+          // transfer penalty.
+          this.edge(startNode(stopId), platform, headwayWait, 'board',
             { lineId: line.id, direction });
-          this.edge(platform, streetNode(stopId), 0, 'alight',
+          this.edge(arrivedNode(stopId), platform, headwayWait + ROUTING.TRANSFER_PENALTY_S,
+            'transfer', { lineId: line.id, direction });
+          this.edge(platform, arrivedNode(stopId), 0, 'alight',
             { lineId: line.id, direction });
 
           // Ride to the next stop in this direction.
@@ -100,14 +118,13 @@ export class Router {
       }
     }
 
-    // Walking inside an interchange. The transfer penalty lives here rather
-    // than on boarding, so a passenger's FIRST boarding is never penalised —
-    // only an actual change of vehicle is.
+    // Walking inside an interchange, after getting off. No penalty here: it
+    // is charged when the passenger boards again, so walking on to the final
+    // destination costs only the walk.
     for (const stop of network.stops.values()) {
       for (const { stop: other, walkSeconds } of network.walkableFrom(stop)) {
         if (other.id === stop.id) continue;
-        this.edge(streetNode(stop.id), streetNode(other.id),
-          walkSeconds + ROUTING.TRANSFER_PENALTY_S, 'walk');
+        this.edge(arrivedNode(stop.id), arrivedNode(other.id), walkSeconds, 'walk');
       }
     }
   }
@@ -122,7 +139,7 @@ export class Router {
     const cached = this.cache.get(originId);
     if (cached) return cached;
 
-    const start = this.nodeIndex.get(streetNode(originId));
+    const start = this.nodeIndex.get(startNode(originId));
     const results = new Map();
     if (start === undefined) { this.cache.set(originId, results); return results; }
 
@@ -152,10 +169,10 @@ export class Router {
       }
     }
 
-    // Reconstruct a leg list for every reachable street node.
+    // Reconstruct a leg list for every stop the passenger can arrive at.
     for (const stopId of this.network.stops.keys()) {
       if (stopId === originId) continue;
-      const target = this.nodeIndex.get(streetNode(stopId));
+      const target = this.nodeIndex.get(arrivedNode(stopId));
       if (target === undefined || !Number.isFinite(distance[target])) continue;
 
       const legs = reconstructLegs(target, previous, viaEdge);
@@ -253,5 +270,6 @@ export function segmentFor(line, direction, i) {
   return line.segments[index] || null;
 }
 
-const streetNode = (stopId) => `S:${stopId}`;
+const startNode = (stopId) => `S:${stopId}`;
+const arrivedNode = (stopId) => `A:${stopId}`;
 const platformNode = (stopId, lineId, direction) => `P:${stopId}:${lineId}:${direction}`;
