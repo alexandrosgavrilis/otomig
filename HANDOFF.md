@@ -22,7 +22,8 @@ The region comes out identical — same 51,700 buildings and 502,376 residents f
 | | |
 | --- | --- |
 | **Next** | **Phase 5 — full economy.** Loans, the fare slider, the finance panel, all four difficulties end to end, Hard's game over. Much of the plumbing already exists — see §11. |
-| **Decide** | Two open questions from §12: whether to fix sparse-building regions (OSM place totals, and optionally Overture's ML footprints), and whether a change of line at the *same* stop should carry the 5-minute transfer penalty. |
+| **Done, Oct 16** | Unmapped buildings are filled in from Overture's ML footprints, and the seasonal profile now decides how many people the buildings hold, with the curve moving the population (§13). |
+| **Decide** | One question left from §12.4: should a change of line at the *same* stop carry the 5-minute transfer penalty? |
 | **Still to try live** | Rail has been tried on a real import at Kiato (§10). Corinth, the case where buildings bite, has not. `tools/import-region.js` snapshots a region once for offline testing. |
 | Shelved | Vector tiles for building geometry. Viable and fully costed ([RESEARCH_TILES.md](RESEARCH_TILES.md) §8), purely additive, worth it only if dense 15 km imports become the priority. |
 
@@ -81,8 +82,8 @@ Both would have reached Alex as a broken screen, and both were invisible to 272 
 ## 2. Testing
 
 ```bash
-npm test                            # 473 logic assertions, plain Node, no dependencies
-npm run test:browser                # 114 assertions in real Chromium via Playwright
+npm test                            # 507 logic assertions, plain Node, no dependencies
+npm run test:browser                # 119 assertions in real Chromium via Playwright
 npm run test:browser -- --headed    # ...and watch it
 npm run test:live                   # 24 assertions against a REAL import — hits live OSM services
 npm run test:live -- --km 5         # ...at a given size (default 5, the slider minimum)
@@ -131,6 +132,11 @@ Good news from the same research, and worth not relitigating: **the spec's cruis
 The reason is arithmetic, not taste. Visible dots ≈ `(trips/day × journey length ÷ 18 h) ÷ dot size`, so at a fixed 10 a town of 40,000 showed about one dot at a time and a village showed none. That was never a bug: a village really does have about four people on its buses at any moment, and four people is less than half a dot.
 
 The scale is fixed at import and never changes mid-game — a dot that silently changed meaning would make every count on screen a lie. Every dot↔people conversion now reads one value; there were four hardcoded `× 10`s, one of them inside ticket income, which would have silently desynced the money.
+
+### Two more spec amendments, Alex's decisions of Oct 16 2026 (§13)
+
+- **"No fallback for areas with poor building coverage" no longer holds.** Where OSM has the roads but not the buildings, the import fills in Microsoft's ML footprints from Overture Maps.
+- **The seasonal profiles multiply the population, not trip generation**, and the profile also decides how many people the buildings hold. The seasons flip south of the equator, and Tourist can peak in winter.
 
 ### Where the spec was silent
 
@@ -311,7 +317,7 @@ An escape hatch, not a default. [extract.bbbike.org](https://extract.bbbike.org)
 
 ## 6. What works
 
-Verified by `npm test` (473) and `npm run test:browser` (114). Phases 3 and 4 have their own sections, §9 and §10.
+Verified by `npm test` (507) and `npm run test:browser` (119). Phases 3 and 4 have their own sections, §9 and §10.
 
 **Phase 1.** `LocalFrame` and the bbox/chunk maths; terrain height grid with bilinear interpolation (exact on a ramp); 200 m demand grid; 10 m occupancy bitset; Overpass parsing with road-class filtering, abandoned-rail rejection, chunk-overlap de-duplication and shared-node collapsing; Terrarium decode and tile resampling; marching-squares contours and sea polygons; the base-map GeoJSON. In the browser: the new-game screen, search firing no request while typing, MapLibre rendering real pixels, layer toggles, zoom revealing minor roads, `maxBounds`, IndexedDB round-trips, the module worker booting.
 
@@ -326,6 +332,7 @@ Verified by `npm test` (473) and `npm run test:browser` (114). Phases 3 and 4 ha
 ```
 index.html  style.css  config.js  main.js      package.json (no runtime deps)
 data/    overpass.js  terrain.js  import.worker.js  cache.js
+         overture.js (ML building gap-fill, PMTiles)  mvt.js (vector tile decoder)
 model/   region.js (contract, frame, grids)  population.js  network.js (stops, lines, track)  save.js
 build/   road-routing.js  track-geometry.js (spline, grade rule, structures, buildRailTrack)
          rail-roads.js (crossings, corridors)  track-routing.js (stations and paths on track)
@@ -335,7 +342,7 @@ render/  basemap.js (MapLibre style)  overlay.js (Canvas 2D)  shapes.js  profile
 ui/      new-game.js  hud.js  toolbar.js  panels.js  strings.js
 vendor/  maplibre-gl.js  maplibre-gl.css  LICENSE.txt      (v5.24.0, UMD)
 fixtures/ make-fixture.js  test-region.json               (npm run fixture)
-tests/   run.js  phase2.js  phase3.js  phase4.js  browser.js  live.js  screenshots/
+tests/   run.js  phase2.js  phase3.js  phase4.js  profiles.js  browser.js  live.js  screenshots/
 ```
 
 The fixture is a 6×6 km synthetic coast: a bay in the south-west, a lake, a river, a ridge with a notched valley (for Phase 4's tunnels and bridges), a motorway, a pedestrian street, a road tunnel and bridge, an existing railway with three stations, and an abandoned branch the parser must reject. **41,828 residents, ~1,162/km²** — a small town, so `passengersPerDot` is 1. It carries 1,971 building outlines.
@@ -551,7 +558,7 @@ Alex's questions after the Kiato trial, answered with measurements. Two need his
 
 This matters because buildings are the whole population model. Residents are floor area ÷ 40 m², so a region without buildings has no residents and no demand.
 
-### 2. What we can do about it — **Decide**
+### 2. What we can do about it — *decided Oct 16: see §13*
 
 The spec says "No fallback for areas with poor building coverage: OSM is good enough." Kiato shows that is not true for much of Greece. Measured with [tools/probe-overture-buildings.js](tools/probe-overture-buildings.js):
 
@@ -602,3 +609,78 @@ Selecting is now Edit stops' job alone. That departs from the spec's "clicking a
 **Decide — the transfer penalty at a shared stop.** Changing lines *at the same stop* costs a passenger the expected wait (half the headway) and nothing more. Changing between two *nearby* stops costs the walk **plus the spec's 5-minute transfer penalty**. HANDOFF decision 14 says "only an actual change of vehicle is penalised", but a same-stop change of vehicle isn't. Either is defensible: a cross-platform change really is easier than a walk. But it is a gameplay choice. It decides whether players funnel lines through shared stops, and the code and its documentation disagree. Options: keep it and correct decision 14's wording, or add the penalty to every change of line.
 
 **Not done:** one stop shared by two *modes* (a bus and a tram at one platform, or metro and train at one station). A stop has exactly one mode, which sets its price, size, drawing and catchment; sharing across modes is a model change. Cross-mode transfers go through an interchange, with the walk and the penalty.
+
+---
+
+## 13. Buildings from Overture, and population by profile — Oct 16 2026
+
+Alex's decisions on §12.2, implemented:
+
+1. **Fill in unmapped buildings from open ML footprints.** This changes the spec's "no fallback for areas with poor building coverage".
+2. **Let the seasonal profile decide how many people the buildings hold**, with multipliers built from published urban vs rural figures, not tuned to our case studies.
+3. **Apply the seasonal curve to population, not trip generation.**
+4. **Flip the seasons by hemisphere automatically**, and **offer Tourist a summer or winter peak.**
+
+### Building data: which open sources exist
+
+- **Google Open Buildings** covers only Africa, South and Southeast Asia and Latin America — not Europe, not Greece.
+- **Microsoft's ML footprints** cover Greece (6M added in 2025).
+- **Overture Maps' buildings theme** merges OSM, Microsoft and Google (OSM wins where both exist), so one source gives whichever exists anywhere. It is ODbL, like OSM.
+
+**[data/overture.js](data/overture.js)** reads it during the import. It finds the current release from Overture's STAC catalog (CORS-open), then reads the buildings PMTiles archive on public S3 by range request, keyless. Rules:
+
+- **Only tiles where OSM looks unmapped are fetched**: under `OVERTURE.MAPPED_BUILDINGS_PER_ROAD_KM` (15) OSM buildings per km of road in the z14 tile. Measured: Kiato's tiles run 0–2.9. A tile with no road is skipped (open country or sea).
+- **Only non-OSM footprints are kept.** OSM's own buildings still come from Overpass with their tags, which attraction needs. ML footprints arrive as plain `building=yes`, homes to the population model.
+- **Each piece is clipped to its own tile**, so a building straddling two tiles has its floor area counted once.
+- **A failure never fails the import.** It falls back to OSM only, the progress bar says so, and `meta.buildingSources.overtureError` records why.
+- **The footer credits Overture and Microsoft** for any region that used them.
+
+PMTiles and MVT are read directly, no libraries. The MVT decoder moved from `tools/` to [data/mvt.js](data/mvt.js) and now runs on a plain `Uint8Array`, so the worker and Node share it.
+
+Measured through the real import worker, three live imports with [tools/import-region.js](tools/import-region.js):
+
+| 5 km box | OSM buildings | gap-filled | tiles fetched | building-derived residents |
+| --- | --- | --- | --- | --- |
+| Kiato | 45 | **7,000** | 13 (about 10 s) | 49,412 |
+| Lefkada town | 4,858 | 74 | 7 | 33,456 |
+| central Athens | 51,862 | 0 | **0** | 503,512 (502,376 before: OSM drift) |
+
+### Population by profile
+
+`POPULATION.PROFILE_HOUSING` in [config.js](config.js) scales the building-derived count per profile, relative to Athens (Urban = 1, the calibration). **No published "people per building, urban vs rural" average exists.** Household size alone runs from 2 to 9 across countries (UN DESA). So each profile is the product of four parts, each from the nearest published figure, or **named as an assumption** where there is none:
+
+| part | Countryside | Tourist | source |
+| --- | --- | --- | --- |
+| floor space per person | 0.85 | 0.9 | EU rooms per person 1.5 cities vs 1.7 rural; China 38.6 vs 48.9 m² |
+| homes lived in | 0.92 | 0.62 | Lithuania 2021 census, 80% rural vs 86.5% urban; Greece 2021, 34.5% unoccupied nationally (Tourist is an **assumption** scaled from it) |
+| storeys where unknown | 0.75 | 1 | **assumption**: rural houses ~1.5 storeys against the calibrated 2 |
+| footprints that are homes | 0.6 | 0.8 | **assumption**: barns, sheds, greenhouses; studies say only that unadjusted rural models overestimate |
+| **product** | **0.352** | **0.446** permanent | |
+
+University keeps Urban's 1: a university town is a town of flats, and its curve empties it in summer. For Tourist, `lowSeasonIsPermanent` makes the curve's quietest month equal the permanent population, so every other month adds visitors on top.
+
+**Checked against the case studies afterwards, not tuned to them:**
+
+| place, profile | quietest month | real year-round | building count alone |
+| --- | --- | --- | --- |
+| Athens, Urban | 503,512 (January) | ~500,000 | same — the calibration |
+| Kiato, Countryside | 15,649 | ~11,000–12,000 (OSM tags 11,149, plus untagged villages) | 49,412 |
+| Lefkada town, Tourist | 14,935 | ~9,300–11,000 (2021 census, town 9,253) | 33,456 |
+
+**Both towns land about 1.4–1.6× over, from 3–4× before.** That's within "plausible, not accurate". If it ever needs tightening, the two assumptions (storeys, homes share) are the parts to revisit, ideally with published figures rather than by fitting these towns.
+
+**The profile is now the player's statement about the place.** Kiato as Urban holds 49,000 people and starts with €24.7M (Normal); as Countryside, 15,600 and €8.7M. A real total from Nominatim (`meta.populationScaled`) still wins over the profile.
+
+### Seasons on people, and the calendar
+
+- **The curve multiplies residents, not the trip rate** (`DemandModel.scaleResidents`). For trip counts it is the same arithmetic. The difference is that residents in a catchment, the heat map and anything that counts people now swell and shrink with the season. Tested: the trip rate and the catchments move by exactly the population's ratio.
+- **The import's resident grid is never modified**, so a cached region can be replayed under another profile without re-importing.
+- **Dot size and starting capital use the year-round baseline** (`baselineResidents`), not the raw building count.
+- **The seasons flip south of the equator automatically**, and **Tourist has a Summer peak / Winter peak switch** on the new-game screen, offered with Tourist on every difficulty. Alex's "depending on difficulty" was read as "depending on the destination". The two flips combine, so a southern winter resort peaks in July.
+- The spec's curves are unchanged. As population curves they say Athens empties by 25% in August (Urban 0.75 — the Greek August exodus is real), and a tourist town holds 5× its permanent population at the August peak (Tourist 2.5 against 0.5).
+
+### Known gaps
+
+- **The coastline is visibly stepped at street zoom.** The sea is traced from the 30 m elevation grid, and the flat-sea fix makes much more coast visible than before. OSM's coastline would draw it properly; cosmetic, not done.
+- **ML footprints newer than Overture's OSM snapshot are not de-duplicated** against OSM buildings mapped since then. Overture releases monthly, so the overlap is small.
+- **The Overture archive is 181 GB and release-named.** We always read the latest. If Overture stops publishing PMTiles, the import silently falls back to OSM only and says so.

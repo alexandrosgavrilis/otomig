@@ -96,6 +96,8 @@ try {
   road edges   ${region.roads.edges.length}
   buildings    ${region.buildings.length}
   residents    ${region.meta.populationTotal}
+  from OSM     ${region.meta.buildingSources?.osm ?? '?'} buildings
+  gap-filled   ${region.meta.buildingSources?.overture ?? 0} from Overture, in ${region.meta.buildingSources?.overtureTilesFilled ?? 0} tiles${region.meta.buildingSources?.overtureError ? ` (FAILED: ${region.meta.buildingSources.overtureError})` : ''}
   rail edges   ${region.rail.edges.length}, stations: ${region.stations.map((s) => s.name).join(', ') || 'none'}
   terrain      ${Math.min(...heights).toFixed(1)} … ${Math.max(...heights).toFixed(1)} m`);
 } finally {

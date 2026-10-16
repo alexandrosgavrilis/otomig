@@ -12,7 +12,10 @@
  * directly rather than just redistributing it.
  */
 
-import { DEMAND, PATIENCE, CLOCK, SEASON_PROFILES, passengersPerDot } from '../config.js';
+import {
+  DEMAND, PATIENCE, CLOCK, passengersPerDot, residentsFactor, seasonalMultiplier,
+  baselineResidents,
+} from '../config.js';
 import { Clock } from './clock.js';
 
 export class DemandModel {
@@ -29,7 +32,17 @@ export class DemandModel {
      * Passengers per dot, fixed for this region at import. Everything that
      * converts between dots and people reads this one value.
      */
-    this.passengersPerDot = passengersPerDot(region.meta.populationTotal);
+    this.passengersPerDot = passengersPerDot(baselineResidents(region.meta));
+
+    /**
+     * Residents per demand cell as the game sees them this month: the
+     * building-derived count from the import, scaled for the profile and the
+     * season. The import's own grid is never modified, so a cached region can
+     * be replayed under a different profile.
+     * @type {number[]}
+     */
+    this.residents = [];
+    this.scaleResidents(0);
 
     /** Cell index → stop id, for cells inside some catchment. @type {Map<number,string>} */
     this.catchment = new Map();
@@ -77,9 +90,21 @@ export class DemandModel {
   }
 
   rebuild(month, fareMultiplier) {
+    this.scaleResidents(month);
     this.buildCatchments();
     this.buildPairTable(month, fareMultiplier);
     this.buildUnservedMap();
+  }
+
+  /**
+   * Scale the imported residents for the profile and this month's season.
+   *
+   * The seasonal curve applies to people, not to trip rates: a tourist town
+   * in August has more people in it, each making trips at the usual rate.
+   */
+  scaleResidents(month) {
+    const factor = residentsFactor(this.region.meta) * seasonalMultiplier(this.region.meta, month);
+    this.residents = this.region.demand.residents.map((value) => value * factor);
   }
 
   /**
@@ -90,7 +115,8 @@ export class DemandModel {
    * and train, so a metro station pulls from a wider area.
    */
   buildCatchments() {
-    const { cols, rows, cellM, residents, attraction } = this.region.demand;
+    const { cols, rows, cellM, attraction } = this.region.demand;
+    const { residents } = this;
     this.catchment.clear();
     this.stopTotals.clear();
 
@@ -133,8 +159,8 @@ export class DemandModel {
   /**
    * Build the sparse origin→destination rate table.
    *
-   * For stop s: trips produced = catchment residents × trips per resident ×
-   * the month's multiplier. Those trips are split across destinations in
+   * For stop s: trips produced = catchment residents × trips per resident.
+   * The season is already in the residents (`scaleResidents`). Those trips are split across destinations in
    * proportion to attraction × f(distance) — but the denominator sums over
    * every cell in the region, served or not, so unserved attraction swallows
    * its share and that demand is lost.
@@ -144,7 +170,6 @@ export class DemandModel {
     const stops = [...this.network.stops.values()];
     if (stops.length < 2) return;
 
-    const seasonal = SEASON_PROFILES[this.region.meta.season]?.[month] ?? 1;
     // Fare elasticity: demand scales by (price multiplier) ^ -0.3.
     const fareFactor = fareMultiplier ** DEMAND.FARE_EXPONENT;
 
@@ -155,7 +180,7 @@ export class DemandModel {
       const totals = this.stopTotals.get(from.id);
       if (!totals || totals.residents <= 0) continue;
 
-      const tripsPerDay = totals.residents * DEMAND.TRIPS_PER_RESIDENT * seasonal;
+      const tripsPerDay = totals.residents * DEMAND.TRIPS_PER_RESIDENT;
       if (tripsPerDay <= 0) continue;
 
       const [fx, fy] = this.frame.toLocal(from.lon, from.lat);
@@ -260,7 +285,8 @@ export class DemandModel {
    * A cell inside any catchment contributes nothing: it is served.
    */
   buildUnservedMap() {
-    const { residents, attraction } = this.region.demand;
+    const { attraction } = this.region.demand;
+    const { residents } = this;
     const values = new Array(residents.length).fill(0);
     let peak = 0;
 
@@ -324,7 +350,7 @@ export class DemandModel {
 
   /** Residents within any stop's walking radius, over all residents. */
   coverageFraction() {
-    const { residents } = this.region.demand;
+    const { residents } = this;
     let covered = 0;
     let total = 0;
     for (let i = 0; i < residents.length; i++) {

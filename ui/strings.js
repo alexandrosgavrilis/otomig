@@ -41,6 +41,10 @@ export const STRINGS = {
     importFailed: 'Import failed:',
     unnamed: 'Unnamed region',
 
+    peak: { summer: 'Summer peak', winter: 'Winter peak' },
+    seasonHint: 'The profile decides how many people the buildings hold and how '
+      + 'that swings through the year. South of the equator the seasons flip by themselves.',
+
     fixtureButton: 'Use the test region',
     fixtureHint: 'A synthetic region that needs no network. Good for a quick look.',
     loadingFixture: 'Loading test region…',

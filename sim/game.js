@@ -6,7 +6,7 @@
  * one thing to pass around and exactly one thing to serialise.
  */
 
-import { CLOCK, COSTS, MODES, BUILD, passengersPerDot } from '../config.js';
+import { CLOCK, COSTS, MODES, BUILD, passengersPerDot, baselineResidents } from '../config.js';
 import { LocalFrame } from '../model/region.js';
 import { Network, Stop, Line, Track, reserveIds } from '../model/network.js';
 import { RoadIndex } from '../build/road-routing.js';
@@ -34,8 +34,12 @@ export class Game {
      * Passengers one dot stands for, scaled to the region and fixed for the
      * whole game. Every dot↔people conversion reads this; nothing hardcodes 10.
      */
-    this.passengersPerDot = passengersPerDot(region.meta.populationTotal);
-    this.economy = new Economy(this.difficulty, region.meta.populationTotal,
+    // Both fixed at the start from the year-round population the profile
+    // implies, not the raw building count: Kiato's buildings come to ~50,000
+    // residents as Urban and ~18,000 as Countryside, and it is capitalised
+    // accordingly.
+    this.passengersPerDot = passengersPerDot(baselineResidents(region.meta));
+    this.economy = new Economy(this.difficulty, baselineResidents(region.meta),
       this.passengersPerDot);
 
     /** Currently selected object (stop or line), for the right-hand panel. */

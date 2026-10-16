@@ -102,12 +102,25 @@ try {
 
   await page.screenshot({ path: join(SHOTS, '1-new-game.png') });
 
+  // The summer/winter switch belongs to Tourist alone.
+  check('the peak-season switch is hidden for Urban',
+    !(await page.isVisible('#ng-peak')));
+  await page.click('#ng-season button[data-value="tourist"]');
+  check('choosing Tourist offers a summer or winter peak', await page.isVisible('#ng-peak'));
+  await page.click('#ng-peak button[data-value="winter"]');
+  await page.click('#ng-season button[data-value="urban"]');
+  check('…and it hides again for any other profile', !(await page.isVisible('#ng-peak')));
+
   // ─── Load the fixture and render the map ──────────────────────────────────
   await page.click('#ng-fixture');
 
   // main.js sets window.otomig once MapLibre has fired 'load'.
   await page.waitForFunction(() => window.otomig?.map?.loaded?.(), null, { timeout: 30000 });
   check('the game screen mounts and MapLibre reports loaded', true);
+  check('a winter peak chosen and then left for Urban is not applied',
+    await page.evaluate(() => window.otomig.region.meta.seasonPeak) === 'summer');
+  check('the Overture credit is not shown for a region that used none',
+    !(await page.textContent('.attribution')).includes('Overture'));
   check('no empty panel sits in the corner before anything is selected',
     await page.evaluate(() => !document.querySelector('.panel')?.checkVisibility()));
 

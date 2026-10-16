@@ -49,7 +49,8 @@ function startGame(region) {
         <button type="button" id="s-import">${STRINGS.saves.import}</button>
         <input type="file" id="s-file" accept="application/json" hidden />
       </div>
-      <div class="attribution">${ATTRIBUTION.osm} · ${ATTRIBUTION.terrain}</div>
+      <div class="attribution">${ATTRIBUTION.osm} · ${ATTRIBUTION.terrain}${
+        region.meta.buildingSources?.overture > 0 ? ` · ${ATTRIBUTION.overture}` : ''}</div>
     </div>
   `;
 

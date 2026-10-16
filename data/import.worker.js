@@ -19,6 +19,7 @@ import {
   buildMainQuery, buildBuildingQuery,
 } from './overpass.js';
 import { buildHeightGrid, buildContours } from './terrain.js';
+import { unmappedTiles, fetchGapBuildings } from './overture.js';
 import { processBuildings } from '../model/population.js';
 
 /**
@@ -31,10 +32,11 @@ import { processBuildings } from '../model/population.js';
  */
 const STEPS = [
   { key: 'roads', label: 'Fetching roads and places', weight: 0.15 },
-  { key: 'footprints', label: 'Fetching buildings', weight: 0.35 },
+  { key: 'footprints', label: 'Fetching buildings', weight: 0.3 },
   { key: 'graph', label: 'Building road graph', weight: 0.05 },
+  { key: 'gapfill', label: 'Filling in unmapped buildings', weight: 0.1 },
   { key: 'buildings', label: 'Processing buildings', weight: 0.15 },
-  { key: 'terrain', label: 'Fetching elevation', weight: 0.2 },
+  { key: 'terrain', label: 'Fetching elevation', weight: 0.15 },
   { key: 'contours', label: 'Tracing contours', weight: 0.1 },
 ];
 
@@ -125,17 +127,40 @@ export async function importRegion(request, onProgress) {
     .filter((ring) => ring.length >= 4);
   onProgress('graph', 1, 1);
 
-  // 3. Buildings → residents, attraction and the occupancy raster.
+  // 3. Buildings OSM never mapped, from Overture's ML footprints — only in
+  // tiles where OSM has plenty of road and few buildings. A failure here
+  // never fails the import: the region is still playable on OSM alone, just
+  // emptier, and the player is told.
+  const osmCentroids = parsed.buildingWays.map((way) => {
+    const points = way.geometry || [];
+    const lon = points.reduce((sum, p) => sum + p.lon, 0) / (points.length || 1);
+    const lat = points.reduce((sum, p) => sum + p.lat, 0) / (points.length || 1);
+    return [lon, lat];
+  });
+  const { unmapped } = unmappedTiles(bbox, osmCentroids, roads);
+  let gapWays = [];
+  let gapError = null;
+  onProgress('gapfill', 0, Math.max(1, unmapped.length));
+  try {
+    ({ ways: gapWays } = await fetchGapBuildings(bbox, unmapped, (done, total) =>
+      onProgress('gapfill', done, total, `Filling in unmapped buildings (${done}/${total})`)));
+  } catch (error) {
+    gapError = String(error?.message || error);
+    onProgress('gapfill', 1, 1, 'Building gap-fill unavailable — using OSM buildings only');
+  }
+
+  // 4. Buildings → residents, attraction and the occupancy raster.
   onProgress('buildings', 0, 1);
   const { demand, occupancy, residentsTotal, outlines } =
-    processBuildings(parsed.buildingWays, parsed.poiNodes, parsed.nodes, frame, populationTotal);
+    processBuildings([...parsed.buildingWays, ...gapWays], parsed.poiNodes, parsed.nodes, frame,
+      populationTotal);
   onProgress('buildings', 1, 1);
 
-  // 4. Elevation.
+  // 5. Elevation.
   const terrain = await buildHeightGrid(frame,
     (done, total) => onProgress('terrain', done, total, `Fetching elevation (${done}/${total})`));
 
-  // 5. Contours.
+  // 6. Contours.
   onProgress('contours', 0, 1);
   const contours = buildContours(terrain, frame);
   onProgress('contours', 1, 1);
@@ -149,8 +174,21 @@ export async function importRegion(request, onProgress) {
       season,
       difficulty,
       populationTotal: Math.round(residentsTotal),
+      /**
+       * True when residents were scaled to a real total (Nominatim's), in
+       * which case the seasonal profile's occupancy factor must not shrink
+       * them again — see `residentsFactor` in config.js.
+       */
+      populationScaled: populationTotal > 0,
       importedAt: Date.now(),
       hasOsmRail: rail.edges.length > 0,
+      /** Where the buildings came from, for the attribution and the record. */
+      buildingSources: {
+        osm: parsed.buildingWays.length,
+        overture: gapWays.length,
+        overtureTilesFilled: gapError ? 0 : unmapped.length,
+        ...(gapError ? { overtureError: gapError } : {}),
+      },
     },
     roads,
     rail,

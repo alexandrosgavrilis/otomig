@@ -72,6 +72,8 @@ export function mountNewGame(root, onReady) {
     lat: 37.95,
     sizeKm: REGION.SIZE_KM_DEFAULT,
     season: 'urban',
+    /** For Tourist only: a summer resort, or a winter one (ski, say). */
+    seasonPeak: 'summer',
     difficulty: 'normal',
     populationTotal: 0,
     placeName: '',
@@ -106,6 +108,13 @@ export function mountNewGame(root, onReady) {
               class="${key === state.season ? 'on' : ''}">${STRINGS.seasons[key]}</button>
           `).join('')}
         </div>
+        <div class="ng-choices" id="ng-peak" hidden>
+          ${['summer', 'winter'].map((key) => `
+            <button type="button" data-value="${key}"
+              class="${key === state.seasonPeak ? 'on' : ''}">${STRINGS.newGame.peak[key]}</button>
+          `).join('')}
+        </div>
+        <div class="ng-hint">${STRINGS.newGame.seasonHint}</div>
 
         <label class="ng-label">${STRINGS.newGame.difficulty}</label>
         <div class="ng-choices" id="ng-difficulty">
@@ -222,7 +231,23 @@ export function mountNewGame(root, onReady) {
       onPick(button.dataset.value);
     });
   }
-  wireChoices('ng-season', (value) => { state.season = value; });
+  wireChoices('ng-season', (value) => {
+    state.season = value;
+    $('ng-peak').hidden = value !== 'tourist';
+  });
+  wireChoices('ng-peak', (value) => { state.seasonPeak = value; });
+
+  /**
+   * The player's choices, applied to a region however it arrived — imported,
+   * cached or the fixture. One place, so a new choice cannot be forgotten in
+   * one of them.
+   */
+  function applyChoices(meta) {
+    meta.season = state.season;
+    meta.seasonPeak = state.season === 'tourist' ? state.seasonPeak : 'summer';
+    meta.difficulty = state.difficulty;
+    return meta;
+  }
   wireChoices('ng-difficulty', (value) => {
     state.difficulty = value;
     $('ng-difficulty-hint').textContent = STRINGS.difficultyHints[value];
@@ -282,8 +307,7 @@ export function mountNewGame(root, onReady) {
       const cached = await getRegion(key);
       if (cached) {
         showProgress(1, STRINGS.newGame.loadedFromCache);
-        cached.meta.season = state.season;
-        cached.meta.difficulty = state.difficulty;
+        applyChoices(cached.meta);
         onReady(cached);
         return;
       }
@@ -308,6 +332,7 @@ export function mountNewGame(root, onReady) {
         } catch (error) {
           console.warn('region cache write failed:', error);
         }
+        applyChoices(message.region.meta);
         onReady(message.region);
       } else if (message.type === 'error') {
         worker.terminate();
@@ -338,8 +363,7 @@ export function mountNewGame(root, onReady) {
       const response = await fetch(new URL('../fixtures/test-region.json', import.meta.url));
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const region = await response.json();
-      region.meta.season = state.season;
-      region.meta.difficulty = state.difficulty;
+      applyChoices(region.meta);
       showProgress(1, STRINGS.newGame.loadedFixture);
       onReady(region);
     } catch (error) {
@@ -358,8 +382,7 @@ export function mountNewGame(root, onReady) {
       item.addEventListener('click', async () => {
         const region = await getRegion(key);
         if (!region) return;
-        region.meta.season = state.season;
-        region.meta.difficulty = state.difficulty;
+        applyChoices(region.meta);
         onReady(region);
       });
       list.appendChild(item);

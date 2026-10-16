@@ -367,9 +367,11 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .gameover p { margin: 0; color: var(--ink-soft); max-width: 380px; }
 
 /* Save/load strip, bottom right. */
+/* Above the attribution, which wraps to two lines when a region's buildings
+   carry the Overture credit as well as OSM's and the terrain's. */
 .saves {
   position: absolute;
-  bottom: 12px;
+  bottom: 34px;
   right: 12px;
   z-index: 3;
   display: flex;
@@ -387,7 +389,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
    save buttons. It never takes pointer events: the map under it stays live. */
 .profile {
   position: absolute;
-  bottom: 28px;
+  bottom: 40px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 3;

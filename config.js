@@ -121,6 +121,35 @@ export const REGION = {
   FLAT_SEA_DEPTH_M: -1,
 };
 
+/**
+ * Filling in buildings OSM has not mapped, from Overture Maps.
+ *
+ * In much of Greece outside the cities, OSM has the roads but barely any
+ * buildings: Kiato's 5 km box has 45, where Microsoft's ML footprints find
+ * about 6,900 (HANDOFF.md §12). Overture's buildings theme merges OSM with
+ * those footprints and publishes them as one PMTiles archive on public S3,
+ * read here by range request — keyless, CORS-open, ODbL like OSM.
+ *
+ * Only tiles where OSM looks unmapped are fetched, so a well-mapped city
+ * costs nothing extra, and only Overture's non-OSM footprints are used:
+ * OSM's own buildings still come from Overpass, with their tags.
+ */
+export const OVERTURE = {
+  /** Names the latest release; release paths change, so never hard-code one. */
+  STAC_URL: 'https://stac.overturemaps.org/catalog.json',
+  TILES_URL: 'https://overturemaps-extras-us-west-2.s3.us-west-2.amazonaws.com/tiles/{release}/buildings.pmtiles',
+  /** The archive's maximum zoom: ~1.2 km tiles at 38°N, 0.3 m precision. */
+  ZOOM: 14,
+  /**
+   * A tile is treated as unmapped when OSM has fewer buildings than this per
+   * km of road inside it. A built-up street has a building every 15–20 m on
+   * each side, so 100+ per km; Kiato's tiles measured 0–3.
+   */
+  MAPPED_BUILDINGS_PER_ROAD_KM: 15,
+  /** Abort a request that never answers, as for Overpass. */
+  TIMEOUT_MS: 30000,
+};
+
 /** Nominatim place search, region-selection screen only. [research] */
 export const NOMINATIM = {
   ENDPOINT: 'https://nominatim.openstreetmap.org/search',
@@ -151,6 +180,61 @@ export const POPULATION = {
   M2_PER_RESIDENT: 40,
   /** Assumed levels when `building:levels` is missing. [spec] */
   DEFAULT_LEVELS: 2,
+
+  /**
+   * How the building-derived resident count is scaled for each seasonal
+   * profile — the player saying what kind of place this is.
+   *
+   * The building model (footprint × levels ÷ 40 m²) is calibrated on central
+   * Athens, where it lands within 0.5% of the real density, so `urban` is
+   * 1 by construction and every other profile is expressed RELATIVE to it.
+   * Outside a city the raw count overshoots several times (HANDOFF.md §13):
+   * Kiato's buildings, gap-filled from Microsoft's ML footprints, come to
+   * ~50,000 residents for a real ~12,000.
+   *
+   * Each profile is the product of four parts. No single published "people
+   * per building, urban vs rural" average exists — household size alone runs
+   * from 2 to 9 across countries (UN DESA) — so the parts are taken from the
+   * nearest published figures where there are any, and named as assumptions
+   * where there are not. Kiato and Lefkada were used only to CHECK the result,
+   * never to tune it; they are case studies, not the model (Alex, Oct 16 2026).
+   *
+   *   space     floor area per person, urban ÷ this profile. Rural homes are
+   *             roomier: EU rooms per person 1.5 in cities against 1.7 rural
+   *             (0.88, Eurostat via CBS); China 38.6 m² against 48.9 (0.79,
+   *             NBS). Taken as 0.85.
+   *   occupied  share of homes with usual residents, this profile ÷ urban.
+   *             Lithuania's 2021 census: 80% rural, 86.5% urban (0.92).
+   *             Athens itself was 73% (2021), and is already inside the
+   *             calibration.
+   *   storeys   ASSUMPTION. Most buildings outside a city carry no
+   *             `building:levels`, and ML footprints never do, so they get
+   *             the 2 calibrated in Athens. Rural houses average nearer 1.5.
+   *   homes     ASSUMPTION. Share of footprints that are homes at all, rather
+   *             than barns, garages, sheds or greenhouses. Footprint-based
+   *             population studies agree that unadjusted rural models
+   *             overestimate for exactly this reason, but publish no global
+   *             share.
+   *
+   * Tourist is a resort town measured in the low season: `occupied` is low
+   * because a resort's holiday homes are empty then (Greece's 2021 census:
+   * 22.5% of all dwellings holiday or secondary, and more in resorts), and
+   * `lowSeasonIsPermanent` makes the curve's lowest month equal the permanent
+   * population, so every other month adds visitors on top of it.
+   *
+   * Overridden to 1 when a real population total was available
+   * (`meta.populationScaled`), because that total already says how many.
+   */
+  PROFILE_HOUSING: {
+    urban:       { space: 1, occupied: 1, storeys: 1, homes: 1 },
+    // A university town is a town of flats; its curve empties it in summer.
+    university:  { space: 1, occupied: 1, storeys: 1, homes: 1 },
+    countryside: { space: 0.85, occupied: 0.92, storeys: 0.75, homes: 0.6 },
+    // occupied 0.62 ≈ 45% of a resort's homes lived in year-round, against
+    // Athens's 73%: an ASSUMPTION scaled from the national 34.5% unoccupied.
+    tourist:     { space: 0.9, occupied: 0.62, storeys: 1, homes: 0.8,
+      lowSeasonIsPermanent: true },
+  },
 
   /** Attraction weight by building category. [spec] */
   ATTRACTION_WEIGHTS: {
@@ -248,7 +332,19 @@ export const DEMAND = {
   INTERCHANGE_M: 150,
 };
 
-/** Twelve monthly multipliers on all trip generation. [spec] */
+/**
+ * Twelve monthly multipliers, one curve per profile. [spec]
+ *
+ * Applied to the POPULATION, not to trip generation (Alex, Oct 16 2026): a
+ * tourist town in August has more people in it, who make trips at the usual
+ * rate. For the number of trips the two are the same arithmetic; the
+ * difference is that residents shown in a stop's catchment, the heat map and
+ * everything else that counts people now swell and shrink with the season.
+ *
+ * January is index 0 in the NORTHERN hemisphere. `seasonalMultiplier` shifts
+ * every curve by six months south of the equator, and shifts Tourist by six
+ * more for a winter-peak resort.
+ */
 export const SEASON_PROFILES = {
   urban:       [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.9, 0.75, 1.0, 1.0, 1.0, 0.95],
   tourist:     [0.5, 0.5, 0.6, 0.8, 1.1, 1.6, 2.3, 2.5, 1.6, 0.9, 0.5, 0.5],
@@ -674,6 +770,8 @@ export const ATTRIBUTION = {
   terrain:
     'Terrain Tiles by Mapzen/Tilezen — SRTM (NASA), 3DEP (USGS), ' +
     'GMTED2010 (USGS), ETOPO1 (NOAA), and other sources',
+  /** Shown only for a region whose buildings were gap-filled from Overture. */
+  overture: 'Buildings in part © Overture Maps Foundation, Microsoft (ODbL)',
 };
 
 /** Pinned MapLibre version. v6 is ESM-only and breaks the no-build-step rule. [research] */
@@ -700,6 +798,52 @@ export const MAPLIBRE_VERSION = '5.24.0';
 export function buildingChunkCount(sizeKm) {
   const wanted = Math.ceil(sizeKm / REGION.OVERPASS_CHUNK_TARGET_KM);
   return Math.min(REGION.OVERPASS_CHUNKS_MAX, Math.max(1, wanted));
+}
+
+/**
+ * The calendar month a profile's curve should be read at.
+ *
+ * South of the equator the seasons are six months out, so every profile
+ * shifts. A Tourist region can also be a winter resort (`meta.seasonPeak`),
+ * which shifts its curve six months the other way — and a winter resort in
+ * the south peaks in July, as it should.
+ *
+ * @param {{center:[number,number], season:string, seasonPeak?:string}} meta
+ * @param {number} month 0–11, calendar month
+ */
+export function seasonMonth(meta, month) {
+  let shift = 0;
+  if ((meta.center?.[1] ?? 0) < 0) shift += 6;
+  if (meta.season === 'tourist' && meta.seasonPeak === 'winter') shift += 6;
+  return (month + shift) % 12;
+}
+
+/** This month's population multiplier for a region. */
+export function seasonalMultiplier(meta, month) {
+  return SEASON_PROFILES[meta.season]?.[seasonMonth(meta, month)] ?? 1;
+}
+
+/**
+ * How far building-derived residents are scaled for this region's profile,
+ * before the month's seasonal multiplier — the product of the four parts in
+ * `POPULATION.PROFILE_HOUSING`.
+ */
+export function residentsFactor(meta) {
+  if (meta.populationScaled) return 1;
+  const housing = POPULATION.PROFILE_HOUSING[meta.season];
+  if (!housing) return 1;
+  const permanent = housing.space * housing.occupied * housing.storeys * housing.homes;
+  // Make the quietest month of the curve the permanent population.
+  if (housing.lowSeasonIsPermanent) return permanent / Math.min(...SEASON_PROFILES[meta.season]);
+  return permanent;
+}
+
+/**
+ * The region's year-round population, for the things fixed at the start of a
+ * game: the size of a passenger dot and the starting capital.
+ */
+export function baselineResidents(meta) {
+  return (meta.populationTotal || 0) * residentsFactor(meta);
 }
 
 /**
