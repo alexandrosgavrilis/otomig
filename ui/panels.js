@@ -357,7 +357,8 @@ function stopHtml(game, stop) {
       <div class="row" title="${STRINGS.clocks.live}"><span>${STRINGS.panel.longestWait}</span>
         <span>${Math.round(longestWait / 60)} min</span></div>
       <div class="row"><span>${STRINGS.panel.residents}</span>
-        <span>${Math.round(totals.residents).toLocaleString()}</span></div>
+        <span>${Math.round(totals.residents).toLocaleString()}${
+          totals.served === false ? ` · ${STRINGS.panel.notServed}` : ''}</span></div>
       <div class="row"><span>${STRINGS.panel.interchange}</span>
         <span>${stop.interchange ? STRINGS.panel.yes : STRINGS.panel.no}</span></div>
       ${stop.mode === 'metro' || stop.mode === 'train' ? `
@@ -378,6 +379,8 @@ function stopHtml(game, stop) {
           <div class="row"><span>${STRINGS.panel.intercityCalls}</span>
             <span>${stop.intercityCalls}</span></div>` : ''}
       </div>` : ''}
+
+    ${flowsHtml(game, stop)}
 
     <div class="lines-served">
       ${lines.length === 0 ? `<span class="muted">${STRINGS.panel.noLines}</span>`
@@ -515,6 +518,19 @@ function financesHtml(game, refusal) {
 /** "€1.50" — a fare needs its cents, unlike every other sum in the game. */
 function formatFare(amount) {
   return `€${amount.toFixed(2)}`;
+}
+
+/** A stop's busiest destinations, from the same table as the Flows layer. */
+function flowsHtml(game, stop) {
+  const flows = game.demand.flowsAt(stop.id, 5);
+  return `
+    <div class="rows" title="${STRINGS.clocks.perDay}">
+      <span class="section">${STRINGS.panel.topFlows}</span>
+      ${flows.length === 0 ? `<span class="muted">${STRINGS.panel.noFlows}</span>`
+        : flows.map((flow) => `
+          <div class="row"><span>${escapeHtml(game.network.stops.get(flow.other)?.name ?? '?')}</span>
+            <span>${Math.round(flow.perDay).toLocaleString()}${STRINGS.panel.perDay}</span></div>`).join('')}
+    </div>`;
 }
 
 function escapeHtml(text) {

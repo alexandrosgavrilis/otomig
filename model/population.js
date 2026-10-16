@@ -27,7 +27,10 @@ import { ringAreaM2, ringCentroid, makeOccupancy, setOccupied } from './region.j
  *            occupancy: import('./region.js').Occupancy,
  *            residentsTotal: number}}
  */
-export function processBuildings(buildingWays, poiNodes, osmNodes, frame, populationTotal) {
+export function processBuildings(buildingWays, poiNodes, osmNodes, frame, populationTotal,
+  roads = null) {
+  // Without a road graph (older callers, unit tests) every building counts.
+  const nearRoad = roads ? roadProximity(roads, frame, POPULATION.MAX_ROAD_DISTANCE_M) : () => true;
   const cellM = REGION.DEMAND_CELL_M;
   const cols = Math.ceil(frame.widthM / cellM);
   const rows = Math.ceil(frame.heightM / cellM);
@@ -65,7 +68,7 @@ export function processBuildings(buildingWays, poiNodes, osmNodes, frame, popula
     const col = Math.floor(x / cellM);
     const row = Math.floor(y / cellM);
 
-    if (col >= 0 && row >= 0 && col < cols && row < rows) {
+    if (col >= 0 && row >= 0 && col < cols && row < rows && nearRoad(x, y)) {
       const index = row * cols + col;
       if (residential) {
         const residents = floorArea / POPULATION.M2_PER_RESIDENT;
@@ -93,6 +96,7 @@ export function processBuildings(buildingWays, poiNodes, osmNodes, frame, popula
     const col = Math.floor(x / cellM);
     const row = Math.floor(y / cellM);
     if (col < 0 || row < 0 || col >= cols || row >= rows) continue;
+    if (!nearRoad(x, y)) continue;
     demand.attraction[row * cols + col] += POPULATION.POINT_ATTRACTION;
   }
 
@@ -104,6 +108,60 @@ export function processBuildings(buildingWays, poiNodes, osmNodes, frame, popula
   }
 
   return { demand, occupancy, residentsTotal, outlines };
+}
+
+/**
+ * A test for "within `maxM` of a road", in local metres. Road segments are
+ * bucketed into a grid of `maxM` cells, so a query looks at the 3×3 cells
+ * around it — fast enough for 50,000 buildings.
+ *
+ * @param {import('./region.js').RoadGraph} roads
+ * @returns {(x:number, y:number) => boolean}
+ */
+export function roadProximity(roads, frame, maxM) {
+  const cols = Math.max(1, Math.ceil(frame.widthM / maxM));
+  const rows = Math.max(1, Math.ceil(frame.heightM / maxM));
+  /** @type {Map<number, number[][]>} cell → segments as [x1, y1, x2, y2] */
+  const cells = new Map();
+  const local = (node) => frame.toLocal(roads.nodes[2 * node], roads.nodes[2 * node + 1]);
+  const clampCol = (x) => Math.min(cols - 1, Math.max(0, Math.floor(x / maxM)));
+  const clampRow = (y) => Math.min(rows - 1, Math.max(0, Math.floor(y / maxM)));
+
+  for (const edge of roads.edges) {
+    const [x1, y1] = local(edge.a);
+    const [x2, y2] = local(edge.b);
+    const segment = [x1, y1, x2, y2];
+    // Every cell the segment's bounding box touches; edges are short.
+    for (let row = clampRow(Math.min(y1, y2)); row <= clampRow(Math.max(y1, y2)); row++) {
+      for (let col = clampCol(Math.min(x1, x2)); col <= clampCol(Math.max(x1, x2)); col++) {
+        const key = row * cols + col;
+        if (!cells.has(key)) cells.set(key, []);
+        cells.get(key).push(segment);
+      }
+    }
+  }
+
+  return (x, y) => {
+    const col = clampCol(x);
+    const row = clampRow(y);
+    for (let r = row - 1; r <= row + 1; r++) {
+      for (let c = col - 1; c <= col + 1; c++) {
+        if (r < 0 || c < 0 || r >= rows || c >= cols) continue;
+        for (const segment of cells.get(r * cols + c) || []) {
+          if (pointSegmentDistance(x, y, segment) <= maxM) return true;
+        }
+      }
+    }
+    return false;
+  };
+}
+
+function pointSegmentDistance(x, y, [x1, y1, x2, y2]) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lengthSq = dx * dx + dy * dy;
+  const t = lengthSq > 0 ? Math.max(0, Math.min(1, ((x - x1) * dx + (y - y1) * dy) / lengthSq)) : 0;
+  return Math.hypot(x - (x1 + t * dx), y - (y1 + t * dy));
 }
 
 /** ~10 cm precision. Finer than anything we draw, and half the bytes. */

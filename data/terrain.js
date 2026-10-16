@@ -225,8 +225,14 @@ export function buildSeaPolygons(terrain, frame) {
   const rings = traceLevel(padded, pc, pr, REGION.SEA_LEVEL_M - 0.5);
   const features = [];
 
-  for (const ring of rings) {
-    if (ring.length < 4) continue;
+  for (const traced of rings) {
+    if (traced.length < 4) continue;
+    // A speck of sea a few cells across is noise at sea level, not a pond.
+    if (Math.abs(ringArea(traced)) < REGION.SEA_MIN_RING_CELLS) continue;
+    // Round off the 30 m staircase. Chaikin keeps a ring closed and inside
+    // its original outline, so the coast moves by well under a cell.
+    let ring = traced;
+    for (let pass = 0; pass < REGION.SEA_SMOOTHING_PASSES; pass++) ring = chaikin(ring);
     // Undo the one-cell pad, then cell coordinates → metres → lon/lat.
     const coords = ring.map(([gx, gy]) =>
       frame.toLonLat((gx - 1 + 0.5) * cellM, (gy - 1 + 0.5) * cellM));
@@ -241,6 +247,35 @@ export function buildSeaPolygons(terrain, frame) {
     });
   }
   return { type: 'FeatureCollection', features };
+}
+
+/** Signed area of a ring in its own units (cells here). */
+function ringArea(ring) {
+  let sum = 0;
+  for (let i = 0; i < ring.length; i++) {
+    const [x1, y1] = ring[i];
+    const [x2, y2] = ring[(i + 1) % ring.length];
+    sum += x1 * y2 - x2 * y1;
+  }
+  return sum / 2;
+}
+
+/** One pass of Chaikin corner-cutting over a closed ring. */
+function chaikin(ring) {
+  const open = samePoint(ring[0], ring.at(-1)) ? ring.slice(0, -1) : ring;
+  const out = [];
+  for (let i = 0; i < open.length; i++) {
+    const [x1, y1] = open[i];
+    const [x2, y2] = open[(i + 1) % open.length];
+    out.push([0.75 * x1 + 0.25 * x2, 0.75 * y1 + 0.25 * y2]);
+    out.push([0.25 * x1 + 0.75 * x2, 0.25 * y1 + 0.75 * y2]);
+  }
+  out.push(out[0]);
+  return out;
+}
+
+function samePoint(a, b) {
+  return Math.abs(a[0] - b[0]) < 1e-9 && Math.abs(a[1] - b[1]) < 1e-9;
 }
 
 /**

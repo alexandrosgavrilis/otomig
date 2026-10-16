@@ -84,6 +84,7 @@ function startGame(region) {
     },
   });
 
+  toolbar.onFeedback = (message) => showFeedback(message);
   wireMapInteraction(map, game, toolbar, {
     onFeedback: (message, point) => showFeedback(message, point),
     onSelect: () => panels.render(),
@@ -140,6 +141,7 @@ function startGame(region) {
   game.onTick(() => {
     hud.update();
     legend.update();
+    toolbar.update();
     panels.update();
     tuning.update();
     if (game.economy.gameOver) showGameOver(game);
@@ -180,7 +182,15 @@ function wireKeyboard(game, toolbar, panels, hud, tuning, feedback) {
       game.selection = null;
       panels.render();
     } else if (event.key === 'Delete' || event.key === 'Backspace') {
+      // While drawing, Backspace takes back the last step — a waypoint, or a
+      // stop. Otherwise it removes the selection, like Delete.
       if (game.trackDraft) { game.removeTrackPoint(); return; }
+      if (game.draft && event.key === 'Backspace') {
+        const result = game.undoDraftStop();
+        if (result.error) feedback(STRINGS.errors[result.error] || result.error);
+        hud.update();
+        return;
+      }
       if (game.selection) {
         const result = game.bulldoze(game.selection);
         if (result?.error) feedback(STRINGS.errors[result.error] || result.error);

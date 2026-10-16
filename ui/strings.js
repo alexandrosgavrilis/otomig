@@ -38,6 +38,7 @@ export const STRINGS = {
     starting: 'Starting import…',
     saving: 'Saving to cache…',
     loadedFromCache: 'Loaded from cache.',
+    refreshing: 'Imported by an older version — fetching it again…',
     importFailed: 'Import failed:',
     unnamed: 'Unnamed region',
 
@@ -62,6 +63,7 @@ export const STRINGS = {
     paused: 'Paused',
     thousands: 'k',
     monthsLeft: 'months left',
+    dayProgress: (seconds) => `How far through the day. A day lasts ${seconds} seconds at 1×.`,
   },
 
   panel: {
@@ -82,6 +84,10 @@ export const STRINGS = {
     waiting: 'Waiting',
     longestWait: 'Longest wait',
     residents: 'Residents in catchment',
+    notServed: 'not served yet',
+    topFlows: 'Where people from here go',
+    perDay: '/day',
+    noFlows: 'No trips from here yet — it needs a line to somewhere.',
     interchange: 'Interchange',
     noLines: 'No lines call here yet.',
     track: 'track',
@@ -229,6 +235,8 @@ export const STRINGS = {
     trackOnlyRail: 'Build track is for metro and train.',
     osmTrack: 'An existing railway cannot be removed.',
     intercityNeedsRail: 'Intercity trains only call at stations on existing rail.',
+    nothingToUndo: 'Nothing to undo.',
+    stopThere: 'There is already a stop there.',
     noLoans: 'No loans in this mode.',
     loanTaken: 'That loan is already taken.',
     noLoan: 'There is no loan to repay.',
@@ -297,6 +305,15 @@ export const STRINGS = {
       meanUnhappySatisfaction: '…their mean satisfaction',
       coverage: 'Residents covered',
     },
+  },
+
+  /** The buttons shown while a line or track is being drawn. */
+  draft: {
+    undo: 'Undo',
+    undoHint: 'Take back the last stop or waypoint (Backspace).',
+    finish: 'Finish line',
+    buildTrack: 'Build track',
+    cancel: 'Cancel',
   },
 
   build: {

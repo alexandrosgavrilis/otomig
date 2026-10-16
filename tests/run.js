@@ -523,7 +523,7 @@ check('some contours are major', region.contours.features.some((f) => f.properti
   check('the main query no longer asks for buildings', !main.includes('way["building"]'));
   check('the main query still carries roads, water, rail, stations and POIs',
     main.includes('"highway"') && main.includes('"natural"="water"') &&
-    main.includes('"railway"="rail"') && main.includes('node["shop"]'));
+    main.includes('"railway"~"^(rail|narrow_gauge)$"') && main.includes('node["shop"]'));
 
   check('buildings are fetched with inline geometry',
     buildings.includes('way["building"]') && buildings.includes('out geom;'));

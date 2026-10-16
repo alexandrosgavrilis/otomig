@@ -17,15 +17,15 @@ npm start          # python3 -m http.server 8000
 
 Click **Use the test region** for a synthetic region that needs no network at all, or search a real place and import it. Regions default to 6 × 6 km; the slider reaches 15 km. A dense 5 km import takes about 20 seconds and two Overpass requests, a 10 km one about two minutes; rural areas are much faster. Overpass's own query time dominates and is variable, so an occasional retry in the progress text is normal.
 
-**On screen:** a dot is one person in a town; in a big city it grows so that no more than about 200 are drawn, and the legend in the bottom-left corner says what a dot is worth. The **Flows** toggle draws where people on your network want to go, one arc per pair of stops. Buses running less often than every 10 minutes keep a timetable, and their passengers wait for them.
+**On screen:** a dot is one person in a town; in a big city it grows so that no more than about 200 are drawn, and the legend in the bottom-left corner says what a dot is worth. The **Flows** toggle draws where people on your network want to go, one arc per pair of stops. Buses running less often than every 10 minutes keep a timetable, and their passengers wait for them. Buses and trams obey one-way streets, and skip stops nobody needs.
 
 **Play-testing:** press **`** in a game for the tuning panel — live sliders for passenger behaviour and money. Changes survive a reload, a red badge shows while any are active, and *Copy changes* gives the list of new values to make the defaults.
 
 Serve it over `http://` — don't open `index.html` as a `file://` URL. ES modules, the import worker and the OSM services all need a real origin.
 
 ```bash
-npm test               # 642 logic assertions, plain Node, no framework, no dependencies
-npm run test:browser   # 150 assertions driving real Chromium (needs: npm install)
+npm test               # 695 logic assertions, plain Node, no framework, no dependencies
+npm run test:browser   # 155 assertions driving real Chromium (needs: npm install)
 npm run test:live      # 25 assertions against a REAL import — hits live OSM services
 npm run fixture        # regenerate fixtures/test-region.json
 ```
@@ -46,7 +46,7 @@ Plain JavaScript ES modules with JSDoc types. No TypeScript, no bundler, no fram
 
 ## Data and attribution
 
-Map data © OpenStreetMap contributors, [ODbL](https://opendatacommons.org/licenses/odbl/). Roads, buildings, water and existing railways come from the [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API); place search from [Nominatim](https://nominatim.org/).
+Map data © OpenStreetMap contributors, [ODbL](https://opendatacommons.org/licenses/odbl/). Roads, buildings, water, the coastline and existing railways come from the [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API); place search from [Nominatim](https://nominatim.org/).
 
 Where OSM has the roads but not the buildings — much of Greece outside its cities — the import fills the gap with Microsoft's ML building footprints, read from [Overture Maps](https://overturemaps.org)' buildings tiles (Overture Maps Foundation; Microsoft, [ODbL](https://opendatacommons.org/licenses/odbl/)). It fetches only tiles where OSM looks unmapped, and the footer credits them for any region that used them.
 

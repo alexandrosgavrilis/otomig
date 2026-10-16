@@ -32,6 +32,14 @@ const ROAD_CLASSES = [
 ];
 
 /** Tags that make a building non-residential, used when `building=yes`. */
+/**
+ * Railway types imported as existing track. Narrow gauge is a railway like any
+ * other — Patras's suburban line is metre gauge, tagged `narrow_gauge`, and
+ * importing only `rail` left Patras with no usable track at all (Alex's
+ * play-test, Oct 16 2026).
+ */
+export const LIVE_RAIL = ['rail', 'narrow_gauge'];
+
 const COMMERCIAL_TAGS = ['shop', 'office', 'amenity', 'tourism'];
 
 /** Overpass bbox order is south,west,north,east, unlike ours. */
@@ -64,7 +72,8 @@ export function buildMainQuery(bbox) {
 (
   way["highway"~"^(${roads})$"](${bb});
   way["natural"="water"](${bb});
-  way["railway"="rail"](${bb});
+  way["natural"="coastline"](${bb});
+  way["railway"~"^(${LIVE_RAIL.join('|')})$"](${bb});
   node["railway"~"^(station|halt)$"](${bb});
   node["shop"](${bb});
   node["amenity"~"^(${amenities})$"](${bb});
@@ -267,6 +276,7 @@ export function parseResponses(responses) {
   const roadWays = [];
   const buildingWays = [];
   const waterWays = [];
+  const coastWays = [];
   const railWays = [];
   const stationNodes = [];
   const poiNodes = [];
@@ -292,11 +302,23 @@ export function parseResponses(responses) {
         if (tags.highway && ROAD_CLASSES.includes(tags.highway)) roadWays.push(el);
         else if (tags.building) buildingWays.push(el);
         else if (tags.natural === 'water') waterWays.push(el);
-        else if (tags.railway === 'rail' && !isDeadRail(tags)) railWays.push(el);
+        else if (tags.natural === 'coastline') coastWays.push(el);
+        else if (LIVE_RAIL.includes(tags.railway) && !isDeadRail(tags) && !isYard(tags)) {
+          railWays.push(el);
+        }
       }
     }
   }
-  return { roadWays, buildingWays, waterWays, railWays, stationNodes, poiNodes, nodes };
+  return { roadWays, buildingWays, waterWays, coastWays, railWays, stationNodes, poiNodes, nodes };
+}
+
+/**
+ * Yard tracks and spurs: dozens of short parallel stubs at every big station
+ * and depot, which would pull new stations off the main line onto a siding.
+ * Passing loops and sidings at stations stay.
+ */
+function isYard(tags) {
+  return tags.service === 'yard' || tags.service === 'spur';
 }
 
 /** Abandoned, disused and razed rail is not usable track. */
@@ -338,6 +360,7 @@ export function buildGraph(ways, osmNodes, frame) {
     const tunnel = Boolean(tags.tunnel) && tags.tunnel !== 'no';
     const bridge = Boolean(tags.bridge) && tags.bridge !== 'no';
     const name = tags.name;
+    const { oneway, exempt } = tags.highway ? onewayOf(tags) : { oneway: 0, exempt: null };
 
     const refs = way.nodes || [];
     for (let i = 0; i < refs.length - 1; i++) {
@@ -346,10 +369,46 @@ export function buildGraph(ways, osmNodes, frame) {
       if (a < 0 || b < 0 || a === b) continue;
       const lengthM = frame.distance(nodes[2 * a], nodes[2 * a + 1], nodes[2 * b], nodes[2 * b + 1]);
       if (lengthM === 0) continue;
-      edges.push({ a, b, cls, lengthM, tunnel, bridge, ...(name ? { name } : {}) });
+      edges.push({
+        a, b, cls, lengthM, tunnel, bridge,
+        ...(name ? { name } : {}),
+        // Only stored when set, so a two-way road costs no bytes.
+        ...(oneway ? { oneway } : {}),
+        ...(oneway && exempt ? { onewayExempt: exempt } : {}),
+      });
     }
   }
   return { nodes, edges };
+}
+
+/**
+ * A road's one-way rule, as buses and trams must obey it (Alex, Oct 16 2026).
+ *
+ * 1 means only from the way's first node towards its last, -1 the reverse,
+ * 0 two-way. Roundabouts and motorways are one-way unless tagged otherwise,
+ * as OSM implies. `exempt` lists the modes allowed against the flow: a
+ * contraflow bus lane (`oneway:bus=no`, `oneway:psv=no`, `busway=opposite_lane`)
+ * or tram track (`oneway:tram=no`).
+ *
+ * @returns {{oneway: -1|0|1, exempt: string[]|null}}
+ */
+export function onewayOf(tags) {
+  const value = tags.oneway;
+  let oneway = 0;
+  if (value === 'yes' || value === 'true' || value === '1') oneway = 1;
+  else if (value === '-1' || value === 'reverse') oneway = -1;
+  else if (value === undefined && (
+    tags.junction === 'roundabout' || tags.junction === 'circular' ||
+    tags.highway === 'motorway' || tags.highway === 'motorway_link')) oneway = 1;
+  if (!oneway) return { oneway: 0, exempt: null };
+
+  const psv = tags['oneway:psv'] === 'no';
+  const contraflowBus = psv || tags['oneway:bus'] === 'no' ||
+    [tags.busway, tags['busway:left'], tags['busway:right'], tags['busway:both']]
+      .includes('opposite_lane');
+  const contraflowTram = psv || tags['oneway:tram'] === 'no';
+  const exempt = [...(contraflowBus ? ['bus'] : []), ...(contraflowTram ? ['tram'] : [])];
+  return { oneway, exempt: exempt.length ? exempt : null };
 }
 
 /**

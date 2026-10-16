@@ -202,7 +202,9 @@ for (let x = BLOCK; x < W; x += BLOCK, index++) {
 // A motorway along the eastern edge: the rail rules must never cross it at grade.
 way(
   Array.from({ length: 61 }, (_, i) => [W - 400, (i / 60) * H]),
-  { highway: 'motorway', name: 'Coastal Motorway', ref: 'A1' },
+  // One way standing for both carriageways, so it must say it is two-way:
+  // OSM implies a motorway is one-way unless told otherwise.
+  { highway: 'motorway', name: 'Coastal Motorway', ref: 'A1', oneway: 'no' },
 );
 
 // A pedestrian street through the centre — trams may use it, buses may not.
@@ -368,7 +370,7 @@ const stations = parsed.stationNodes.map((node) => ({
   halt: node.tags?.railway === 'halt',
 }));
 const { demand, occupancy, residentsTotal, outlines } =
-  processBuildings(parsed.buildingWays, parsed.poiNodes, parsed.nodes, frame, 0);
+  processBuildings(parsed.buildingWays, parsed.poiNodes, parsed.nodes, frame, 0, roads);
 const contours = buildContours(terrain, frame);
 
 const region = serialiseRegion({

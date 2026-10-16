@@ -5,7 +5,10 @@
  * "The player draws, the game engineers." The player clicks two stops; this
  * works out how the bus actually gets between them.
  *
- * One-way rules are ignored in v1, per the spec, so every edge is bidirectional.
+ * One-way streets are obeyed (Alex, Oct 16 2026; the spec's v1 ignored them).
+ * An edge may carry `oneway` (1: only from a to b, -1: only from b to a) and
+ * `onewayExempt`, the modes allowed against the flow on a contraflow lane.
+ * Regions imported before carry no `oneway`, so every edge stays two-way.
  */
 
 import { BUILD } from '../config.js';
@@ -120,9 +123,11 @@ export class RoadIndex {
    * @param {number} fromNode
    * @param {number} toNode
    * @param {'bus'|'tram'} mode
+   * @param {{ignoreOneway?:boolean}} [options] the fallback when no legal path
+   *   exists, which happens where a one-way street runs out of the region
    * @returns {{nodes:number[], lengthM:number}|null} null when unreachable
    */
-  shortestPath(fromNode, toNode, mode) {
+  shortestPath(fromNode, toNode, mode, { ignoreOneway = false } = {}) {
     if (fromNode === toNode) return { nodes: [fromNode], lengthM: 0 };
     const allowed = ALLOWED_CLASSES[mode];
     const { start, edges } = this.adjacency;
@@ -144,6 +149,7 @@ export class RoadIndex {
       for (let i = start[node]; i < start[node + 1]; i++) {
         const edge = this.graph.edges[edges[i]];
         if (!allowed.has(edge.cls)) continue;
+        if (!ignoreOneway && !mayTravel(edge, node, mode)) continue;
         const next = edge.a === node ? edge.b : edge.a;
         if (settled[next]) continue;
         const candidate = distance[node] + edge.lengthM;
@@ -172,12 +178,12 @@ export class RoadIndex {
    * @param {'bus'|'tram'} mode
    * @returns {{nodes:number[], lengthM:number}|null}
    */
-  pathThrough(nodes, mode) {
+  pathThrough(nodes, mode, options) {
     if (nodes.length < 2) return null;
     const all = [nodes[0]];
     let lengthM = 0;
     for (let i = 0; i < nodes.length - 1; i++) {
-      const leg = this.shortestPath(nodes[i], nodes[i + 1], mode);
+      const leg = this.shortestPath(nodes[i], nodes[i + 1], mode, options);
       if (!leg) return null;
       all.push(...leg.nodes.slice(1)); // Skip the duplicated junction node.
       lengthM += leg.lengthM;
@@ -189,6 +195,12 @@ export class RoadIndex {
   polyline(nodes) {
     return nodes.map((node) => this.nodeLonLat(node));
   }
+}
+
+/** May a vehicle of this mode leave `fromNode` along this edge? */
+export function mayTravel(edge, fromNode, mode) {
+  if (!edge.oneway || edge.onewayExempt?.includes(mode)) return true;
+  return edge.oneway === 1 ? fromNode === edge.a : fromNode === edge.b;
 }
 
 /** Road classes each mode may use. Tram is the stricter list. */

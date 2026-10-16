@@ -61,6 +61,8 @@ export class Game {
      * blocked stretch before committing.
      */
     this.drag = null;
+    /** A stop being dragged with Edit stops: { stop, cursor, preview }. */
+    this.stopDrag = null;
     /**
      * In-progress track: { mode, control, start, end, cursor, preview }.
      * `preview` is the track as it would be built with the cursor as the next
@@ -349,6 +351,115 @@ export class Game {
     this.network.rebuildSegments(line);
   }
 
+  /**
+   * Where a stop being dragged would land, for the preview. Null where it
+   * cannot go.
+   */
+  previewStopMove(stop, lon, lat) {
+    const snapped = this.network.snapStop(lon, lat, stop.mode);
+    if (!snapped) return null;
+    const taken = this.network.stopAtNode(snapped.node, stop.mode);
+    return { ...snapped, valid: !taken || taken === stop };
+  }
+
+  /**
+   * Move a stop: Edit stops, press on a stop and drag it.
+   *
+   * The stop re-snaps to a road (bus, tram) or to track (metro, train), every
+   * line through it is re-routed, and the difference is settled — tram track
+   * gained or given up, and for a station the price of the structure under it
+   * (moving onto a viaduct costs more). Anything that cannot be routed or
+   * paid for puts everything back as it was.
+   *
+   * @returns {{ok:true, cost:number}|{error:string}}
+   */
+  moveStop(stop, lon, lat) {
+    const target = this.previewStopMove(stop, lon, lat);
+    if (!target) return { error: stop.mode === 'metro' || stop.mode === 'train' ? 'tooFarFromTrack' : 'tooFarFromRoad' };
+    if (!target.valid) return { error: 'stopThere' };
+    if (target.node === stop.node) return { ok: true, cost: 0 };
+
+    const lines = stop.lines.map((id) => this.network.lines.get(id)).filter(Boolean);
+    const old = { lon: stop.lon, lat: stop.lat, node: stop.node, structure: stop.structure };
+    const oldCost = stop.cost;
+    const trackBefore = lines.map((line) => this.network.trackCostOf(line));
+
+    const put = (place) => {
+      Object.assign(stop, place);
+      for (const line of lines) this.network.rebuildSegments(line);
+    };
+    const restore = (error) => {
+      put(old);
+      this.network.recomputeInterchanges();
+      this.network.touch();
+      return { error };
+    };
+
+    Object.assign(stop, { lon: target.lon, lat: target.lat, node: target.node, structure: target.structure });
+    for (const line of lines) {
+      if (!this.network.rebuildSegments(line)) {
+        return restore(stop.mode === 'metro' || stop.mode === 'train' ? 'noTrackPath' : 'noRoadPath');
+      }
+      if (this.network.hasBlockedSegment(line)) {
+        const reason = line.segments.find((segment) => segment.blocked);
+        return restore(reason?.tooSteep ? 'tooSteep' : 'blockedByBuilding');
+      }
+    }
+
+    const trackOwed = lines.reduce((sum, line, i) =>
+      sum + this.network.trackCostOf(line) - trackBefore[i], 0);
+    const owed = trackOwed + stop.cost - oldCost;
+    if (owed > 0 && !this.economy.spend(owed, 'construction')) return restore('cannotAfford');
+    if (owed < 0) this.economy.refund(-owed);
+    lines.forEach((line, i) => {
+      line.trackCost = Math.max(0, line.trackCost + this.network.trackCostOf(line) - trackBefore[i]);
+    });
+
+    this.network.recomputeInterchanges();
+    this.network.touch();
+    this.invalidate();
+    return { ok: true, cost: owed };
+  }
+
+  /**
+   * Take back the last step of the line being drawn: the last stop added, or
+   * the click that closed it into a loop. Backspace and the Undo button.
+   * Track is settled and a stop nothing else uses is refunded, so undoing a
+   * mistake costs nothing.
+   * @returns {{ok:true}|{error:string}}
+   */
+  undoDraftStop() {
+    const line = this.draft?.line;
+    if (!line || line.stops.length === 0) return { error: 'nothingToUndo' };
+    const before = this.network.trackCostOf(line);
+
+    let stopId = null;
+    if (line.loop) {
+      line.loop = false;
+      line.segments.pop();
+      this.network.refreshBackSegments(line);
+      this.network.touch();
+    } else {
+      stopId = line.stops.at(-1);
+      this.network.removeStopFromLine(line, stopId);
+    }
+
+    // Undo gives back what that step cost in full, track and stop alike:
+    // taking back a mis-click should be free, unlike bulldozing.
+    const owed = this.network.trackCostOf(line) - before;
+    if (owed < 0) this.economy.credit('construction', -owed);
+    line.trackCost = Math.max(0, line.trackCost + Math.min(0, owed));
+
+    const stop = stopId ? this.network.stops.get(stopId) : null;
+    if (stop && stop.lines.length === 0) {
+      // Bought for this line a moment ago, so it is given back in full.
+      this.economy.credit('construction', stop.cost);
+      this.network.removeStop(stopId);
+    }
+    this.invalidate();
+    return { ok: true };
+  }
+
   /** Finish drawing. A line with fewer than two stops is discarded. */
   finishDraft() {
     if (!this.draft) return;
@@ -560,12 +671,80 @@ export class Game {
       if (target.trackCost > 0) this.economy.refund(target.trackCost);
       this.network.deleteLine(target.id);
     } else {
-      this.economy.refund(target.cost);
-      this.network.removeStop(target.id);
+      // A stop: taken out of every line through it, each line rejoined
+      // around it, and then removed and refunded.
+      for (const lineId of [...target.lines]) {
+        const line = this.network.lines.get(lineId);
+        if (line) this.removeStopFromLine(line, target.id);
+      }
+      if (this.network.stops.has(target.id)) {
+        this.economy.refund(target.cost);
+        this.network.removeStop(target.id);
+      }
     }
     if (this.selection === target) this.selection = null;
     this.invalidate();
     return { ok: true };
+  }
+
+  /**
+   * Take one stop out of one line and join its neighbours directly — the
+   * Bulldoze tool's unit of work, a stop and the line up to the next one
+   * (Alex, Oct 16 2026). It used to remove the whole line in one click.
+   *
+   * The line is settled: tram track it no longer needs is refunded at half,
+   * track the new join needs is charged, a line left with one stop is
+   * removed with its vehicles refunded, and a stop no line uses any more is
+   * removed and refunded too.
+   *
+   * @returns {{ok:true, lineRemoved:boolean, stopRemoved:boolean}|{error:string}}
+   */
+  removeStopFromLine(line, stopId) {
+    const index = line.stops.indexOf(stopId);
+    if (index === -1) return { error: 'nothingThere' };
+    const wasLoop = line.loop;
+    const before = this.network.trackCostOf(line);
+    this.network.removeStopFromLine(line, stopId);
+
+    let lineRemoved = false;
+    /** Stops that may have been left with no line, to settle below. */
+    const orphans = [stopId];
+    if (line.stops.length < 2) {
+      for (const vehicle of line.vehicles) this.economy.refund(COSTS.VEHICLE[line.mode]);
+      if (line.trackCost > 0) this.economy.refund(line.trackCost);
+      orphans.push(...line.stops);
+      this.network.deleteLine(line.id);
+      lineRemoved = true;
+      if (this.selection === line) this.selection = null;
+    } else {
+      const owed = this.network.trackCostOf(line) - before;
+      if (owed > 0 && !this.economy.spend(owed, 'construction')) {
+        // The join around the stop needs track the player cannot pay for.
+        this.network.insertStop(line, this.network.stops.get(stopId), index - 1);
+        line.loop = wasLoop;
+        this.network.rebuildSegments(line);
+        return { error: 'cannotAfford' };
+      }
+      if (owed < 0) this.economy.refund(-owed);
+      line.trackCost = Math.max(0, line.trackCost + owed);
+      // Vehicles past the new end of the line are put back on it.
+      for (const vehicle of line.vehicles) vehicle.hop = Math.min(vehicle.hop, line.stops.length - 2);
+      respaceVehicles(line);
+    }
+
+    // A stop no line calls at any more goes too, refunded: the one taken
+    // off, and the last stop of a line that has just been removed.
+    let stopRemoved = false;
+    for (const id of orphans) {
+      const stop = this.network.stops.get(id);
+      if (!stop || stop.lines.length > 0) continue;
+      this.economy.refund(stop.cost);
+      this.network.removeStop(id);
+      if (id === stopId) stopRemoved = true;
+      if (this.selection === stop) this.selection = null;
+    }
+    this.invalidate();
+    return { ok: true, lineRemoved, stopRemoved };
   }
 
   // ─── Totals for the HUD ───────────────────────────────────────────────────

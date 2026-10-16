@@ -14,7 +14,7 @@
  * near-misses and the game feels unfair rather than demanding.
  */
 
-import { PATIENCE, DIFFICULTY, ROUTING } from '../config.js';
+import { PATIENCE, DIFFICULTY, ROUTING, VEHICLES } from '../config.js';
 import { secondsToStop } from './vehicles.js';
 
 let nextDotId = 1;
@@ -57,7 +57,7 @@ export class Dot {
  */
 export function stepPassengers(game, simSeconds) {
   const { network, clock, demand } = game;
-  const stats = { arrived: 0, boarded: 0, gaveUp: 0, firstBoardings: 0 };
+  const stats = { arrived: 0, boarded: 0, gaveUp: 0, firstBoardings: 0, transferred: 0 };
   const simNow = clock.simSeconds;
 
   for (const line of network.lines.values()) {
@@ -67,8 +67,18 @@ export function stepPassengers(game, simSeconds) {
       const stop = network.stops.get(stopId);
       if (!stop) continue;
 
+      const before = stats.arrived + stats.boarded + stats.transferred;
       alightHere(game, vehicle, stop, simNow, stats);
       boardHere(game, line, vehicle, stop, stats);
+      const nobody = stats.arrived + stats.boarded + stats.transferred === before;
+
+      // A request stop: nobody off, nobody on, so a bus or tram drives on.
+      // Not at a line end, where the vehicle turns round and lays over.
+      const lineEnd = !line.loop && vehicle.hop === 0;
+      if (nobody && !lineEnd && VEHICLES.SKIP_EMPTY_STOPS.includes(line.mode)) {
+        vehicle.dwellRemaining = 0;
+        vehicle.skipped = (vehicle.skipped ?? 0) + 1;
+      }
     }
   }
 
@@ -101,6 +111,7 @@ function alightHere(game, vehicle, stop, simNow, stats) {
     dot.atStopId = nextStop.id;
     dot.waitingSince = simNow;
     nextStop.waiting.push(dot);
+    stats.transferred++;
   }
 
   vehicle.passengers = staying;

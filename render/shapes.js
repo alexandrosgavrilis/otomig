@@ -213,6 +213,29 @@ export function drawIntercityMark(ctx, x, y, mode) {
   ctx.restore();
 }
 
+/**
+ * Where a dragged stop would land: a dashed tether from where it stands and
+ * a hollow ring at the target, red where it cannot go.
+ */
+export function drawStopGhost(ctx, x, y, gx, gy, mode, valid) {
+  const radius = RENDER.STOP_RADIUS_PX[mode] ?? 4;
+  const color = valid ? COLORS.stopStroke : COLORS.blocked;
+  ctx.save();
+  ctx.setLineDash([4, 3]);
+  ctx.lineWidth = 1.4;
+  ctx.strokeStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(gx, gy);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(gx, gy, radius + 1, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
 /** One outlined ring around the stops an interchange joins. */
 export function drawInterchange(ctx, points) {
   if (points.length < 2) return;

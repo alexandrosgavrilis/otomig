@@ -264,12 +264,14 @@ export function hopSeconds(line, direction, i) {
 /**
  * The segment a hop uses. Segment `k` of the line always joins stops[k] and
  * stops[k+1] as drawn, so travelling backwards walks the same segments in
- * reverse order.
+ * reverse order — unless a one-way street sends the way back elsewhere, in
+ * which case it walks that segment's `backSegments` twin instead.
  */
 export function segmentFor(line, direction, i) {
   const segmentCount = line.segments.length;
   if (segmentCount === 0) return null;
   const index = direction === 0 ? i : segmentCount - 1 - i;
+  if (direction === 1 && line.backSegments?.[index]) return line.backSegments[index];
   return line.segments[index] || null;
 }
 

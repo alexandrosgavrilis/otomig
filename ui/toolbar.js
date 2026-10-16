@@ -56,6 +56,11 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
             class="${tool === state.tool ? 'on' : ''}">${STRINGS.toolbar[tool]}</button>`).join('')}
       </div>
       <div class="hint" id="tb-hint" hidden>${STRINGS.build.trackHint}</div>
+      <div class="draft-actions" id="tb-draft" hidden>
+        <button type="button" data-draft="undo" title="${STRINGS.draft.undoHint}">${STRINGS.draft.undo}</button>
+        <button type="button" data-draft="finish" class="primary">${STRINGS.draft.finish}</button>
+        <button type="button" data-draft="cancel">${STRINGS.draft.cancel}</button>
+      </div>
       <hr />
       <div class="group">
         <button type="button" id="t-heat">${STRINGS.toolbar.heatMap}</button>
@@ -70,7 +75,40 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
   const modes = root.querySelector('#tb-modes');
   const tools = root.querySelector('#tb-tools');
   const hint = root.querySelector('#tb-hint');
+  const draftBar = root.querySelector('#tb-draft');
   syncTools();
+
+  // Undo, Finish and Cancel while a line or track is being drawn: what
+  // Backspace, Enter and Esc do, for a screen with no keyboard.
+  draftBar.addEventListener('click', (event) => {
+    const action = event.target.closest('button[data-draft]')?.dataset.draft;
+    if (!action) return;
+    if (game.trackDraft) {
+      if (action === 'undo') game.removeTrackPoint();
+      else if (action === 'finish') {
+        const result = game.finishTrack();
+        if (result.error) onFeedbackForDraft?.(STRINGS.errors[result.error] || result.error);
+      } else game.cancelTrack();
+    } else if (game.draft) {
+      if (action === 'undo') {
+        const result = game.undoDraftStop();
+        if (result.error) onFeedbackForDraft?.(STRINGS.errors[result.error] || result.error);
+      } else if (action === 'finish') game.finishDraft();
+      else cancelDraft();
+    }
+    update();
+    onChange?.(state);
+  });
+
+  /** Show the draft buttons only while something is being drawn. */
+  function update() {
+    const drawing = Boolean(game.draft || game.trackDraft);
+    if (draftBar.hidden === drawing) draftBar.hidden = !drawing;
+    const label = game.trackDraft ? STRINGS.draft.buildTrack : STRINGS.draft.finish;
+    const finish = draftBar.querySelector('[data-draft="finish"]');
+    if (finish.textContent !== label) finish.textContent = label;
+  }
+  let onFeedbackForDraft = null;
 
   modes.addEventListener('click', (event) => {
     const button = event.target.closest('button[data-mode]:not(:disabled)');
@@ -150,7 +188,11 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
     });
   }
 
-  return { state, setMode, setTool, cancelDraft, root };
+  return {
+    state, setMode, setTool, cancelDraft, root, update,
+    /** Where the draft buttons report a refusal; set once the map is wired. */
+    set onFeedback(callback) { onFeedbackForDraft = callback; },
+  };
 }
 
 /**
@@ -207,10 +249,26 @@ export function wireMapInteraction(map, game, toolbar, { onFeedback, onSelect })
       const result = game.extendDraft(lon, lat);
       if (result.error) onFeedback?.(errorText(result.error), event.point);
     } else if (state.tool === 'bulldoze') {
+      // Section by section: a stop goes, and each line through it is joined
+      // across the gap. A click on a line between stops takes the nearer of
+      // the two stops off that line only. A whole line is deleted from its
+      // panel, not with the bulldozer.
       const reach = pixelsToMetres(map, 10);
-      const target = hitStop || nearestLine(game, lon, lat, reach)
-        || game.network.trackNear(lon, lat, reach);
-      const result = game.bulldoze(target);
+      let result;
+      if (hitStop) {
+        result = game.bulldoze(hitStop);
+      } else {
+        const hit = segmentAt(game, lon, lat, reach, { includeRail: true });
+        if (hit) {
+          const nearer = [hit.fromId, hit.toId]
+            .map((id) => game.network.stops.get(id))
+            .sort((a, b) => game.frame.distance(lon, lat, a.lon, a.lat)
+              - game.frame.distance(lon, lat, b.lon, b.lat))[0];
+          result = game.removeStopFromLine(hit.line, nearer.id);
+        } else {
+          result = game.bulldoze(game.network.trackNear(lon, lat, reach));
+        }
+      }
       if (result?.error) onFeedback?.(errorText(result.error), event.point);
     } else if (state.tool === 'editStops') {
       // Select whatever is under the cursor: a stop first, then a line, then
@@ -264,6 +322,19 @@ export function wireMapInteraction(map, game, toolbar, { onFeedback, onSelect })
     if (game.draft || game.trackDraft) return;
     if (state.tool === 'bulldoze' || state.tool === 'buildTrack') return;
     const { lng: lon, lat } = event.lngLat;
+
+    // Edit stops: a press on a stop picks the stop up. Checked before the
+    // segment, because every stop sits on its own line's segments.
+    if (state.tool === 'editStops') {
+      const stop = game.network.stopNear(lon, lat, pixelsToMetres(map, 12));
+      if (stop) {
+        event.preventDefault();
+        map.dragPan.disable();
+        game.stopDrag = { stop, preview: null };
+        return;
+      }
+    }
+
     const hit = segmentAt(game, lon, lat, pixelsToMetres(map, 10));
     if (!hit) return;
 
@@ -273,6 +344,13 @@ export function wireMapInteraction(map, game, toolbar, { onFeedback, onSelect })
   });
 
   map.on('mousemove', (event) => {
+    if (game.stopDrag) {
+      const { lng, lat } = event.lngLat;
+      game.stopDrag.preview = game.previewStopMove(game.stopDrag.stop, lng, lat)
+        || { lon: lng, lat, valid: false };
+      game.stopDrag.cursor = [lng, lat];
+      return;
+    }
     if (!game.drag) return;
     const { lng: lon, lat } = event.lngLat;
     game.drag.via = [lon, lat];
@@ -286,6 +364,17 @@ export function wireMapInteraction(map, game, toolbar, { onFeedback, onSelect })
   });
 
   const endDrag = (event) => {
+    if (game.stopDrag) {
+      const { stop, cursor } = game.stopDrag;
+      game.stopDrag = null;
+      map.dragPan.enable();
+      // A press that never moved is a click: it selects, as before.
+      if (!cursor) return;
+      const result = game.moveStop(stop, cursor[0], cursor[1]);
+      if (result.error) onFeedback?.(errorText(result.error), event?.point);
+      else if (result.cost > 0) onFeedback?.(formatMoney(result.cost), event?.point);
+      return;
+    }
     const drag = game.drag;
     if (!drag) return;
     game.drag = null;
@@ -302,7 +391,9 @@ export function wireMapInteraction(map, game, toolbar, { onFeedback, onSelect })
   };
   map.on('mouseup', endDrag);
   // Releasing outside the canvas must not leave the map un-pannable.
-  map.getCanvas().addEventListener('mouseleave', () => { if (game.drag) endDrag(null); });
+  map.getCanvas().addEventListener('mouseleave', () => {
+    if (game.drag || game.stopDrag) endDrag(null);
+  });
 }
 
 /**
@@ -313,12 +404,12 @@ export function wireMapInteraction(map, game, toolbar, { onFeedback, onSelect })
  *
  * @returns {{line:object, fromId:string, toId:string}|null}
  */
-export function segmentAt(game, lon, lat, maxDistM) {
+export function segmentAt(game, lon, lat, maxDistM, { includeRail = false } = {}) {
   let best = null;
   let bestDist = maxDistM;
   for (const line of game.network.lines.values()) {
     // A metro or train line follows its track; there is nothing to drag it to.
-    if (RAIL_MODES.includes(line.mode)) continue;
+    if (!includeRail && RAIL_MODES.includes(line.mode)) continue;
     line.segments.forEach((segment, index) => {
       // On a loop the final segment closes back to the first stop.
       const fromId = line.stops[index];

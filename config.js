@@ -16,6 +16,17 @@
 // ─── Region and import ────────────────────────────────────────────────────────
 
 export const REGION = {
+  /**
+   * Bumped whenever the import gains data a region needs. A region cached by
+   * an older import is fetched afresh the next time it is chosen on the
+   * new-game screen; a saved game keeps loading whatever region is cached.
+   *
+   *   1  Phases 1–6
+   *   2  Oct 16 2026: narrow-gauge rail, one-way streets, buildings far from
+   *      roads make no demand, the sea from OSM's coastline
+   */
+  IMPORT_VERSION: 2,
+
   /** Region square side length, km. The new-game slider range. [spec] */
   SIZE_KM_MIN: 5,
   SIZE_KM_MAX: 15,
@@ -104,6 +115,21 @@ export const REGION = {
   /** Contour line interval, m, and the stronger emphasised interval. [spec] */
   CONTOUR_INTERVAL_M: 20,
   CONTOUR_MAJOR_M: 100,
+  /**
+   * Closed contour loops shorter than this are dropped. A single 30 m height
+   * cell poking above a level traces a ~85 m diamond, and dozens of them were
+   * scattered over hillsides like confetti (Alex, Oct 16 2026). Real hilltops
+   * a contour map should show are far larger.
+   */
+  CONTOUR_MIN_LOOP_M: 250,
+  /**
+   * The sea traced from elevation — the fallback where OSM has no usable
+   * coastline — is smoothed this many times (Chaikin), and rings smaller
+   * than this many height cells are dropped. Both take the staircase and the
+   * one-cell specks out of a 30 m grid.
+   */
+  SEA_SMOOTHING_PASSES: 2,
+  SEA_MIN_RING_CELLS: 4,
 
   /** Sea is anything below this height. Terrarium includes bathymetry. [spec] */
   SEA_LEVEL_M: 0,
@@ -180,6 +206,16 @@ export const POPULATION = {
   M2_PER_RESIDENT: 40,
   /** Assumed levels when `building:levels` is missing. [spec] */
   DEFAULT_LEVELS: 2,
+  /**
+   * A building further than this from any road makes no demand: no residents,
+   * no attraction (Alex, Oct 16 2026). It is still drawn and still blocks
+   * track. It catches the sheds, barns and greenhouses that ML footprints
+   * bring in, which stand in fields with no road to them; a house on a long
+   * unmapped driveway is the case it gets wrong. A real stop needs a road to
+   * stand on anyway, so demand nowhere near one could only ever be served by
+   * rail, which is not where people live.
+   */
+  MAX_ROAD_DISTANCE_M: 100,
 
   /**
    * How the building-derived resident count is scaled for each seasonal
@@ -417,6 +453,12 @@ export const MODES = {
 export const VEHICLES = {
   /** Vehicles are capped so headway never drops below this, sim seconds. [spec] */
   MIN_HEADWAY_S: 60,
+  /**
+   * Modes that run past a stop where nobody gets off and nobody is waiting,
+   * like a real bus or tram with request stops (Alex, Oct 16 2026). Metro
+   * and train always stop. Line ends always dwell: that is the layover.
+   */
+  SKIP_EMPTY_STOPS: ['bus', 'tram'],
 };
 
 // ─── Building rules ───────────────────────────────────────────────────────────

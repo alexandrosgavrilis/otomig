@@ -12,13 +12,14 @@
  * Run as a module worker: new Worker(url, { type: 'module' }).
  */
 
-import { buildingChunkCount } from '../config.js';
+import { buildingChunkCount, REGION } from '../config.js';
 import { LocalFrame, squareBbox, chunkBbox, serialiseRegion } from '../model/region.js';
 import {
   fetchChunkAdaptive, parseResponses, buildGraph, wayRing,
   buildMainQuery, buildBuildingQuery,
 } from './overpass.js';
 import { buildHeightGrid, buildContours } from './terrain.js';
+import { joinCoastWays, seaFromCoastline, applySeaToTerrain } from './coastline.js';
 import { unmappedTiles, fetchGapBuildings } from './overture.js';
 import { processBuildings } from '../model/population.js';
 
@@ -153,12 +154,21 @@ export async function importRegion(request, onProgress) {
   onProgress('buildings', 0, 1);
   const { demand, occupancy, residentsTotal, outlines } =
     processBuildings([...parsed.buildingWays, ...gapWays], parsed.poiNodes, parsed.nodes, frame,
-      populationTotal);
+      populationTotal, roads);
   onProgress('buildings', 1, 1);
 
   // 5. Elevation.
   const terrain = await buildHeightGrid(frame,
     (done, total) => onProgress('terrain', done, total, `Fetching elevation (${done}/${total})`));
+
+  // 5b. The sea, from OSM's coastline where it has one, and the height grid
+  // made to agree with it so the grade rule sees the same shore as the map.
+  // Without a usable coastline the map traces the sea from elevation, as
+  // before (render/basemap.js).
+  const coastChains = joinCoastWays(parsed.coastWays).map((ids) =>
+    ids.map((id) => parsed.nodes.get(id)).filter(Boolean));
+  const sea = seaFromCoastline(coastChains, frame);
+  if (sea) applySeaToTerrain(terrain, sea, frame, { seaDepthM: REGION.FLAT_SEA_DEPTH_M });
 
   // 6. Contours.
   onProgress('contours', 0, 1);
@@ -181,6 +191,9 @@ export async function importRegion(request, onProgress) {
        */
       populationScaled: populationTotal > 0,
       importedAt: Date.now(),
+      importVersion: REGION.IMPORT_VERSION,
+      /** 'osm' when the sea came from OSM's coastline, 'elevation' otherwise. */
+      seaSource: sea ? 'osm' : 'elevation',
       hasOsmRail: rail.edges.length > 0,
       /** Where the buildings came from, for the attribution and the record. */
       buildingSources: {
@@ -194,6 +207,7 @@ export async function importRegion(request, onProgress) {
     rail,
     stations,
     water,
+    ...(sea ? { sea } : {}),
     buildings: outlines,
     terrain,
     demand,

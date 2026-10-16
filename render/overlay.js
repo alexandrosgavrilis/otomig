@@ -23,7 +23,7 @@ import { patienceFor } from '../sim/passengers.js';
 import {
   strokePath, drawLinePattern, drawVehicle, drawStop, drawInterchange,
   drawTrackStructure, drawDragPreview, drawBareTrack, drawLevelCrossing,
-  drawTrackPreview, drawWaypoint, drawIntercityMark,
+  drawTrackPreview, drawWaypoint, drawIntercityMark, drawStopGhost,
   drawWaiting, drawWaitRing, offsetPolyline, shade,
 } from './shapes.js';
 
@@ -136,7 +136,9 @@ export function linesPainter(game) {
     /** @type {Map<string, Array<{line:object, segment:object}>>} */
     const bundles = new Map();
     for (const line of network.lines.values()) {
-      for (const segment of line.segments) {
+      // A way back that one-way streets send down another street is drawn
+      // too, or the bus would be seen on a street its line does not show.
+      for (const segment of [...line.segments, ...(line.backSegments || []).filter(Boolean)]) {
         const key = segmentSignature(segment);
         if (!bundles.has(key)) bundles.set(key, []);
         bundles.get(key).push({ line, segment });
@@ -157,9 +159,10 @@ export function linesPainter(game) {
           // the terrain forced on the player are visible without a legend.
           drawTrackStructure(ctx, drawn, segment.kinds, line.color, width, line.mode);
         } else {
-          strokePath(ctx, drawn, line.color, width);
+          // One direction only: a little thinner than a street served both ways.
+          strokePath(ctx, drawn, line.color, segment.back ? width * 0.7 : width);
         }
-        drawLinePattern(ctx, drawn, line.mode, line.color, width);
+        drawLinePattern(ctx, drawn, line.mode, line.color, segment.back ? width * 0.7 : width);
       });
     }
 
@@ -216,12 +219,21 @@ export function levelCrossingsPainter(game) {
 
 /** A road's direction on screen, from its bearing in local metres. */
 function screenAngle(overlay, crossing) {
-  const [lon, lat] = crossing.lonLat;
-  // Step a few metres along the road and project both ends; this is right at
-  // any map rotation and pitch, which a bearing alone would not be.
+  return screenAngleOf(overlay, crossing.lonLat[0], crossing.lonLat[1], crossing.roadBearing);
+}
+
+/**
+ * A heading in local metres (atan2(north, east), the maths convention) as an
+ * angle on the canvas. The canvas's y axis points DOWN, so the two disagree
+ * for anything not running due east or west — vehicles were drawn mirrored,
+ * a bus heading north-east pointing south-east. Stepping a few metres along
+ * the heading and projecting both ends is right at any map rotation and
+ * pitch, which flipping the sign alone would not be.
+ */
+export function screenAngleOf(overlay, lon, lat, bearing) {
   const metres = 5 / 111320;
-  const dLon = Math.cos(crossing.roadBearing) * metres / Math.cos(lat * Math.PI / 180);
-  const dLat = Math.sin(crossing.roadBearing) * metres;
+  const dLon = Math.cos(bearing) * metres / Math.cos(lat * Math.PI / 180);
+  const dLat = Math.sin(bearing) * metres;
   const [x1, y1] = overlay.project(lon, lat);
   const [x2, y2] = overlay.project(lon + dLon, lat + dLat);
   return Math.atan2(y2 - y1, x2 - x1);
@@ -314,6 +326,12 @@ export function stopsPainter(game) {
       }
 
       if (stop.intercity) drawIntercityMark(ctx, x, y, stop.mode);
+      // A stop being dragged: a ghost where it would land, red where it can't.
+      if (game.stopDrag?.stop === stop && game.stopDrag.preview) {
+        const ghost = game.stopDrag.preview;
+        const [gx, gy] = overlay.project(ghost.lon, ghost.lat);
+        drawStopGhost(ctx, x, y, gx, gy, stop.mode, ghost.valid);
+      }
       drawStop(ctx, x, y, stop.mode, game.selection?.id === stop.id);
       drawWaiting(ctx, x, y, stop.waiting.length, radius);
     }
@@ -329,7 +347,12 @@ export function stopsPainter(game) {
 export function flowsPainter(game) {
   return (ctx, overlay) => {
     if (!game.showFlows) return;
-    const flows = game.demand.flows(RENDER.FLOW_MAX_ARCS);
+    // With a stop selected, only that stop's flows: where its people go and
+    // where its visitors come from, scaled to its own busiest.
+    const stop = isStop(game.selection) ? game.selection : null;
+    const flows = stop
+      ? game.demand.flowsAt(stop.id, RENDER.FLOW_MAX_ARCS)
+      : game.demand.flows(RENDER.FLOW_MAX_ARCS);
     if (flows.length === 0) return;
     const busiest = flows[0].perDay;
 
@@ -359,6 +382,9 @@ export function flowsPainter(game) {
   };
 }
 
+/** A stop, as opposed to a line or a piece of track. */
+const isStop = (object) => Boolean(object && object.waiting !== undefined && object.mode);
+
 /** Vehicles, on top of everything. */
 export function vehiclesPainter(game) {
   return (ctx, overlay) => {
@@ -368,7 +394,8 @@ export function vehiclesPainter(game) {
         if (!vehicle.lon && !vehicle.lat) continue;
         const [x, y] = overlay.project(vehicle.lon, vehicle.lat);
         if (x < -40 || y < -40 || x > overlay.width + 40 || y > overlay.height + 40) continue;
-        drawVehicle(ctx, x, y, vehicle.bearing, line.mode, line.color,
+        drawVehicle(ctx, x, y, screenAngleOf(overlay, vehicle.lon, vehicle.lat, vehicle.bearing),
+          line.mode, line.color,
           vehicle.load, zoomScale);
       }
     }

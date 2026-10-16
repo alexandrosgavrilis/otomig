@@ -263,7 +263,43 @@ export function reviveRegion(region) {
     region.occupancy.bits = new Uint8Array(region.occupancy.bits);
   }
   if (region.terrain) settleSea(region.terrain);
+  if (region.contours) pruneContourSpecks(region.contours);
   return region;
+}
+
+/**
+ * Drop closed contour loops too small to mean anything — see
+ * `REGION.CONTOUR_MIN_LOOP_M`. Done on load rather than at import, so regions
+ * cached before the rule are cleaned up too. Open lines (running off the
+ * region's edge) are always kept.
+ *
+ * @param {{features: Object[]}} contours GeoJSON, modified in place
+ * @returns {number} loops dropped
+ */
+export function pruneContourSpecks(contours) {
+  const before = contours.features.length;
+  contours.features = contours.features.filter((feature) => {
+    const coords = feature.geometry?.coordinates;
+    if (!coords || coords.length < 2) return false;
+    const first = coords[0];
+    const last = coords[coords.length - 1];
+    const closed = Math.abs(first[0] - last[0]) < 1e-9 && Math.abs(first[1] - last[1]) < 1e-9;
+    if (!closed) return true;
+    return pathLengthM(coords) >= REGION.CONTOUR_MIN_LOOP_M;
+  });
+  return before - contours.features.length;
+}
+
+/** Length of a lon/lat path in metres, flat-earth — exact enough at this scale. */
+function pathLengthM(coords) {
+  let total = 0;
+  for (let i = 1; i < coords.length; i++) {
+    const [lon1, lat1] = coords[i - 1];
+    const [lon2, lat2] = coords[i];
+    const mPerLon = 111320 * Math.cos(((lat1 + lat2) / 2) * Math.PI / 180);
+    total += Math.hypot((lon2 - lon1) * mPerLon, (lat2 - lat1) * 110574);
+  }
+  return total;
 }
 
 /**

@@ -513,3 +513,17 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   background: rgba(110, 84, 168, 0.42);
 }
 .legend-clocks { font-size: 11px; line-height: 1.35; color: var(--ink-soft); }
+
+/* How far through the day, under the date. */
+.topbar .day-bar {
+  height: 3px;
+  margin-top: 3px;
+  background: var(--line);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.topbar .day-bar i { display: block; height: 100%; width: 0; background: var(--ink-soft); }
+
+/* Undo / Finish / Cancel while drawing — the touch screen's Backspace, Enter, Esc. */
+.toolbar .draft-actions { display: flex; flex-direction: column; gap: 4px; }
+.toolbar .draft-actions button.primary { background: var(--ink); border-color: var(--ink); color: var(--land); }

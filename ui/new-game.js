@@ -302,20 +302,24 @@ export function mountNewGame(root, onReady) {
 
     const key = regionKey(state.lon, state.lat, state.sizeKm);
 
-    // A region already imported reloads instantly; we never fetch it twice.
+    // A region already imported reloads instantly; we never fetch it twice —
+    // unless an older version of the import made it and it lacks data the
+    // game now uses (REGION.IMPORT_VERSION), in which case it is refreshed.
+    let refreshing = false;
     try {
       const cached = await getRegion(key);
-      if (cached) {
+      if (cached && !isStale(cached)) {
         showProgress(1, STRINGS.newGame.loadedFromCache);
         applyChoices(cached.meta);
         onReady(cached);
         return;
       }
+      refreshing = Boolean(cached);
     } catch (error) {
       console.warn('region cache read failed:', error);
     }
 
-    showProgress(0, STRINGS.newGame.starting);
+    showProgress(0, refreshing ? STRINGS.newGame.refreshing : STRINGS.newGame.starting);
 
     const worker = new Worker(new URL('../data/import.worker.js', import.meta.url),
       { type: 'module' });
@@ -382,10 +386,22 @@ export function mountNewGame(root, onReady) {
       item.addEventListener('click', async () => {
         const region = await getRegion(key);
         if (!region) return;
+        if (isStale(region)) {
+          // Made by an older import: fetch it again, same place and size.
+          [state.lon, state.lat] = region.meta.center;
+          state.sizeKm = region.meta.sizeKm;
+          $('ng-import').click();
+          return;
+        }
         applyChoices(region.meta);
         onReady(region);
       });
       list.appendChild(item);
     }
   }).catch((error) => console.warn('listing cached regions failed:', error));
+}
+
+/** Was this cached region made by an import older than the game needs? */
+export function isStale(region) {
+  return (region?.meta?.importVersion ?? 1) < REGION.IMPORT_VERSION;
 }

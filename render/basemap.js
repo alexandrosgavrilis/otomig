@@ -153,7 +153,8 @@ export function buildStyle(region, frame) {
   heatData.set(region, heat);
 
   const sources = {
-    sea: { type: 'geojson', data: buildSeaPolygons(region.terrain, frame) },
+    // OSM's coastline when the import found one; otherwise the elevation trace.
+    sea: { type: 'geojson', data: region.sea ?? buildSeaPolygons(region.terrain, frame) },
     water: { type: 'geojson', data: waterToGeoJSON(region.water) },
     buildings: { type: 'geojson', data: buildingsToGeoJSON(region.buildings) },
     contours: { type: 'geojson', data: region.contours },

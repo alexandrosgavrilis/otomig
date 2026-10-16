@@ -172,6 +172,19 @@ export class Line {
      */
     this.segments = [];
     /**
+     * The way back, where one-way streets make it differ: `backSegments[k]`
+     * is the route from the end of segment k to its start, or null where the
+     * way back is simply the way there, reversed. Null altogether when no
+     * segment differs, which is every rail line and most bus lines.
+     *
+     * Its points are stored in the SAME order as segment k's — from its start
+     * to its end — so the vehicle, which walks a segment backwards in
+     * direction 1, follows it from the end to the start: the right way down
+     * the one-way street. Nothing that walks segments needed to change.
+     * @type {Array<Object|null>|null}
+     */
+    this.backSegments = null;
+    /**
      * Via-points, one per segment that has been dragged off its default route,
      * keyed `"fromStopId>toStopId"`.
      *
@@ -383,6 +396,20 @@ export class Network {
     return best;
   }
 
+  /**
+   * Where a stop of this mode would stand if dropped here: a road node for a
+   * bus or tram, a track sample for a station. Null when nothing is in reach.
+   * @returns {{node:number|string, lon:number, lat:number, structure:string}|null}
+   */
+  snapStop(lon, lat, mode) {
+    if (isRail(mode)) {
+      const snapped = this.trackGraph.snap(lon, lat, mode, BUILD.STATION_SNAP_M);
+      return snapped && { node: snapped.key, lon: snapped.lon, lat: snapped.lat, structure: snapped.kind };
+    }
+    const snapped = this.roadIndex.snap(lon, lat, mode);
+    return snapped && { node: snapped.node, lon: snapped.lon, lat: snapped.lat, structure: 'atGrade' };
+  }
+
   stopAtNode(node, mode) {
     for (const stop of this.stops.values()) {
       if (stop.node === node && stop.mode === mode) return stop;
@@ -446,6 +473,7 @@ export class Network {
       if (!closing) return { error: noPath };
       line.segments.push(closing);
       line.loop = true;
+      this.refreshBackSegments(line);
       this.touch();
       return { ok: true };
     }
@@ -461,6 +489,7 @@ export class Network {
 
     line.stops.push(stop.id);
     if (!stop.lines.includes(line.id)) stop.lines.push(line.id);
+    this.refreshBackSegments(line);
     this.touch();
     return { ok: true };
   }
@@ -474,10 +503,11 @@ export class Network {
     const stop = this.stops.get(stopId);
     if (stop) stop.lines = stop.lines.filter((id) => id !== line.id);
 
-    // A line needs two stops to mean anything.
+    // A line needs two stops to mean anything, and a loop needs three.
+    if (line.stops.length < 3) line.loop = false;
     if (line.stops.length < 2) {
-      line.loop = false;
       line.segments = [];
+      line.backSegments = null;
     } else {
       this.rebuildSegments(line);
     }
@@ -558,21 +588,25 @@ export class Network {
       return track;
     }
 
+    const asSegment = (path) => ({
+      points: this.roadIndex.polyline(path.nodes),
+      nodes: path.nodes,
+      lengthM: path.lengthM,
+      ...(path.ignoresOneway ? { ignoresOneway: true } : {}),
+    });
+
     if (via) {
       const viaNode = this.roadIndex.snap(via[0], via[1], line.mode);
       if (viaNode) {
-        const path = this.roadIndex.pathThrough([from.node, viaNode.node, to.node], line.mode);
-        if (path) {
-          return { points: this.roadIndex.polyline(path.nodes), lengthM: path.lengthM };
-        }
+        const path = this.roadPath([from.node, viaNode.node, to.node], line.mode);
+        if (path) return asSegment(path);
       }
       // The drag landed somewhere unroutable; fall through to the plain route
       // rather than breaking the line.
     }
 
-    const path = this.roadIndex.shortestPath(from.node, to.node, line.mode);
-    if (!path) return null;
-    return { points: this.roadIndex.polyline(path.nodes), lengthM: path.lengthM };
+    const path = this.roadPath([from.node, to.node], line.mode);
+    return path ? asSegment(path) : null;
   }
 
   /**
@@ -591,6 +625,11 @@ export class Network {
       total += segment.offRoad
         ? (segment.cost || 0)
         : onStreetCost(segment.lengthM, line.mode);
+    }
+    // Where one-way streets send the way back down another street, a tram
+    // needs track there too.
+    for (const back of line.backSegments || []) {
+      if (back) total += onStreetCost(back.lengthM, line.mode);
     }
     return Math.round(total);
   }
@@ -616,7 +655,55 @@ export class Network {
       segments.push(closing);
     }
     line.segments = segments;
+    this.refreshBackSegments(line);
     return true;
+  }
+
+  /**
+   * Work out the way back for every segment of a bus or tram line, honouring
+   * one-way streets. See `Line.backSegments`.
+   */
+  refreshBackSegments(line) {
+    if (isRail(line.mode)) { line.backSegments = null; return; }
+    const count = line.stops.length;
+    const back = line.segments.map((segment, k) => {
+      // Dedicated tram track runs both ways; so does a segment with no road path.
+      if (segment.offRoad || !segment.nodes) return null;
+      const start = this.stops.get(line.stops[k]);
+      const end = this.stops.get(line.stops[(k + 1) % count]);
+      if (!start || !end) return null;
+      const via = this.viaFor(line, start, end);
+      const viaNode = via ? this.roadIndex.snap(via[0], via[1], line.mode)?.node : undefined;
+      const path = this.roadPath(
+        [end.node, ...(viaNode !== undefined ? [viaNode] : []), start.node], line.mode);
+      if (!path) return null;
+      const reversed = [...segment.nodes].reverse();
+      if (path.nodes.length === reversed.length && path.nodes.every((n, i) => n === reversed[i])) {
+        return null;
+      }
+      return {
+        points: this.roadIndex.polyline(path.nodes).reverse(),
+        nodes: path.nodes,
+        lengthM: path.lengthM,
+        back: true,
+        ...(path.ignoresOneway ? { ignoresOneway: true } : {}),
+      };
+    });
+    line.backSegments = back.some(Boolean) ? back : null;
+  }
+
+  /**
+   * A road path through these nodes that obeys one-way streets — or, where
+   * none exists, one that ignores them and says so. That happens where a
+   * one-way street leads out of the region and the way round is outside it;
+   * refusing the line there would be worse than a bus breaking the rule.
+   * @returns {{nodes:number[], lengthM:number, ignoresOneway?:boolean}|null}
+   */
+  roadPath(nodes, mode) {
+    const legal = this.roadIndex.pathThrough(nodes, mode);
+    if (legal) return legal;
+    const any = this.roadIndex.pathThrough(nodes, mode, { ignoreOneway: true });
+    return any && { ...any, ignoresOneway: true };
   }
 
   // ─── Track ────────────────────────────────────────────────────────────────

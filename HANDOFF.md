@@ -24,6 +24,7 @@ The region comes out identical — same 51,700 buildings and 502,376 residents f
 | --- | --- |
 | **Next** | **Alex's play-test.** Open the tuning panel with **`**, change what feels wrong, press *Copy changes* and hand the list over; it becomes the new defaults in [config.js](config.js). The questions most worth answering are in §15. After that: bug fixes and the spec's polish list (side-by-side offsets for shared track, performance, small UX fixes). |
 | **Done, Oct 16 (evening)** | Phase 5 (§11), Phase 6 with intercity (§14), the tuning panel (§15). |
+| **Done, Oct 17** | Alex's first play-test list, all 14 items (§18): contour specks gone and the sea from OSM's coastline; a steady heat map that ignores unserved stops; vehicles facing their way; a day bar; bulldozing a stop at a time; undo and Finish buttons for touch; dragging stops; Patras's narrow-gauge railway; request stops; flows per stop; buildings far from roads make no demand; one-way streets. **Regions imported before this are re-fetched once when next chosen.** |
 | **Done, Oct 16 (night)** | Capacity counted in people; the dot sized to cap what is drawn at ~200; the legend; timetable-aware waiting; the Flows layer; which clock each number uses (§16). Ferry groundwork (§17). |
 | **Done, Oct 16** | Unmapped buildings are filled in from Overture's ML footprints, and the seasonal profile now decides how many people the buildings hold, with the curve moving the population (§13). |
 | **Decided, Oct 16** | Every change of vehicle pays the 5-minute transfer penalty, at the same stop too (§13). The town populations' ~1.5× overshoot is accepted. The stepped coastline is accepted as it is. |
@@ -85,8 +86,8 @@ Both would have reached Alex as a broken screen, and both were invisible to 272 
 ## 2. Testing
 
 ```bash
-npm test                            # 642 logic assertions, plain Node, no dependencies
-npm run test:browser                # 150 assertions in real Chromium via Playwright
+npm test                            # 695 logic assertions, plain Node, no dependencies
+npm run test:browser                # 155 assertions in real Chromium via Playwright
 npm run test:browser -- --headed    # ...and watch it
 npm run test:live                   # 24 assertions against a REAL import — hits live OSM services
 npm run test:live -- --km 5         # ...at a given size (default 5, the slider minimum)
@@ -320,7 +321,7 @@ An escape hatch, not a default. [extract.bbbike.org](https://extract.bbbike.org)
 
 ## 6. What works
 
-Verified by `npm test` (642) and `npm run test:browser` (150). Phases 3 to 6 have their own sections: §9, §10, §11 and §14.
+Verified by `npm test` (695) and `npm run test:browser` (155). Phases 3 to 6 have their own sections: §9, §10, §11 and §14.
 
 **Phase 1.** `LocalFrame` and the bbox/chunk maths; terrain height grid with bilinear interpolation (exact on a ramp); 200 m demand grid; 10 m occupancy bitset; Overpass parsing with road-class filtering, abandoned-rail rejection, chunk-overlap de-duplication and shared-node collapsing; Terrarium decode and tile resampling; marching-squares contours and sea polygons; the base-map GeoJSON. In the browser: the new-game screen, search firing no request while typing, MapLibre rendering real pixels, layer toggles, zoom revealing minor roads, `maxBounds`, IndexedDB round-trips, the module worker booting.
 
@@ -334,7 +335,7 @@ Verified by `npm test` (642) and `npm run test:browser` (150). Phases 3 to 6 hav
 
 ```
 index.html  style.css  config.js  main.js      package.json (no runtime deps)
-data/    overpass.js  terrain.js  import.worker.js  cache.js
+data/    overpass.js  terrain.js  coastline.js (OSM coast → sea)  import.worker.js  cache.js
          overture.js (ML building gap-fill, PMTiles)  mvt.js (vector tile decoder)
 model/   region.js (contract, frame, grids)  population.js  network.js (stops, lines, track)  save.js
 build/   road-routing.js  track-geometry.js (spline, grade rule, structures, buildRailTrack)
@@ -356,14 +357,14 @@ The fixture is a 6×6 km synthetic coast: a bay in the south-west, a lake, a riv
 ## 8. Known gaps
 
 - **A drag always wins over a click near a line.** Pressing within 10 px of a bus or tram segment starts a drag. A press that never moves falls through to a click, which is how Edit stops selects a line — but a hand that wobbles a pixel drags instead.
-- **Edit stops is select-only.** It selects stops, lines and track (from Phase 4 — before that, no click anywhere opened the line panel). Dragging a stop to move it and clicking a segment to insert one are unwired; `Network.insertStop` and `removeStopFromLine` exist and are tested.
+- **Edit stops** selects stops, lines and track, and since Oct 17 drags a stop to move it (§18). Clicking a segment to insert a stop is still unwired; `Network.insertStop` exists and is tested.
 - **A cost preview follows the cursor only while dragging a segment**, not while placing stops. The drag is the gesture that can spend tens of millions without placing anything, so it was the one that needed it most; stop placement still gives no running total.
 - **Water from multipolygon relations is not imported.** Only `way[natural=water]`. Big lakes and most coastal water in OSM are relations, so a region with one will be missing it. The sea mask comes from elevation and is unaffected.
 - **A land island inside a sea area is painted as sea** — the tracer returns it as its own ring, not a hole. Rare; fix is ring-containment tests.
 - **Save slots are one slot** in the UI. `model/save.js` supports any number.
 - **`revalidateDots` releases passengers aboard a deleted line** at the next stop rather than somewhere sensible.
 - **Nominatim's `population` extratag is often absent**, and the new-game screen has no "type the population" field, which the spec allows for.
-- **One-way roads are ignored**, per the spec's v1 decision.
+- ~~**One-way roads are ignored**, per the spec's v1 decision.~~ Obeyed since Oct 17 (§18).
 - **Import payload is not a problem** (§4, corrected). What remains is **region size in storage**: a dense 15 km region holds ~300,000 building outlines and ~76 MB of JSON in IndexedDB, identically whatever the source. Created by the decision to keep and draw footprints, which is still the right decision. It is an encoding problem — delta-encoded typed arrays instead of nested JSON arrays — and deserves its own task. See [RESEARCH_TILES.md](RESEARCH_TILES.md) §5.5.
 - **Overpass timing is unpredictable.** The same 2 km box measured 18.4 s, then 2.3 s, then 2.7 s on one afternoon. Region figures are single runs; read them as "minutes, variable".
 - **Rail gaps from Phase 4** — see §10, "Known gaps".
@@ -864,3 +865,42 @@ Alex: "pave the way for ferries in a very basic way, but don't add anything majo
 5. **The lifeline subsidy** the spec's subsidy rule is modelled on was a ferry subsidy in the first place; ferries are where it should be most generous.
 
 Known gaps for this section: none yet, since nothing is built.
+
+---
+
+## 18. Alex's first play-test — Oct 17 2026
+
+Fourteen items, all done. Asserted in [tests/phase7.js](tests/phase7.js) (`#1`–`#14` in the names) and, for the gestures, in [tests/browser.js](tests/browser.js). Then checked against a fresh real import of **Patras** (6 km at 21.74, 38.25) — the place Alex was playing.
+
+| # | Reported | What it was, and what changed |
+| --- | --- | --- |
+| 1 | Squares all over the map with contours on; buggy shoreline | Closed contour loops round single 30 m cells, ~85 m diamonds. Loops under `CONTOUR_MIN_LOOP_M` (250 m) are dropped on load, so cached regions are clean too. **The sea now comes from OSM's coastline** ([data/coastline.js](data/coastline.js)) and the height grid is corrected to match it, so the grade rule agrees with the map. Where a region has no usable coastline, the elevation trace is smoothed (Chaikin, two passes) and specks under 4 cells dropped |
+| 2 | Heat map flickers while placing a line, paused | It was normalised to the peak of the *unserved* cells, so covering the busiest cell rescaled the whole map. Now normalised to the region's peak |
+| 3 | Vehicles don't face their way | The bearing was a maths angle (y up) drawn on a canvas (y down): every vehicle not running due east or west was mirrored. Now projected to a true screen angle, right at any map rotation |
+| 4 | A progress bar for the day | Under the date |
+| 5 | Bulldoze section by section | Alex chose: a stop goes and its neighbours are joined. A click on a line between stops takes the nearer stop off that line. A line left with one stop goes, with its vehicles and that stop refunded; tram track is settled. Delete line stays on the line panel |
+| 6 | An unserved stop shows its demand as satisfied | Only stops on a running line (two stops, a vehicle) cover anyone — for the heat map, the demand and the coverage subsidy. The stop's panel still says what it *would* cover |
+| 7 | No demand from buildings away from roads | Over `POPULATION.MAX_ROAD_DISTANCE_M` (100 m) from any road, a building or POI makes no residents and no attraction; it is still drawn and still blocks track. Needs the new import |
+| 8 | Undo the last stop | Backspace while drawing, and an Undo button; it gives back that step's cost in full |
+| 9 | A Finish line button for touch | Undo / Finish / Cancel appear in the toolbar while a line or track is being drawn |
+| 10 | Dragging a stop does nothing | It was never wired. Edit stops: press on a stop and drag; it re-snaps, every line through it re-routes, the difference is settled, and anything unroutable or unaffordable puts it back |
+| 11 | Existing rail doesn't work in Patras | Patras's railway is metre gauge, `railway=narrow_gauge`, and only `rail` was imported. Narrow gauge now is; yard tracks and spurs are left out so stations don't land on a siding. **Patras: 345 rail edges, 11 km of track; a train line Αγυιά–Ανθείας builds on it with the real station names** |
+| 12 | Buses and trams may skip stops nobody needs | `VEHICLES.SKIP_EMPTY_STOPS`: a bus or tram with nobody getting off and nobody waiting does not dwell. Line ends always dwell; metro and train always stop |
+| 13 | Flows per stop | With a stop selected, the Flows layer shows only that stop's flows; its panel lists its five busiest destinations a day |
+| 14 | Buses and trams should obey one-way streets | `oneway` is imported (with roundabouts and motorways implied, and `oneway:bus`/`psv`/`tram=no` contraflow); the router obeys it; a line gets its own way back where it differs (`Line.backSegments`), drawn a little thinner. **Patras: 21% of road edges are one-way; 10 of 10 test lines got their own way back, none had to break a rule** |
+
+### Decisions worth not relitigating
+
+1. **`REGION.IMPORT_VERSION` (now 2).** Items 1, 7, 11 and 14 need data the old import did not fetch. A cached region from an older import is fetched again the next time it is chosen on the new-game screen (one import, as normal). Saves keep loading whatever is cached; an old save on a refreshed region could find existing-rail ids shifted if the refresh added rail, which only matters for a station placed on existing rail.
+2. **Back segments are stored start-to-end**, like their forward twin, so a vehicle walking segment *k* backwards in direction 1 drives the way back the right way. Vehicles, journey times and passenger routing needed no other change.
+3. **When no legal route exists, the line breaks the rule rather than being refused** (`ignoresOneway` on the segment). That happens where a one-way street leads out of the region and the way round is outside it. None in Patras.
+4. **Undo refunds in full; Bulldoze refunds half.** Taking back a mis-click should be free.
+5. **The heat map's scale is the region's peak, served or not**, so it changes only with the season.
+6. **Coastline maths in local metres, land on the left**, walking the boundary clockwise between pieces; a chain that stops in mid-region means bad data, and the import falls back to elevation rather than guess. Islands are holes; a region with islands and no crossing coast is open sea.
+
+### Known gaps
+
+- **Dragging a stop or a segment needs a mouse.** Touch has the draft buttons, not drags.
+- **Dots still appear at random times**, even for a timetabled line (§16).
+- **The fixture has no coastline**, so the browser suite runs the elevation fallback; the OSM path is covered by synthetic coasts in the logic suite and by Patras.
+- **A tram on a one-way street pays for track both ways** where the way back runs elsewhere — right for a tram, which needs rails on both streets.

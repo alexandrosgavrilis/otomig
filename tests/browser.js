@@ -1177,6 +1177,81 @@ try {
     check('…not even with the 5 key', modeBefore === modeAfter, `${modeBefore} → ${modeAfter}`);
   }
 
+  // ─── Play-test fixes: touch buttons, dragging a stop, the day bar ─────────
+  {
+    const pointOf = (x, y) => page.evaluate(([lx, ly]) => {
+      const p = window.otomig.map.project(window.otomig.frame.toLonLat(lx, ly));
+      return { x: p.x, y: p.y };
+    }, [x, y]);
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => {
+      const [w, s, e, n] = window.otomig.region.meta.bbox;
+      window.otomig.map.fitBounds([[w, s], [e, n]], { padding: 30, duration: 0 });
+      window.otomig.game.clock.setSpeedIndex(0);
+    });
+    await page.waitForTimeout(300);
+
+    // Draw three stops with clicks, take one back and finish — all by button.
+    await page.keyboard.press('1');
+    await page.click('#tb-tools button[data-tool="newLine"]');
+    for (const [x, y] of [[1600, 4400], [2600, 4400], [3400, 4400]]) {
+      const p = await pointOf(x, y);
+      await page.mouse.click(p.x, p.y);
+      await page.waitForTimeout(80);
+    }
+    const shown = await page.isVisible('#tb-draft');
+    await page.click('#tb-draft [data-draft="undo"]');
+    await page.click('#tb-draft [data-draft="finish"]');
+    await page.waitForTimeout(100);
+    const drawn = await page.evaluate(() => {
+      const lines = [...window.otomig.game.network.lines.values()].filter((l) => l.mode === 'bus');
+      return { stops: lines.at(-1)?.stops.length, draft: Boolean(window.otomig.game.draft),
+        barHidden: document.getElementById('tb-draft').hidden };
+    });
+    check('Undo and Finish line buttons appear while drawing', shown);
+    check('…Undo takes back the last stop and Finish completes the line, without a keyboard',
+      drawn.stops === 2 && !drawn.draft && drawn.barHidden, JSON.stringify(drawn));
+
+    // Edit stops: pick up the line's second stop and drop it 400 m north.
+    await page.click('#tb-tools button[data-tool="editStops"]');
+    const before = await page.evaluate(() => {
+      const line = [...window.otomig.game.network.lines.values()].filter((l) => l.mode === 'bus').at(-1);
+      const stop = window.otomig.game.network.stops.get(line.stops[1]);
+      return { id: stop.id, lon: stop.lon, lat: stop.lat };
+    });
+    const from = await page.evaluate(({ lon, lat }) => {
+      const p = window.otomig.map.project([lon, lat]);
+      return { x: p.x, y: p.y };
+    }, before);
+    const to = await pointOf(2600, 4800);
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    for (let i = 1; i <= 6; i++) {
+      await page.mouse.move(from.x + (to.x - from.x) * i / 6, from.y + (to.y - from.y) * i / 6);
+      await page.waitForTimeout(30);
+    }
+    await page.mouse.up();
+    await page.waitForTimeout(150);
+    const after = await page.evaluate((id) => {
+      const stop = window.otomig.game.network.stops.get(id);
+      return { lon: stop.lon, lat: stop.lat, pannable: window.otomig.map.dragPan.isEnabled() };
+    }, before.id);
+    const movedM = await page.evaluate(([a, b]) =>
+      window.otomig.frame.distance(a.lon, a.lat, b.lon, b.lat), [before, after]);
+    check('Edit stops drags a stop to a new place on the roads', movedM > 200, `${Math.round(movedM)} m`);
+    check('…and the map pans again afterwards', after.pannable);
+
+    // The day bar moves as the day goes by.
+    const widths = [];
+    await page.evaluate(() => window.otomig.game.clock.setSpeedIndex(3));
+    for (let i = 0; i < 2; i++) {
+      widths.push(await page.evaluate(() => document.getElementById('hud-day').style.width));
+      await page.waitForTimeout(700);
+    }
+    await page.evaluate(() => window.otomig.game.clock.setSpeedIndex(0));
+    check('the day bar shows how far through the day it is', widths[0] !== widths[1], widths.join(' → '));
+  }
+
   // ─── Nothing threw ────────────────────────────────────────────────────────
   check('the style is valid — no MapLibre errors', mapErrors.length === 0,
     mapErrors.join(' | '));

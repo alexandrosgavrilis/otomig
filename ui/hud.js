@@ -20,8 +20,9 @@ export function mountHud(root, game) {
       <div class="stat" id="hud-balance-wrap">
         <b id="hud-balance">—</b><span>${STRINGS.hud.balance}</span>
       </div>
-      <div class="stat">
+      <div class="stat" title="${STRINGS.hud.dayProgress(CLOCK.REAL_SECONDS_PER_DAY)}">
         <b id="hud-date">—</b><span id="hud-season">—</span>
+        <div class="day-bar"><i id="hud-day"></i></div>
       </div>
       <div class="speeds" id="hud-speeds">
         ${CLOCK.SPEEDS.map((speed, index) => `
@@ -73,6 +74,8 @@ export function mountHud(root, game) {
         : STRINGS.hud.balance;
 
     $('hud-date').textContent = formatDate(game.clock);
+    // How far through today, so a paused or slow game still shows time moving.
+    $('hud-day').style.width = `${((game.clock.days % 1) * 100).toFixed(1)}%`;
     $('hud-season').textContent = STRINGS.seasons[game.region.meta.season] || '';
 
     $('hud-transported').textContent = formatThousands(stats.transported);

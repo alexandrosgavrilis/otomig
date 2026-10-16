@@ -113,11 +113,17 @@ export class DemandModel {
   }
 
   /**
-   * Assign every demand cell within walking radius of a stop to its NEAREST
-   * stop, and sum residents and attraction per stop.
+   * Assign every demand cell within walking radius of a SERVED stop to its
+   * nearest served stop, and sum residents and attraction per stop.
    *
    * Walking radius depends on mode: 400 m for bus and tram, 600 m for metro
    * and train, so a metro station pulls from a wider area.
+   *
+   * Only a stop on a running line — at least two stops and a vehicle — covers
+   * anyone. A stop standing on its own used to count as served, so the heat
+   * map went quiet around it and the coverage subsidy paid for it, with no
+   * bus ever calling (Alex, Oct 16 2026). An unserved stop still gets totals,
+   * marked `served: false`, so its panel can say what it WOULD cover.
    */
   buildCatchments() {
     const { cols, rows, cellM, attraction } = this.region.demand;
@@ -125,8 +131,15 @@ export class DemandModel {
     this.catchment.clear();
     this.stopTotals.clear();
 
-    const stops = [...this.network.stops.values()];
-    for (const stop of stops) this.stopTotals.set(stop.id, { residents: 0, attraction: 0 });
+    const servedIds = new Set();
+    for (const line of this.network.activeLines) for (const id of line.stops) servedIds.add(id);
+    const stops = [...this.network.stops.values()].filter((stop) => servedIds.has(stop.id));
+    for (const stop of stops) {
+      this.stopTotals.set(stop.id, { residents: 0, attraction: 0, served: true });
+    }
+    for (const stop of this.network.stops.values()) {
+      if (!servedIds.has(stop.id)) this.stopTotals.set(stop.id, this.wouldCover(stop));
+    }
     if (stops.length === 0) return;
 
     // Precompute stop positions in local metres once.
@@ -161,6 +174,26 @@ export class DemandModel {
     }
   }
 
+  /** What a stop no line serves would cover on its own, for its panel. */
+  wouldCover(stop) {
+    const { cols, rows, cellM, attraction } = this.region.demand;
+    const [x, y] = this.frame.toLocal(stop.lon, stop.lat);
+    const radius = DEMAND.CATCHMENT_M[stop.mode];
+    const totals = { residents: 0, attraction: 0, served: false };
+    const c0 = Math.max(0, Math.floor((x - radius) / cellM));
+    const c1 = Math.min(cols - 1, Math.floor((x + radius) / cellM));
+    const r0 = Math.max(0, Math.floor((y - radius) / cellM));
+    const r1 = Math.min(rows - 1, Math.floor((y + radius) / cellM));
+    for (let row = r0; row <= r1; row++) {
+      for (let col = c0; col <= c1; col++) {
+        if (Math.hypot((col + 0.5) * cellM - x, (row + 0.5) * cellM - y) > radius) continue;
+        totals.residents += this.residents[row * cols + col];
+        totals.attraction += attraction[row * cols + col];
+      }
+    }
+    return totals;
+  }
+
   /**
    * Build the sparse origin→destination rate table.
    *
@@ -186,7 +219,7 @@ export class DemandModel {
 
     for (const from of stops) {
       const totals = this.stopTotals.get(from.id);
-      if (!totals || totals.residents <= 0) continue;
+      if (!totals?.served || totals.residents <= 0) continue;
 
       const tripsPerDay = totals.residents * DEMAND.TRIPS_PER_RESIDENT;
       if (tripsPerDay <= 0) continue;
@@ -212,7 +245,7 @@ export class DemandModel {
         if (!connected.has(key)) continue;
 
         const toTotals = this.stopTotals.get(to.id);
-        if (!toTotals || toTotals.attraction <= 0) continue;
+        if (!toTotals?.served || toTotals.attraction <= 0) continue;
 
         const distance = this.frame.distance(from.lon, from.lat, to.lon, to.lat);
         const weight = toTotals.attraction * decay(distance);
@@ -299,12 +332,15 @@ export class DemandModel {
     let peak = 0;
 
     for (let i = 0; i < residents.length; i++) {
-      if (this.catchment.has(i)) continue;
       // Attraction is a floor-area number and dwarfs resident counts, so it is
       // damped to keep the map readable as "where people are".
       const value = residents[i] + attraction[i] * 0.05;
-      values[i] = value;
+      // The scale is the whole region's peak, served or not. Normalising to
+      // the peak of what is still UNSERVED made every stop that covered the
+      // busiest cell rescale the entire map, which flickered wildly while a
+      // line was being placed (Alex, Oct 16 2026).
       if (value > peak) peak = value;
+      if (!this.catchment.has(i)) values[i] = value;
     }
 
     this.unserved = peak > 0 ? values.map((v) => v / peak) : values;
@@ -368,6 +404,19 @@ export class DemandModel {
     // The overlay asks every frame; the answer only changes with the table.
     if (!this.sortedFlows) this.sortedFlows = this.mergeFlows();
     return this.sortedFlows.slice(0, limit);
+  }
+
+  /**
+   * One stop's flows: people a day between it and each other stop, both
+   * directions together, busiest first. For the Flows layer with a stop
+   * selected, and the stop's own panel.
+   * @returns {Array<{a:string, b:string, other:string, perDay:number}>}
+   */
+  flowsAt(stopId, limit = Infinity) {
+    return this.flows()
+      .filter((flow) => flow.a === stopId || flow.b === stopId)
+      .slice(0, limit)
+      .map((flow) => ({ ...flow, other: flow.a === stopId ? flow.b : flow.a }));
   }
 
   mergeFlows() {
