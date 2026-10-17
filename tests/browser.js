@@ -391,6 +391,11 @@ try {
   check('the line routed segments along real roads',
     built?.segments === 2 && built.lengthKm > 1.5, `${built?.lengthKm?.toFixed(2)} km`);
   check('the finished line was given a vehicle', built?.vehicles === 1);
+  // The game ticked all the while the line was drawn; its demand must still
+  // be rebuilt once the bus makes its stops served (Alex, Oct 17 2026).
+  await page.waitForTimeout(200);
+  check('…and people want to ride the finished line',
+    await page.evaluate(() => window.otomig.game.demand.pairRate.size) > 0);
 
   // A click on the sea must be refused with a visible message, not silently.
   await page.evaluate(() => { window.otomig.game.draft = null; });

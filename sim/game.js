@@ -98,9 +98,18 @@ export class Game {
     return () => this.listeners.delete(callback);
   }
 
-  /** Mark the network changed; the next tick repairs routes and rebuilds. */
+  /**
+   * Mark the network changed; the next tick repairs routes and rebuilds.
+   *
+   * It bumps the network's version too, because the router and the demand
+   * table rebuild on that alone. Buying a line its first vehicle changes no
+   * stop or segment, yet it is what makes the line's stops served: without
+   * the bump, a line drawn while the game ticked kept the table built for it
+   * vehicle-less, and nobody ever wanted to ride it (Alex, Oct 17 2026).
+   */
   invalidate() {
     this.networkDirty = true;
+    this.network.touch();
   }
 
   /**

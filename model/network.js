@@ -855,7 +855,8 @@ export class Network {
     // segment's dragged via (if any), then the next stop.
     const after = [...(through !== fromNode && through !== toNode ? [through] : []),
       ...(viaNode !== null ? [viaNode] : []), toNode];
-    const first = this.roadIndex.turnaround(fromNode, avoidFirst, after[0], line.mode);
+    const first = this.roadIndex.turnaround(fromNode, avoidFirst, after[0], line.mode)
+      ?? this.crossover(fromNode, after[0] === through ? through : null);
     if (!first) return null;
     let nodes = first.nodes;
     let lengthM = first.lengthM;
@@ -866,6 +867,20 @@ export class Network {
       lengthM += rest.lengthM;
     }
     return { points: this.roadIndex.polyline(nodes), nodes, lengthM };
+  }
+
+  /**
+   * Straight across to a stop's other side, when there is no legal way round
+   * inside the region — a motorway whose next exit lies beyond its edge, say.
+   * Without it the bus vanished from one carriageway and reappeared on the
+   * other (Alex, Oct 17 2026); a U-turn across the median at least shows
+   * what it does.
+   */
+  crossover(fromNode, otherSide) {
+    if (otherSide === null || otherSide === fromNode) return null;
+    const [ax, ay] = this.roadIndex.nodePosition(fromNode);
+    const [bx, by] = this.roadIndex.nodePosition(otherSide);
+    return { nodes: [fromNode, otherSide], lengthM: Math.hypot(bx - ax, by - ay), crossover: true };
   }
 
   /** The road node of a segment's dragged via, or null. */

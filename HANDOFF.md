@@ -88,8 +88,8 @@ Both would have reached Alex as a broken screen, and both were invisible to 272 
 ## 2. Testing
 
 ```bash
-npm test                            # 749 logic assertions, plain Node, no dependencies
-npm run test:browser                # 177 assertions in real Chromium via Playwright
+npm test                            # 754 logic assertions, plain Node, no dependencies
+npm run test:browser                # 178 assertions in real Chromium via Playwright
 npm run test:browser -- --headed    # ...and watch it
 npm run test:live                   # 24 assertions against a REAL import — hits live OSM services
 npm run test:live -- --km 5         # ...at a given size (default 5, the slider minimum)
@@ -323,7 +323,7 @@ An escape hatch, not a default. [extract.bbbike.org](https://extract.bbbike.org)
 
 ## 6. What works
 
-Verified by `npm test` (749) and `npm run test:browser` (177). Phases 3 to 6 have their own sections: §9, §10, §11 and §14.
+Verified by `npm test` (754) and `npm run test:browser` (178). Phases 3 to 6 have their own sections: §9, §10, §11 and §14.
 
 **Phase 1.** `LocalFrame` and the bbox/chunk maths; terrain height grid with bilinear interpolation (exact on a ramp); 200 m demand grid; 10 m occupancy bitset; Overpass parsing with road-class filtering, abandoned-rail rejection, chunk-overlap de-duplication and shared-node collapsing; Terrarium decode and tile resampling; marching-squares contours and sea polygons; the base-map GeoJSON. In the browser: the new-game screen, search firing no request while typing, MapLibre rendering real pixels, layer toggles, zoom revealing minor roads, `maxBounds`, IndexedDB round-trips, the module worker booting.
 
@@ -1044,3 +1044,15 @@ The same cause as §26, in the twin search: `RoadIndex.twinOf` looked for a NODE
 **Measured on Patras**, twelve lines of five double stops clicked along genuinely divided roads: middle stops paired across **18 of 36 → 36 of 36**; the trip down between them **median 2.21× → 1.02×** the trip up, worst 6.18 → 1.03, hops over 1.5×: 13 of 24 → 0. A synthetic avenue with junctions 2 km apart and stops clicked between them is asserted in `tests/phase7.js`.
 
 **Boarding checked afterwards (Alex asked).** Sixty days on Patras with four lines — a double-stop bus line along the divided avenue (all five stops paired across), a double-stop line through the one-way old town, a single-stop loop and a double-stop tram — every boarding recorded by stop and direction: 48 boardings, **0 onto a vehicle going the wrong way or on the wrong line**, both directions boarding on every double-stop line (the loop one way only, as designed), 45 arrived and 3 still aboard at the end, none gave up, nobody left waiting. Kept as a test: a synthetic divided avenue with paired stops and turns at its ends, run for sixty days, must board riders both ways and never the wrong way.
+
+## 28. Nobody rode a newly drawn line; buses jumped carriageways at a motorway's end — Oct 17 2026
+
+Alex: "no passengers boarded any bus lines no matter how long or how many stops", on a reloaded Athens and a fresh Megara, and "up until we messed with the lines pathfinding everything worked well".
+
+**Not the pathfinding — an older bug the play-test fixes exposed.** Since §18 #6 a stop counts as served only once a line with a vehicle calls there. The demand table and the router rebuild only when `network.version` changes, and buying a vehicle never changed it. In the browser the game ticks all the while a line is drawn, paused or not, so the table was built for the draft — no vehicle, nothing served — and Done's free bus never rebuilt it: **0 pairs, forever**, until some later edit happened to bump the version (extending the line, say), which is why it seemed to work before. The headless tests and probes never tick during drafting, so they never saw it; the same Megara line driven through the real UI showed it at every commit back to `0b3cbb5`. `Game.invalidate()` now bumps the version too, and every caller of it is a network change. Asserted in both suites: a line drawn while ticking is wanted once Done gives it a bus.
+
+**The jump.** A double-stop line along the Olympia Odos at Megara (a motorway: buses may use it) had no legal way round at either end — the next exits lie outside the 6 km region — so `turnSegment` returned nothing and the bus simply reappeared on the other carriageway, 17 m across. Where no turnaround exists, it now crosses straight over to the stop's twin (`Network.crossover`), a U-turn across the median drawn as part of the line. Asserted on a synthetic motorway with no way round.
+
+**Still sparse, by the model's own rule.** With the fix, the Megara line through the town centre (four stops, 2 people per dot) wants about 350 trips a day, which is about one dot every two calendar days — 4 spawned in 12 days. That is the 324× sample of §16 working as designed, not a bug; whether a small network should look busier is a tuning question for Alex.
+
+**Open question for Alex:** should buses be allowed to stop on motorways at all? A real bus would use the parallel road (at Megara, the one-way *Παράπλευρη Οδός* either side); stops could snap to the nearest non-motorway road while buses still drive on motorways between stops.

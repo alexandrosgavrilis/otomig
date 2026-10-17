@@ -862,6 +862,44 @@ function runStopPairs(check, near) {
     check('…and nobody is left behind', game.totals.gaveUp === 0, `${game.totals.gaveUp}`);
   }
 
+  // A line drawn while the game ticks — as in the browser, paused or not —
+  // must be wanted once Done gives it its bus. The demand table was built
+  // for the draft, which had no bus, and buying one never rebuilt it.
+  {
+    const points = new Map([[1, [500, 2000]], [2, [4500, 2000]]]);
+    const game = gameOn(points, [[[1, 2], {}]]);
+    game.startLine('bus');
+    for (const x of [1000, 2000, 3000]) {
+      game.extendDraft(...game.frame.toLonLat(x, 2000));
+      game.tick(CLOCK.TICK_MS / 1000);
+    }
+    check('a line drawn with no bus yet is wanted by nobody', game.demand.pairRate.size === 0);
+    game.finishDraft();
+    game.tick(CLOCK.TICK_MS / 1000);
+    check('…and once Done gives it a bus, its stops are served and people want to ride',
+      game.demand.pairRate.size > 0, `${game.demand.pairRate.size} pairs`);
+  }
+
+  // A divided road with no way round inside the region, like a motorway
+  // whose next exit is beyond its edge: the bus crosses over at the end
+  // stop, rather than vanishing from one carriageway onto the other.
+  {
+    const points = new Map([[1, [200, 2000]], [2, [5800, 2000]], [11, [200, 1975]], [12, [5800, 1975]]]);
+    const game = gameOn(points, [
+      [[1, 2], { highway: 'motorway', oneway: 'yes' }],
+      [[12, 11], { highway: 'motorway', oneway: 'yes' }],
+    ]);
+    const line = lineAlong(game, [1000, 2000, 3000].map((x) => [x, 2000]));
+    const last = line.segments.length - 1;
+    const network = game.network;
+    check('with no way round, a double-stop line still has its twins across the divide',
+      network.stopNodeFor(line, 2, 1) !== network.stopNodeFor(line, 2, 0));
+    check('…and the trip down begins where the trip up ended',
+      line.backSegments?.[last]?.nodes[0] === line.segments[last].nodes.at(-1));
+    check('…and the trip up where the trip down ended',
+      line.segments[0].nodes[0] === (line.backSegments?.[0]?.nodes.at(-1) ?? line.segments[0].nodes[0]));
+  }
+
   // A stop goes on the road that was clicked, even when that road has no
   // node nearby and the side street beside it has one every few metres.
   {
