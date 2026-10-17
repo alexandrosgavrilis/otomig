@@ -88,7 +88,7 @@ Both would have reached Alex as a broken screen, and both were invisible to 272 
 ## 2. Testing
 
 ```bash
-npm test                            # 733 logic assertions, plain Node, no dependencies
+npm test                            # 739 logic assertions, plain Node, no dependencies
 npm run test:browser                # 177 assertions in real Chromium via Playwright
 npm run test:browser -- --headed    # ...and watch it
 npm run test:live                   # 24 assertions against a REAL import — hits live OSM services
@@ -323,7 +323,7 @@ An escape hatch, not a default. [extract.bbbike.org](https://extract.bbbike.org)
 
 ## 6. What works
 
-Verified by `npm test` (733) and `npm run test:browser` (177). Phases 3 to 6 have their own sections: §9, §10, §11 and §14.
+Verified by `npm test` (739) and `npm run test:browser` (177). Phases 3 to 6 have their own sections: §9, §10, §11 and §14.
 
 **Phase 1.** `LocalFrame` and the bbox/chunk maths; terrain height grid with bilinear interpolation (exact on a ramp); 200 m demand grid; 10 m occupancy bitset; Overpass parsing with road-class filtering, abandoned-rail rejection, chunk-overlap de-duplication and shared-node collapsing; Terrarium decode and tile resampling; marching-squares contours and sea polygons; the base-map GeoJSON. In the browser: the new-game screen, search firing no request while typing, MapLibre rendering real pixels, layer toggles, zoom revealing minor roads, `maxBounds`, IndexedDB round-trips, the module worker booting.
 
@@ -1005,3 +1005,20 @@ Alex, after trying §23's stop areas in Athens: "this made it worse" — stops s
 Removed: §23's `planStopNodes`/Viterbi plan, the doubling-back repair, `STOP_AREA_*`, `STOP_MOVE_WEIGHT`, `DOUBLING_BACK_WEIGHT`. Road-class weighting stays, milder (residential 1.25, living street 2), because strong weights sent lines round blocks to avoid a short side street.
 
 **Known gaps:** a single stop's side follows the line's direction of travel, not where on the road the player clicked; stops are still shared between lines, so a stop used by a double and a single line is drawn both ways. Central Patras is so densely one-way that a double-stop line's way back often takes a different street, which is now visible thanks to the arrows — that is the rules working, not a fault.
+
+---
+
+## 25. A line is one trip up and one trip down, turning round at the ends — Oct 17 2026
+
+Alex pinpointed the remaining fault on a divided road at an interchange in Athens: a two-stop double-stop line turned round via the cloverleaf (good), but after adding stops further along the road, the old end stop still looped round the cloverleaf. In Cities: Skylines the whole route is re-planned as one trip up the road and one down, turning round only beyond the last stop.
+
+Two causes, both fixed:
+
+1. **The middle stop had no twin.** `RoadIndex.flowAt` judged a node by EVERY road at it, so a ramp or a two-way side street joining the carriageway at the stop made it look like no carriageway at all — no twin, and the way back had to loop round the interchange to reach the stop's own side. It now judges only the **main road** at the node: its highest class, ramps (`*_link`) and smaller side streets ignored.
+2. **Turning round was a jump.** A double-stop **bus** line now turns round by road at each end (`RoadIndex.turnaround`, `Network.turnSegment`): from the end stop, not back the way it came, either round a block (the ordinary shortest path) or on to the nearest **junction** ahead, a U-turn there, and back — whichever is shorter. U-turns are allowed only at junctions (three or more roads), never in the middle of a road. The trip down starts with the turn beyond the last stop (`refreshBackSegments`); the trip up starts with the turn from where the trip down ended (`rebuildSegments`, two passes, since each end depends on the other). The whole line is re-planned on every stop added, so an old end stop that becomes a middle stop simply loses its turn.
+
+**Trams do not turn round by road**: like most modern European fleets they are double-ended and reverse at the end of the line, which needs no turning loop of track. Single-stop lines are loops and never turn.
+
+**Fixed on the way:** `placeAt` (vehicle spacing) spread each hop's dwell over its distance while `phaseOf` counts it at the stop — harmless while a line's two directions mirrored each other, uneven once a turnaround made them differ. A vehicle due mid-dwell now stands at the stop with the rest of its dwell to go.
+
+**Measured on Patras**, lines of four stops along genuinely divided roads (every stop's carriageway with an opposite one across within 35 m): every middle stop found its twin (30 of 30), and the way back between the middle stops is a **median 1.00** of the way there, **worst 1.33** — no detour loops. Along ordinary one-way streets (no divider) the way back takes another street, by design (§24).

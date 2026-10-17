@@ -792,7 +792,80 @@ export class Network {
     }
     line.segments = segments;
     this.refreshBackSegments(line);
+    // A double-stop line turns round at each end like a real bus: the trip
+    // down starts by turning round beyond the last stop (in
+    // refreshBackSegments), and the trip up by turning round from where the
+    // trip down ended. Re-planned whole whenever a stop is added, so an old
+    // end stop that is now in the middle loses its turn (Alex, Oct 17 2026).
+    // The two ends depend on each other, so the trips are routed twice.
+    if (this.turnsAtEnds(line)) {
+      for (let pass = 0; pass < 2; pass++) {
+        const down = this.arrivalAtStart(line);
+        const turn = this.turnSegment(line, this.stopNodeFor(line, 0, 1), down,
+          this.stopNodeFor(line, 0, 0), this.stopNodeFor(line, 1, 0), this.viaNodeOf(line, 0));
+        if (!turn) break;
+        line.segments[0] = turn;
+        let arrivedFrom = turn.nodes.length > 1 ? turn.nodes.at(-2) : null;
+        for (let k = 1; k < line.segments.length; k++) {
+          const segment = this.routeBetween(line, this.stops.get(line.stops[k]),
+            this.stops.get(line.stops[k + 1]), this.stopNodeFor(line, k, 0),
+            this.stopNodeFor(line, k + 1, 0), arrivedFrom);
+          if (!segment) break;
+          line.segments[k] = segment;
+          arrivedFrom = segment.nodes?.length > 1 ? segment.nodes.at(-2) : null;
+        }
+        this.refreshBackSegments(line);
+      }
+    }
     return true;
+  }
+
+  /**
+   * Does this line turn round at its ends by road: an open double-stop BUS
+   * line. Trams are double-ended, as most modern European fleets are, and
+   * simply reverse at the end of the line — a turning loop would need track
+   * round a block at each end.
+   */
+  turnsAtEnds(line) {
+    return line.mode === 'bus' && !line.singleSided && !line.loop && line.stops.length >= 2
+      && line.segments.every((segment) => segment.nodes && !segment.offRoad);
+  }
+
+  /** Where the trip down arrives at the first stop from, or null. */
+  arrivalAtStart(line) {
+    const last = line.backSegments?.[0]?.nodes ?? [...(line.segments[0]?.nodes ?? [])].reverse();
+    return last.length > 1 ? last.at(-2) : null;
+  }
+
+  /**
+   * A turn at the end of a line: from `fromNode` (not back the way it came),
+   * round to `through` — the stop's other side, when it has one — then on to
+   * `toNode`, the next stop. See `RoadIndex.turnaround`.
+   * @returns {{points:number[][], nodes:number[], lengthM:number}|null}
+   */
+  turnSegment(line, fromNode, avoidFirst, through, toNode, viaNode = null) {
+    // After turning round: the stop's other side (if it has one), the
+    // segment's dragged via (if any), then the next stop.
+    const after = [...(through !== fromNode && through !== toNode ? [through] : []),
+      ...(viaNode !== null ? [viaNode] : []), toNode];
+    const first = this.roadIndex.turnaround(fromNode, avoidFirst, after[0], line.mode);
+    if (!first) return null;
+    let nodes = first.nodes;
+    let lengthM = first.lengthM;
+    if (after.length > 1) {
+      const rest = this.roadPath(after, line.mode, nodes.length > 1 ? nodes.at(-2) : null);
+      if (!rest) return null;
+      nodes = [...nodes, ...rest.nodes.slice(1)];
+      lengthM += rest.lengthM;
+    }
+    return { points: this.roadIndex.polyline(nodes), nodes, lengthM };
+  }
+
+  /** The road node of a segment's dragged via, or null. */
+  viaNodeOf(line, k) {
+    const count = line.stops.length;
+    const via = line.vias?.get(Network.viaKey(line.stops[k], line.stops[(k + 1) % count]));
+    return via ? this.roadIndex.snap(via[0], via[1], line.mode)?.node ?? null : null;
   }
 
   /**
@@ -832,6 +905,18 @@ export class Network {
     let arrivedFrom = null;
     const back = new Array(line.segments.length).fill(null);
     for (let k = line.segments.length - 1; k >= 0; k--) {
+      // The trip down begins by turning round beyond the last stop.
+      if (k === line.segments.length - 1 && this.turnsAtEnds(line)) {
+        const up = line.segments[k].nodes;
+        const turn = this.turnSegment(line, this.stopNodeFor(line, count - 1, 0),
+          up.length > 1 ? up.at(-2) : null, this.stopNodeFor(line, count - 1, 1),
+          this.stopNodeFor(line, k, 1), this.viaNodeOf(line, k));
+        if (turn) {
+          back[k] = { ...turn, points: turn.points.slice().reverse(), back: true };
+          arrivedFrom = turn.nodes.length > 1 ? turn.nodes.at(-2) : null;
+          continue;
+        }
+      }
       back[k] = this.backSegmentFor(line, k, arrivedFrom);
       const travelled = back[k]?.nodes ?? [...(line.segments[k].nodes ?? [])].reverse();
       arrivedFrom = travelled.length > 1 ? travelled.at(-2) : null;

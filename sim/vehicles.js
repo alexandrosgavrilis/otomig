@@ -260,11 +260,26 @@ function placeAt(vehicle, line, cycle, phase) {
   const { direction, hop, seconds } = cycle.hops[index];
   const segment = segmentFor(line, direction, hop);
   const hopLength = segment?.lengthM ?? 0;
-  const fraction = seconds > 0 ? offset / seconds : 0;
-  vehicle.direction = direction;
-  vehicle.hop = hop;
-  vehicle.progress = Math.min(hopLength, hopLength * fraction);
-  vehicle.dwellRemaining = 0;
+  // The same arithmetic as `phaseOf`: a hop's time is its driving, then the
+  // dwell at the stop it reaches. Spreading the dwell over the distance
+  // instead, as before, placed vehicles unevenly once the two directions of
+  // a line stopped being mirror images (a bus turning round at each end).
+  const metresPerSecond = (line.cruiseKmh * 1000) / 3600;
+  const driving = hopLength / metresPerSecond;
+  if (offset <= driving || seconds <= driving) {
+    vehicle.direction = direction;
+    vehicle.hop = hop;
+    vehicle.progress = Math.min(hopLength, offset * metresPerSecond);
+    vehicle.dwellRemaining = 0;
+    return;
+  }
+  // Part-way through the dwell: standing at the stop, at the start of the
+  // next hop, with the rest of the dwell still to go.
+  const next = cycle.hops[(index + 1) % cycle.hops.length];
+  vehicle.direction = next.direction;
+  vehicle.hop = next.hop;
+  vehicle.progress = 0;
+  vehicle.dwellRemaining = seconds - offset;
 }
 
 /**

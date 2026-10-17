@@ -750,6 +750,63 @@ function runStopPairs(check, near) {
     check('…so the way back is as short as the way there', back < there * 1.1, `${back} against ${there}`);
   }
 
+  // Turning round at the ends, re-planned whole as stops are added (§25).
+  {
+    const xs = [500, 1000, 1500, 2000, 2500, 3000, 3500, 4000];
+    const points = new Map();
+    xs.forEach((x, i) => { points.set(100 + i, [x, 2000]); points.set(200 + i, [x, 1970]); });
+    // A ramp joining the eastbound carriageway at x=2000, as at an interchange.
+    points.set(900, [2100, 2100]);
+    const streets = [
+      [xs.map((_, i) => 100 + i), { oneway: 'yes' }],
+      [xs.map((_, i) => 200 + xs.length - 1 - i), { oneway: 'yes' }],
+      [[100, 200], {}], [[107, 207], {}],
+      [[900, 103], { highway: 'primary_link', oneway: 'yes' }],
+    ];
+    const build = (stopXs) => {
+      const game = gameOn(points, streets);
+      return { game, line: lineAlong(game, stopXs.map((x) => [x, 2000])) };
+    };
+    const two = build([1000, 2000]);
+    const three = build([1000, 2000, 3000]);
+    const middle = three.game.network.stopNodeFor(three.line, 1, 1);
+    check('a ramp joining the carriageway at a stop no longer hides its twin across the divider',
+      at(three.game, middle)[1] === 1970, JSON.stringify(at(three.game, middle)));
+    const backOf = (line, k) => line.backSegments?.[k]?.lengthM ?? line.segments[k].lengthM;
+    check('an end stop turns the bus round: the trip down starts with a turn beyond it',
+      backOf(two.line, 0) > two.line.segments[0].lengthM * 0.5 && two.line.backSegments?.[0]?.nodes[0]
+        === two.game.network.stopNodeFor(two.line, 1, 0));
+    check('…and when the line is extended, the old end stop is passed straight through both ways',
+      Math.abs(backOf(three.line, 0) - 1000) < 1 && Math.abs(three.line.segments[1].lengthM - 1000) < 1,
+      `${backOf(three.line, 0)} m and ${three.line.segments[1].lengthM} m`);
+    check('…the turn moving out beyond the new end stop',
+      three.line.backSegments?.[1]?.nodes[0] === three.game.network.stopNodeFor(three.line, 2, 0)
+      && backOf(three.line, 1) > 1000);
+  }
+  {
+    // On a two-way street a bus turns round at the junction ahead, not round a block.
+    const points = new Map([
+      [1, [1000, 3000]], [2, [1500, 3000]], [3, [2000, 3000]], [4, [2100, 3000]],
+      [5, [2100, 3300]], [6, [1000, 3300]], [7, [2100, 2900]],
+    ]);
+    const game = gameOn(points, [
+      [[1, 2, 3, 4], { highway: 'secondary' }],
+      [[4, 5, 6, 1], { highway: 'secondary' }],
+      [[4, 7], { highway: 'secondary' }],
+    ]);
+    const node = (x, y) => game.roadIndex.snap(...game.frame.toLonLat(x, y), 'bus', 5).node;
+    // Arrived at (2000, 3000) heading east, from (1500, 3000): turn for (1000, 3000).
+    const turn = game.roadIndex.turnaround(node(2000, 3000), node(1500, 3000), node(1000, 3000), 'bus');
+    const route = turn?.nodes.map((n) => at(game, n).join(',')).join(' ');
+    check('a bus turns round at the junction ahead rather than circling a block',
+      route === '2000,3000 2100,3000 2000,3000 1500,3000 1000,3000', route);
+    // Without a junction ahead, it goes round.
+    const corner = game.roadIndex.turnaround(node(1500, 3000), node(2000, 3000), node(2000, 3000), 'bus');
+    check('…and goes round where there is none, never turning in the road',
+      corner && !corner.nodes.slice(1).includes(node(1500, 3000))
+      && corner.nodes[1] === node(1000, 3000), corner?.nodes.map((n) => at(game, n).join(',')).join(' '));
+  }
+
   // A one-way pair a BLOCK apart is not a divided road.
   {
     const xs = [500, 750, 1000, 1250, 1500, 1750, 2000, 2250, 2500, 2750, 3000, 3250, 3500];

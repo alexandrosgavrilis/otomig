@@ -96,19 +96,30 @@ export class RoadIndex {
 
   /**
    * Which way traffic flows at a node on a one-way carriageway, as a unit
-   * vector in local metres — or null if any road at the node the mode may use
-   * runs both ways (it is not a carriageway, or it is a junction with one).
+   * vector in local metres — or null if the main road there runs both ways.
+   *
+   * Judged by the MAIN road at the node only: its highest class, with ramps
+   * (`*_link`) and smaller side streets ignored. Looking at every road there,
+   * as before, a ramp or a two-way side street joining the carriageway made
+   * the node look like no carriageway at all, so a stop at an interchange got
+   * no twin and the way back looped round the cloverleaf (Alex, Oct 17 2026).
    */
   flowAt(node, mode) {
     const allowed = ALLOWED_CLASSES[mode];
     const { start, edges } = this.adjacency;
+    let mainRank = Infinity;
+    for (let i = start[node]; i < start[node + 1]; i++) {
+      const edge = this.graph.edges[edges[i]];
+      if (!allowed.has(edge.cls) || edge.cls.endsWith('_link')) continue;
+      mainRank = Math.min(mainRank, classRank(edge.cls));
+    }
+    if (!Number.isFinite(mainRank)) return null;
     const [x, y] = this.nodePosition(node);
     let fx = 0;
     let fy = 0;
-    let count = 0;
     for (let i = start[node]; i < start[node + 1]; i++) {
       const edge = this.graph.edges[edges[i]];
-      if (!allowed.has(edge.cls)) continue;
+      if (!allowed.has(edge.cls) || edge.cls.endsWith('_link') || classRank(edge.cls) !== mainRank) continue;
       if (!edge.oneway || edge.onewayExempt?.includes(mode)) return null;
       const other = edge.a === node ? edge.b : edge.a;
       const [ox, oy] = this.nodePosition(other);
@@ -117,10 +128,9 @@ export class RoadIndex {
       const sign = mayTravel(edge, node, mode) ? 1 : -1;
       fx += sign * (ox - x) / length;
       fy += sign * (oy - y) / length;
-      count++;
     }
     const length = Math.hypot(fx, fy);
-    return count && length > 0 ? [fx / length, fy / length] : null;
+    return length > 0 ? [fx / length, fy / length] : null;
   }
 
   /**
@@ -165,6 +175,78 @@ export class RoadIndex {
       }
     }
     return best === null ? null : { node: best, flow };
+  }
+
+  /**
+   * Dijkstra from one node over legal moves, as far as `maxCost`: the cost
+   * and predecessor of every node reached. With `reverse`, it searches
+   * backwards — the cost of getting FROM each node TO `source` — which is
+   * what a turnaround needs from its far end.
+   * @returns {{cost: Map<number,number>, prev: Map<number,number>}}
+   */
+  searchFrom(source, mode, { avoidFirst = null, reverse = false, maxCost = Infinity } = {}) {
+    const allowed = ALLOWED_CLASSES[mode];
+    const { start, edges } = this.adjacency;
+    const cost = new Map([[source, 0]]);
+    const prev = new Map();
+    const settled = new Set();
+    const heap = new MinHeap();
+    heap.push(source, 0);
+    while (heap.size > 0) {
+      const node = heap.pop();
+      if (settled.has(node)) continue;
+      settled.add(node);
+      const here = cost.get(node);
+      if (here > maxCost) break;
+      for (let i = start[node]; i < start[node + 1]; i++) {
+        const edge = this.graph.edges[edges[i]];
+        if (!allowed.has(edge.cls)) continue;
+        const next = edge.a === node ? edge.b : edge.a;
+        // Forwards a vehicle goes node → next; backwards it would have come next → node.
+        if (!mayTravel(edge, reverse ? next : node, mode)) continue;
+        if (node === source && next === avoidFirst) continue;
+        if (settled.has(next)) continue;
+        const candidate = here + edgeCost(edge);
+        if (candidate < (cost.get(next) ?? Infinity)) {
+          cost.set(next, candidate);
+          prev.set(next, node);
+          heap.push(next, candidate);
+        }
+      }
+    }
+    return { cost, prev };
+  }
+
+  /**
+   * Turning a vehicle round at the end of a line: from `fromNode`, not back
+   * the way it came (`avoidFirst`), to `toNode`. Either by going round —
+   * the ordinary shortest path that never doubles back — or by driving on to
+   * a junction ahead, U-turning there and coming back, whichever is shorter.
+   * U-turns are allowed only at junctions (three or more roads), never in
+   * the middle of a road (Alex, Oct 17 2026).
+   * @returns {{nodes:number[], lengthM:number, cost:number}|null}
+   */
+  turnaround(fromNode, avoidFirst, toNode, mode, maxCost = 4000) {
+    const round = this.shortestPath(fromNode, toNode, mode, { avoidFirst });
+    const ahead = this.searchFrom(fromNode, mode, { avoidFirst, maxCost });
+    const back = this.searchFrom(toNode, mode, { reverse: true, maxCost });
+    let best = null;
+    let bestCost = round ? round.cost : Infinity;
+    for (const [junction, there] of ahead.cost) {
+      if (junction === fromNode || this.degree(junction, mode) < 3) continue;
+      const home = back.cost.get(junction);
+      if (home === undefined || there + home >= bestCost) continue;
+      bestCost = there + home;
+      best = junction;
+    }
+    if (best === null) return round;
+    const nodes = [];
+    for (let node = best; node !== undefined; node = ahead.prev.get(node)) nodes.push(node);
+    nodes.reverse();
+    for (let node = back.prev.get(best); node !== undefined; node = back.prev.get(node)) nodes.push(node);
+    let lengthM = 0;
+    for (let i = 1; i < nodes.length; i++) lengthM += this.edgeBetween(nodes[i - 1], nodes[i])?.lengthM ?? 0;
+    return { nodes, lengthM, cost: bestCost };
   }
 
   /** The edge joining two nodes, or null. */
@@ -308,6 +390,14 @@ export class RoadIndex {
     return nodes.map((node) => this.nodeLonLat(node));
   }
 }
+
+/** Road classes from most to least important, for telling a main road from its side streets. */
+const CLASS_ORDER = ['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'unclassified',
+  'residential', 'living_street', 'pedestrian'];
+const classRank = (cls) => {
+  const rank = CLASS_ORDER.indexOf(cls.replace(/_link$/, ''));
+  return rank === -1 ? CLASS_ORDER.length : rank;
+};
 
 /**
  * What an edge costs to route along: its length, weighted by its class, so
