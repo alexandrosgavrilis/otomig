@@ -88,7 +88,7 @@ Both would have reached Alex as a broken screen, and both were invisible to 272 
 ## 2. Testing
 
 ```bash
-npm test                            # 739 logic assertions, plain Node, no dependencies
+npm test                            # 744 logic assertions, plain Node, no dependencies
 npm run test:browser                # 177 assertions in real Chromium via Playwright
 npm run test:browser -- --headed    # ...and watch it
 npm run test:live                   # 24 assertions against a REAL import — hits live OSM services
@@ -323,7 +323,7 @@ An escape hatch, not a default. [extract.bbbike.org](https://extract.bbbike.org)
 
 ## 6. What works
 
-Verified by `npm test` (739) and `npm run test:browser` (177). Phases 3 to 6 have their own sections: §9, §10, §11 and §14.
+Verified by `npm test` (744) and `npm run test:browser` (177). Phases 3 to 6 have their own sections: §9, §10, §11 and §14.
 
 **Phase 1.** `LocalFrame` and the bbox/chunk maths; terrain height grid with bilinear interpolation (exact on a ramp); 200 m demand grid; 10 m occupancy bitset; Overpass parsing with road-class filtering, abandoned-rail rejection, chunk-overlap de-duplication and shared-node collapsing; Terrarium decode and tile resampling; marching-squares contours and sea polygons; the base-map GeoJSON. In the browser: the new-game screen, search firing no request while typing, MapLibre rendering real pixels, layer toggles, zoom revealing minor roads, `maxBounds`, IndexedDB round-trips, the module worker booting.
 
@@ -1022,3 +1022,13 @@ Two causes, both fixed:
 **Fixed on the way:** `placeAt` (vehicle spacing) spread each hop's dwell over its distance while `phaseOf` counts it at the stop — harmless while a line's two directions mirrored each other, uneven once a turnaround made them differ. A vehicle due mid-dwell now stands at the stop with the rest of its dwell to go.
 
 **Measured on Patras**, lines of four stops along genuinely divided roads (every stop's carriageway with an opposite one across within 35 m): every middle stop found its twin (30 of 30), and the way back between the middle stops is a **median 1.00** of the way there, **worst 1.33** — no detour loops. Along ordinary one-way streets (no divider) the way back takes another street, by design (§24).
+
+---
+
+## 26. A stop goes on the road that was clicked — Oct 17 2026
+
+Alex: "Clicking on the right road puts the stops on a neighboring road regardless." Stops snapped to the nearest road NODE. A main road often has nodes only at its junctions, hundreds of metres apart, while the side street beside it has one every few metres — so the nearest node was usually the side street's. **Measured on Patras**: clicking the middle of 127 main-road stretches of 80 m or more, the old snap put the stop on a **different road 58% of the time** (74 clicks), and over 30 m from the click 58 times.
+
+Now `RoadIndex.snapToRoad` finds the nearest point ON a road the mode may use (a 50 m grid of edges), and the stop goes exactly there: within `BUILD.STOP_NODE_SNAP_M` (15 m) of a junction it uses the junction; otherwise placing the stop **splits the edge** there (`splitEdge` — same class, name, one-way rule and structure, lengths in proportion), so routing, one-way rules and turnarounds treat it as any other node. Snapping alone never changes the graph; only placing or dropping a stop does. A click within `STOP_REUSE_M` (15 m) of an existing stop of the mode reuses it. Same 127 clicks: **0** off the clicked road.
+
+**Saves:** the split lives in the in-memory region. A save file carries that region, splits included. A save in the browser refers to the cached region, which does not have them, so `Game.fromJSON` re-finds — or re-makes — each bus and tram stop's node from its stored position (asserted: a reload on a fresh copy of the map puts the node back exactly and the line keeps its length).

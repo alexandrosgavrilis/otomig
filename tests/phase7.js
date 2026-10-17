@@ -807,6 +807,50 @@ function runStopPairs(check, near) {
       && corner.nodes[1] === node(1000, 3000), corner?.nodes.map((n) => at(game, n).join(',')).join(' '));
   }
 
+  // A stop goes on the road that was clicked, even when that road has no
+  // node nearby and the side street beside it has one every few metres.
+  {
+    const points = new Map([[1, [1000, 2000]], [2, [3000, 2000]]]);
+    const side = [];
+    for (let x = 1000; x <= 3000; x += 10) { points.set(500 + x, [x, 2025]); side.push(500 + x); }
+    const game = gameOn(points, [
+      [[1, 2], { highway: 'primary' }],
+      [side, { highway: 'residential' }],
+      [[1, 1500], { highway: 'residential' }], [[2, 3500], { highway: 'residential' }],
+    ]);
+    const nodesBefore = game.roadIndex.nodeCount;
+    const placed = game.placeStop(...game.frame.toLonLat(2003, 2008), 'bus');
+    const [, sy] = game.frame.toLocal(placed.stop.lon, placed.stop.lat);
+    const [sx] = game.frame.toLocal(placed.stop.lon, placed.stop.lat);
+    check('a stop clicked on a main road goes on the main road, not the side street beside it',
+      Math.abs(sy - 2000) < 0.5 && Math.abs(sx - 2003) < 0.5, `${sx}, ${sy}`);
+    check('…exactly where it was clicked, the road split there',
+      game.roadIndex.nodeCount === nodesBefore + 1 && game.roadIndex.degree(placed.stop.node, 'bus') === 2);
+    const nearEnd = game.placeStop(...game.frame.toLonLat(1010, 2002), 'bus');
+    check('…but a click by a junction uses the junction', game.roadIndex.nodeCount === nodesBefore + 1
+      && game.frame.toLocal(nearEnd.stop.lon, nearEnd.stop.lat).every((v, i) => Math.abs(v - [1000, 2000][i]) < 0.5));
+    const again = game.placeStop(...game.frame.toLonLat(2008, 2001), 'bus');
+    check('…and a click by an existing stop reuses it', again.reused && again.stop === placed.stop);
+
+    // A reload finds — or re-makes — the split from where the stop stands.
+    game.startLine('bus');
+    game.extendDraft(...game.frame.toLonLat(1000, 2000));
+    game.extendDraft(...game.frame.toLonLat(2003, 2000));
+    const line = game.finishDraft();
+    const saved = JSON.parse(JSON.stringify(game.toJSON('k')));
+    const fresh = gameOn(points, [
+      [[1, 2], { highway: 'primary' }],
+      [side, { highway: 'residential' }],
+      [[1, 1500], { highway: 'residential' }], [[2, 3500], { highway: 'residential' }],
+    ]);
+    const restored = Game.fromJSON(saved, fresh.region);
+    const stop = restored.network.stops.get(placed.stop.id);
+    const [rx, ry] = restored.frame.toLocal(...restored.roadIndex.nodeLonLat(stop.node));
+    check('a reload on a fresh copy of the map re-makes the stop\'s node where it stood',
+      Math.abs(rx - 2003) < 0.5 && Math.abs(ry - 2000) < 0.5
+      && Math.abs(restored.network.lines.get(line.id).lengthM - line.lengthM) < 1, `${rx}, ${ry}`);
+  }
+
   // A one-way pair a BLOCK apart is not a divided road.
   {
     const xs = [500, 750, 1000, 1250, 1500, 1750, 2000, 2250, 2500, 2750, 3000, 3250, 3500];

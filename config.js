@@ -477,6 +477,14 @@ export const VEHICLES = {
 export const BUILD = {
   /** Click-to-road snap distance for bus and tram stops, m. [spec] */
   STOP_SNAP_M: 50,
+  /**
+   * A stop goes exactly where it was clicked on the road (Alex, Oct 17
+   * 2026) — unless an existing junction is this close, which it then uses
+   * rather than splitting the road a few metres from it; and a click this
+   * close to an existing stop of the mode reuses that stop.
+   */
+  STOP_NODE_SNAP_M: 15,
+  STOP_REUSE_M: 15,
   /** Click-to-track snap distance for rail stations, m. [spec] */
   STATION_SNAP_M: 40,
 

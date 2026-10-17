@@ -196,7 +196,7 @@ export class Game {
     if (mode === 'metro' || mode === 'train') {
       return Boolean(this.network.trackGraph.snap(lon, lat, mode, BUILD.STATION_SNAP_M));
     }
-    return Boolean(this.roadIndex.snap(lon, lat, mode));
+    return Boolean(this.roadIndex.snapToRoad(lon, lat, mode));
   }
 
   /** Start a new line in a mode. */
@@ -365,7 +365,9 @@ export class Game {
   previewStopMove(stop, lon, lat) {
     const snapped = this.network.snapStop(lon, lat, stop.mode);
     if (!snapped) return null;
-    const taken = this.network.stopAtNode(snapped.node, stop.mode);
+    const taken = (snapped.node !== null && this.network.stopAtNode(snapped.node, stop.mode))
+      || [...this.network.stops.values()].find((other) => other !== stop && other.mode === stop.mode
+        && this.frame.distance(other.lon, other.lat, snapped.lon, snapped.lat) < BUILD.STOP_REUSE_M);
     return { ...snapped, valid: !taken || taken === stop };
   }
 
@@ -385,6 +387,11 @@ export class Game {
     if (!target) return { error: stop.mode === 'metro' || stop.mode === 'train' ? 'tooFarFromTrack' : 'tooFarFromRoad' };
     if (!target.valid) return { error: 'stopThere' };
     if (target.node === stop.node) return { ok: true, cost: 0 };
+    // Dropped part-way along a road: the road gets a node there.
+    if (target.node === null) {
+      target.node = this.roadIndex.nodeAt(target.snapped);
+      [target.lon, target.lat] = this.roadIndex.nodeLonLat(target.node);
+    }
 
     const lines = stop.lines.map((id) => this.network.lines.get(id)).filter(Boolean);
     const old = { lon: stop.lon, lat: stop.lat, node: stop.node, structure: stop.structure };
@@ -877,7 +884,15 @@ export class Game {
     }
 
     for (const saved of data.stops) {
-      const stop = new Stop(saved.mode, saved.lon, saved.lat, saved.node, saved.name,
+      // A bus or tram stop may stand where the player split a road; the
+      // region in the cache does not have that node, so find it again — or
+      // make it again — from where the stop stands.
+      let node = saved.node;
+      if (saved.mode === 'bus' || saved.mode === 'tram') {
+        const snapped = game.roadIndex.snapToRoad(saved.lon, saved.lat, saved.mode, 5);
+        if (snapped) node = game.roadIndex.nodeAt(snapped);
+      }
+      const stop = new Stop(saved.mode, saved.lon, saved.lat, node, saved.name,
         saved.structure);
       stop.id = saved.id;
       stop.lines = saved.lines;

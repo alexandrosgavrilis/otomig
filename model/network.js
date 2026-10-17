@@ -362,15 +362,19 @@ export class Network {
   addStop(lon, lat, mode) {
     if (isRail(mode)) return this.addStation(lon, lat, mode);
 
-    const snapped = this.roadIndex.snap(lon, lat, mode);
+    // On the road where it was clicked, not at the nearest node — which on a
+    // main road can be a side street's (see RoadIndex.snapToRoad).
+    const snapped = this.roadIndex.snapToRoad(lon, lat, mode);
     if (!snapped) return { error: 'tooFarFromRoad' };
 
     // Clicking an existing stop of the same mode reuses it, as in Mini Metro.
-    const existing = this.stopAtNode(snapped.node, mode);
+    const existing = (snapped.node !== null && this.stopAtNode(snapped.node, mode))
+      || this.stopNear(snapped.lon, snapped.lat, BUILD.STOP_REUSE_M, mode);
     if (existing) return { stop: existing, reused: true };
 
-    const stop = new Stop(mode, snapped.lon, snapped.lat, snapped.node,
-      snapped.name || 'Stop');
+    const node = this.roadIndex.nodeAt(snapped);
+    const [stopLon, stopLat] = this.roadIndex.nodeLonLat(node);
+    const stop = new Stop(mode, stopLon, stopLat, node, snapped.name || 'Stop');
     this.stops.set(stop.id, stop);
     this.recomputeInterchanges();
     this.touch();
@@ -521,8 +525,9 @@ export class Network {
       const snapped = this.trackGraph.snap(lon, lat, mode, BUILD.STATION_SNAP_M);
       return snapped && { node: snapped.key, lon: snapped.lon, lat: snapped.lat, structure: snapped.kind };
     }
-    const snapped = this.roadIndex.snap(lon, lat, mode);
-    return snapped && { node: snapped.node, lon: snapped.lon, lat: snapped.lat, structure: 'atGrade' };
+    // `node` is null where the stop would split a road; `snapped` makes it.
+    const snapped = this.roadIndex.snapToRoad(lon, lat, mode);
+    return snapped && { node: snapped.node, lon: snapped.lon, lat: snapped.lat, structure: 'atGrade', snapped };
   }
 
   stopAtNode(node, mode) {

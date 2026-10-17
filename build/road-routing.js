@@ -40,6 +40,110 @@ export class RoadIndex {
     this.spatial = buildSpatialIndex(graph, frame, this.nodeCount);
   }
 
+  /**
+   * The nearest point ON a road the mode may use, within `maxDistM` — not
+   * the nearest node. A main road often has nodes only at its junctions,
+   * hundreds of metres apart, while the side street beside it has one every
+   * few metres, so snapping to nodes put a stop clicked squarely on the main
+   * road onto the side street (Alex, Oct 17 2026).
+   *
+   * Within BUILD.STOP_NODE_SNAP_M of a node the node is used; otherwise the
+   * result names the edge and how far along it, and `nodeAt` makes a node
+   * there when a stop is actually placed. Snapping alone changes nothing.
+   *
+   * @returns {{node:number|null, edge:number, t:number, lon:number, lat:number,
+   *            distanceM:number, name?:string}|null}
+   */
+  snapToRoad(lon, lat, mode, maxDistM = BUILD.STOP_SNAP_M) {
+    const allowed = ALLOWED_CLASSES[mode];
+    const [x, y] = this.frame.toLocal(lon, lat);
+    const grid = this.edgeGrid();
+    const radius = Math.ceil(maxDistM / grid.cellM);
+    const col0 = Math.floor(x / grid.cellM);
+    const row0 = Math.floor(y / grid.cellM);
+    let best = null;
+    let bestDist = maxDistM;
+    const seen = new Set();
+    for (let row = row0 - radius; row <= row0 + radius; row++) {
+      for (let col = col0 - radius; col <= col0 + radius; col++) {
+        for (const index of grid.cells.get(row * grid.cols + col) || []) {
+          if (seen.has(index)) continue;
+          seen.add(index);
+          const edge = this.graph.edges[index];
+          if (!allowed.has(edge.cls)) continue;
+          const [ax, ay] = this.nodePosition(edge.a);
+          const [bx, by] = this.nodePosition(edge.b);
+          const dx = bx - ax;
+          const dy = by - ay;
+          const lengthSq = dx * dx + dy * dy;
+          const t = lengthSq > 0 ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / lengthSq)) : 0;
+          const distance = Math.hypot(x - (ax + t * dx), y - (ay + t * dy));
+          if (distance < bestDist) { bestDist = distance; best = { index, t, edge, ax, ay, dx, dy }; }
+        }
+      }
+    }
+    if (!best) return null;
+    const { index, t, edge, ax, ay, dx, dy } = best;
+    const lengthM = Math.hypot(dx, dy);
+    let node = null;
+    if (t * lengthM <= BUILD.STOP_NODE_SNAP_M) node = edge.a;
+    else if ((1 - t) * lengthM <= BUILD.STOP_NODE_SNAP_M) node = edge.b;
+    const [pLon, pLat] = node !== null ? this.nodeLonLat(node)
+      : this.frame.toLonLat(ax + t * dx, ay + t * dy);
+    return { node, edge: index, t, lon: pLon, lat: pLat, distanceM: bestDist,
+      name: edge.name ?? (node !== null ? this.streetName(node) : undefined) };
+  }
+
+  /** The node for a snapped point, splitting its edge there if it has none. */
+  nodeAt(snapped) {
+    return snapped.node ?? this.splitEdge(snapped.edge, snapped.t);
+  }
+
+  /**
+   * Put a node part-way along an edge, splitting it in two with the same
+   * class, name, one-way rule and structure, and lengths in proportion. The
+   * region's road graph is changed in place, so routing, snapping and saved
+   * files all see it; a save made in the browser re-creates it on load from
+   * the stop's position.
+   * @returns {number} the new node
+   */
+  splitEdge(edgeIndex, t) {
+    const edge = this.graph.edges[edgeIndex];
+    const [ax, ay] = this.nodePosition(edge.a);
+    const [bx, by] = this.nodePosition(edge.b);
+    const [lon, lat] = this.frame.toLonLat(ax + t * (bx - ax), ay + t * (by - ay));
+    const node = this.graph.nodes.length / 2;
+    this.graph.nodes.push(lon, lat);
+    this.graph.edges[edgeIndex] = { ...edge, b: node, lengthM: edge.lengthM * t };
+    this.graph.edges.push({ ...edge, a: node, lengthM: edge.lengthM * (1 - t) });
+    this.nodeCount = this.graph.nodes.length / 2;
+    this.adjacency = buildAdjacency(this.graph, this.nodeCount);
+    this.spatial = buildSpatialIndex(this.graph, this.frame, this.nodeCount);
+    this._edgeGrid = null;
+    return node;
+  }
+
+  /** Edges bucketed into a 50 m grid, built on first use. */
+  edgeGrid() {
+    if (this._edgeGrid) return this._edgeGrid;
+    const cellM = 50;
+    const cols = Math.max(1, Math.ceil(this.frame.widthM / cellM));
+    const cells = new Map();
+    this.graph.edges.forEach((edge, index) => {
+      const [ax, ay] = this.nodePosition(edge.a);
+      const [bx, by] = this.nodePosition(edge.b);
+      for (let row = Math.floor(Math.min(ay, by) / cellM); row <= Math.floor(Math.max(ay, by) / cellM); row++) {
+        for (let col = Math.floor(Math.min(ax, bx) / cellM); col <= Math.floor(Math.max(ax, bx) / cellM); col++) {
+          const key = row * cols + col;
+          if (!cells.has(key)) cells.set(key, []);
+          cells.get(key).push(index);
+        }
+      }
+    });
+    this._edgeGrid = { cellM, cols, cells };
+    return this._edgeGrid;
+  }
+
   /** Local-metre position of a graph node. @returns {[number,number]} */
   nodePosition(index) {
     return this.frame.toLocal(this.graph.nodes[2 * index], this.graph.nodes[2 * index + 1]);
