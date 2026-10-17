@@ -464,7 +464,9 @@ export class Network {
     const cached = this._twins?.get(stop.id);
     if (cached && cached.node === stop.node) return cached.twin;
     const found = this.roadIndex.twinOf(stop.node, stop.mode, BUILD.STOP_PAIR_M);
-    const twin = found && { ...found, ...lonLatOf(this.roadIndex, found.node) };
+    // Across from the stop on the other carriageway, made a node if need be.
+    const twinNode = found ? this.roadIndex.nodeAt(found) : null;
+    const twin = found && { node: twinNode, flow: found.flow, ...lonLatOf(this.roadIndex, twinNode) };
     (this._twins ??= new Map()).set(stop.id, { node: stop.node, twin });
     return twin;
   }

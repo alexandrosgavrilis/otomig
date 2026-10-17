@@ -238,47 +238,65 @@ export class RoadIndex {
   }
 
   /**
-   * The other half of a divided road: the nearest node within `maxM` on a
-   * one-way carriageway running the opposite way to this one. A stop on one
-   * side of a dual carriageway has a twin across the median, as real stops do.
-   * @returns {{node:number, flow:[number,number]}|null} `flow` is THIS node's
+   * The other half of a divided road: the nearest point ON a carriageway
+   * running exactly the opposite way to this node's, directly across from it
+   * and within `maxM` — a road's opposite carriageway, never a side street.
+   *
+   * Searched along roads, not among nodes: a main road's carriageways have
+   * nodes only at junctions, so a stop placed between junctions found no
+   * node across within reach, got no twin, and the trip down had to reach
+   * its stop on the wrong carriageway through the side streets — the
+   * detours Alex saw along a whole avenue of double stops (Oct 17 2026).
+   *
+   * Like `snapToRoad`, the result names a node or a point along an edge;
+   * `nodeAt` makes the node.
+   * @returns {{node:number|null, edge:number, t:number, flow:[number,number]}|null}
    */
   twinOf(node, mode, maxM) {
     const flow = this.flowAt(node, mode);
     if (!flow) return null;
     const allowed = ALLOWED_CLASSES[mode];
     const [x, y] = this.nodePosition(node);
-    const { cellM, cols, rows, cellStart, cellNodes } = this.spatial;
-    const radius = Math.ceil(maxM / cellM);
-    const col0 = Math.floor(x / cellM);
-    const row0 = Math.floor(y / cellM);
+    const grid = this.edgeGrid();
+    const radius = Math.ceil(maxM / grid.cellM);
+    const col0 = Math.floor(x / grid.cellM);
+    const row0 = Math.floor(y / grid.cellM);
+    const seen = new Set();
     let best = null;
     let bestDist = maxM;
     for (let row = row0 - radius; row <= row0 + radius; row++) {
-      if (row < 0 || row >= rows) continue;
       for (let col = col0 - radius; col <= col0 + radius; col++) {
-        if (col < 0 || col >= cols) continue;
-        const cell = row * cols + col;
-        for (let i = cellStart[cell]; i < cellStart[cell + 1]; i++) {
-          const other = cellNodes[i];
-          if (other === node || !this.nodeServes(other, allowed)) continue;
-          const [ox, oy] = this.nodePosition(other);
-          const distance = Math.hypot(ox - x, oy - y);
+        for (const index of grid.cells.get(row * grid.cols + col) || []) {
+          if (seen.has(index)) continue;
+          seen.add(index);
+          const edge = this.graph.edges[index];
+          if (!allowed.has(edge.cls) || edge.a === node || edge.b === node) continue;
+          if (!edge.oneway || edge.onewayExempt?.includes(mode)) continue;
+          const [ax, ay] = this.nodePosition(edge.a);
+          const [bx, by] = this.nodePosition(edge.b);
+          const dx = bx - ax;
+          const dy = by - ay;
+          const length = Math.hypot(dx, dy);
+          if (length === 0) continue;
+          // Running exactly the other way…
+          const sign = edge.oneway === 1 ? 1 : -1;
+          if ((sign * dx / length) * flow[0] + (sign * dy / length) * flow[1] > -0.8) continue;
+          const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (length * length)));
+          const px = ax + t * dx;
+          const py = ay + t * dy;
+          const distance = Math.hypot(px - x, py - y);
           if (distance >= bestDist) continue;
-          // Across the road, not along it: a node further down the same
-          // carriageway, or round a corner, is not the other half.
-          const along = Math.abs((ox - x) * flow[0] + (oy - y) * flow[1]);
-          if (along > 0.5 * distance) continue;
-          // And running the other way, near enough exactly — not a one-way
-          // side street that happens to be close.
-          const otherFlow = this.flowAt(other, mode);
-          if (!otherFlow || otherFlow[0] * flow[0] + otherFlow[1] * flow[1] > -0.8) continue;
+          // …and across the road from the stop, not further along it.
+          if (Math.abs((px - x) * flow[0] + (py - y) * flow[1]) > 0.5 * distance) continue;
           bestDist = distance;
-          best = other;
+          let at = null;
+          if (t * length <= BUILD.STOP_NODE_SNAP_M) at = edge.a;
+          else if ((1 - t) * length <= BUILD.STOP_NODE_SNAP_M) at = edge.b;
+          best = { node: at, edge: index, t, flow };
         }
       }
     }
-    return best === null ? null : { node: best, flow };
+    return best;
   }
 
   /**

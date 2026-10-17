@@ -88,7 +88,7 @@ Both would have reached Alex as a broken screen, and both were invisible to 272 
 ## 2. Testing
 
 ```bash
-npm test                            # 744 logic assertions, plain Node, no dependencies
+npm test                            # 746 logic assertions, plain Node, no dependencies
 npm run test:browser                # 177 assertions in real Chromium via Playwright
 npm run test:browser -- --headed    # ...and watch it
 npm run test:live                   # 24 assertions against a REAL import — hits live OSM services
@@ -323,7 +323,7 @@ An escape hatch, not a default. [extract.bbbike.org](https://extract.bbbike.org)
 
 ## 6. What works
 
-Verified by `npm test` (744) and `npm run test:browser` (177). Phases 3 to 6 have their own sections: §9, §10, §11 and §14.
+Verified by `npm test` (746) and `npm run test:browser` (177). Phases 3 to 6 have their own sections: §9, §10, §11 and §14.
 
 **Phase 1.** `LocalFrame` and the bbox/chunk maths; terrain height grid with bilinear interpolation (exact on a ramp); 200 m demand grid; 10 m occupancy bitset; Overpass parsing with road-class filtering, abandoned-rail rejection, chunk-overlap de-duplication and shared-node collapsing; Terrarium decode and tile resampling; marching-squares contours and sea polygons; the base-map GeoJSON. In the browser: the new-game screen, search firing no request while typing, MapLibre rendering real pixels, layer toggles, zoom revealing minor roads, `maxBounds`, IndexedDB round-trips, the module worker booting.
 
@@ -1032,3 +1032,13 @@ Alex: "Clicking on the right road puts the stops on a neighboring road regardles
 Now `RoadIndex.snapToRoad` finds the nearest point ON a road the mode may use (a 50 m grid of edges), and the stop goes exactly there: within `BUILD.STOP_NODE_SNAP_M` (15 m) of a junction it uses the junction; otherwise placing the stop **splits the edge** there (`splitEdge` — same class, name, one-way rule and structure, lengths in proportion), so routing, one-way rules and turnarounds treat it as any other node. Snapping alone never changes the graph; only placing or dropping a stop does. A click within `STOP_REUSE_M` (15 m) of an existing stop of the mode reuses it. Same 127 clicks: **0** off the clicked road.
 
 **Saves:** the split lives in the in-memory region. A save file carries that region, splits included. A save in the browser refers to the cached region, which does not have them, so `Game.fromJSON` re-finds — or re-makes — each bus and tram stop's node from its stored position (asserted: a reload on a fresh copy of the map puts the node back exactly and the line keeps its length).
+
+---
+
+## 27. Double stops along a whole avenue: the twin is found on the road, not at a node — Oct 17 2026
+
+Alex, after adding five double stops along a major avenue in Athens: "What I would expect to see is literally just two red lines going up. No detours." The order was already right — the trip up calls R1…RN, turns, and the trip down calls LN…L1 — but each stop was drawn as a two-sided stop rather than a twin across the road: **no twin had been found**, so the trip down had to reach every stop on the up carriageway through the side streets.
+
+The same cause as §26, in the twin search: `RoadIndex.twinOf` looked for a NODE on the opposite carriageway within 35 m, and a main road's carriageways have nodes only at junctions, so a stop placed between junctions found none. It now looks for the nearest point **on an opposite carriageway's edge** — running exactly the other way, directly across, within `STOP_PAIR_M` — and `Network.twinOf` makes a node there (`nodeAt`, splitting the edge as §26 does), re-made on load like any split.
+
+**Measured on Patras**, twelve lines of five double stops clicked along genuinely divided roads: middle stops paired across **18 of 36 → 36 of 36**; the trip down between them **median 2.21× → 1.02×** the trip up, worst 6.18 → 1.03, hops over 1.5×: 13 of 24 → 0. A synthetic avenue with junctions 2 km apart and stops clicked between them is asserted in `tests/phase7.js`.

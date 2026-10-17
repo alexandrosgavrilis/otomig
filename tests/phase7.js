@@ -807,6 +807,28 @@ function runStopPairs(check, near) {
       && corner.nodes[1] === node(1000, 3000), corner?.nodes.map((n) => at(game, n).join(',')).join(' '));
   }
 
+  // A whole avenue of double stops between junctions: one trip up, one down.
+  {
+    // Carriageways with nodes only at their junctions, 2 km apart — as main
+    // roads are mapped — and the stops clicked in between.
+    const points = new Map([[1, [500, 2000]], [2, [2500, 2000]], [3, [4500, 2000]],
+      [11, [500, 1975]], [12, [2500, 1975]], [13, [4500, 1975]]]);
+    const game = gameOn(points, [
+      [[1, 2, 3], { oneway: 'yes' }],
+      [[13, 12, 11], { oneway: 'yes' }],
+      [[1, 11], { highway: 'secondary' }], [[2, 12], { highway: 'secondary' }], [[3, 13], { highway: 'secondary' }],
+    ]);
+    const xs = [1000, 1500, 2000, 3000, 3500];
+    const line = lineAlong(game, xs.map((x) => [x, 2000]));
+    const paired = [1, 2, 3].filter((i) => at(game, game.network.stopNodeFor(line, i, 1))[1] === 1975);
+    check('double stops clicked between junctions are each paired across the road',
+      paired.length === 3, `${paired.length} of 3`);
+    const ups = line.segments.slice(1, -1).map((seg) => Math.round(seg.lengthM));
+    const downs = line.segments.slice(1, -1).map((seg, i) => Math.round(line.backSegments?.[i + 1]?.lengthM ?? seg.lengthM));
+    check('…so the trip down between them is as long as the trip up: no detours',
+      downs.every((d, i) => Math.abs(d - ups[i]) <= 1), `up ${ups.join(',')} down ${downs.join(',')}`);
+  }
+
   // A stop goes on the road that was clicked, even when that road has no
   // node nearby and the side street beside it has one every few metres.
   {
