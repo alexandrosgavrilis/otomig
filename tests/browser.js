@@ -1207,6 +1207,7 @@ try {
       await page.waitForTimeout(80);
     }
     const shown = await page.isVisible('#tb-draft');
+    await page.screenshot({ path: join(SHOTS, '19-draft-bar.png') });
     await page.click('#tb-draft [data-draft="undo"]');
     await page.click('#tb-draft [data-draft="finish"]');
     await page.waitForTimeout(100);
@@ -1216,8 +1217,20 @@ try {
         barHidden: document.getElementById('tb-draft').hidden };
     });
     check('Undo and Finish line buttons appear while drawing', shown);
-    check('…Undo takes back the last stop and Finish completes the line, without a keyboard',
+    check('…Undo takes back the last stop and Done completes the line, without a keyboard',
       drawn.stops === 2 && !drawn.draft && drawn.barHidden, JSON.stringify(drawn));
+
+    // Cancel throws a new line away.
+    const linesBefore = await page.evaluate(() => window.otomig.game.network.lines.size);
+    for (const [x, y] of [[1600, 5200], [2600, 5200]]) {
+      const p = await pointOf(x, y);
+      await page.mouse.click(p.x, p.y);
+      await page.waitForTimeout(80);
+    }
+    await page.click('#tb-draft [data-draft="cancel"]');
+    await page.waitForTimeout(100);
+    check('Cancel throws the line being drawn away', await page.evaluate((n) =>
+      window.otomig.game.network.lines.size === n && !window.otomig.game.draft, linesBefore));
 
     // Edit stops: pick up the line's second stop and drop it 400 m north.
     await page.click('#tb-tools button[data-tool="editStops"]');

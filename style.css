@@ -591,9 +591,28 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 }
 .topbar .day-bar i { display: block; height: 100%; width: 0; background: var(--gold); }
 
-/* Undo / Finish / Cancel while drawing — the touch screen's Backspace, Enter, Esc. */
-.toolbar .draft-actions { display: flex; flex-direction: column; gap: 4px; }
-.toolbar .draft-actions button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+/* Undo / Done / Cancel while drawing — the touch screen's Backspace, Enter
+   and Esc — floating at the top centre, clear of the toolbar and the
+   height-profile strip at the bottom. Big enough for a finger. */
+.draft-bar {
+  position: absolute;
+  top: 54px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px 7px 14px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 1px 0 var(--line);
+}
+.draft-bar .draft-what { font-size: 13px; color: var(--ink-soft); margin-right: 4px; white-space: nowrap; }
+.draft-bar button { padding: 8px 16px; font-size: 15px; }
+.draft-bar button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.draft-bar button.primary:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
 
 /* Carrying on from a save, at the top of the new-game panel. */
 .ng-continue .ng-results li { display: flex; flex-direction: column; gap: 1px; }

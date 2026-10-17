@@ -328,11 +328,14 @@ export const STRINGS = {
 
   /** The buttons shown while a line or track is being drawn. */
   draft: {
-    undo: 'Undo',
+    undo: '↶ Undo',
     undoHint: 'Take back the last stop or waypoint (Backspace).',
-    finish: 'Finish line',
-    buildTrack: 'Build track',
-    cancel: 'Cancel',
+    finish: '✓ Done',
+    finishHint: 'Finish the line, or build the track (Enter).',
+    cancel: '✕ Cancel',
+    cancelHint: 'Throw away what is being drawn, refunded in full. (Esc instead keeps a line\'s stops so far.)',
+    drawingLine: (mode, stops) => `${mode} line · ${stops} ${stops === 1 ? 'stop' : 'stops'}`,
+    drawingTrack: (mode, points) => `${mode} track · ${points} ${points === 1 ? 'point' : 'points'}`,
   },
 
   build: {

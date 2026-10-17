@@ -560,13 +560,48 @@ export const BUILD = {
    */
   JUNCTION_SNAP_M: 30,
   /**
-   * A bus or tram stop on one carriageway of a divided road is served from
-   * the other carriageway, by the line running the other way, if there is
-   * one this close — the pair of stops facing each other across a median
-   * that real roads have. Without it, the way back had to drive round the
-   * block to reach a stop on the wrong side (Alex, Oct 17 2026).
+   * A bus or tram stop is a small AREA, not a point (Alex, Oct 17 2026). Each
+   * direction of a line calls at whichever road node in the area gives it a
+   * sensible legal route — the far carriageway of a divided road, or the
+   * parallel street of a one-way pair a block away — as real stops for the
+   * two directions often stand apart. Chosen for the whole line at once, so
+   * every hop is considered with its neighbours.
+   *
+   *   STOP_AREA_M         how far from the stop a direction may be served
+   *   STOP_PAIR_M         the same at a line's END, kept tighter: the bus
+   *                       crosses from its arrival point to its departure
+   *                       point during the layover, standing in for a turn
+   *   STOP_AREA_CANDIDATES the nearest nodes considered, for speed
+   *   STOP_MOVE_WEIGHT    each metre a direction is served away from where the
+   *                       player put the stop costs this many metres of route,
+   *                       so a stop only moves to save a real detour. It must
+   *                       stay under 2: reaching a stop d metres off the
+   *                       route costs at least 2d (there and back), and at 3
+   *                       the way back on a one-way pair a block apart still
+   *                       zigzagged across to every stop
    */
+  STOP_AREA_M: 110,
   STOP_PAIR_M: 45,
+  STOP_AREA_CANDIDATES: 12,
+  STOP_MOVE_WEIGHT: 1.5,
+  /**
+   * A bus arriving at a stop along a street and leaving back down it is
+   * charged this many metres per metre doubled back, when the planner looks
+   * for somewhere better in the stop's area to call.
+   */
+  DOUBLING_BACK_WEIGHT: 4,
+
+  /**
+   * Routing cost per metre by road class, as a multiple of its length. Real
+   * buses keep to main roads; routing by length alone sent them threading
+   * through residential streets to save a few metres. Anything unlisted is 1.
+   */
+  ROAD_CLASS_COST: {
+    motorway: 1, motorway_link: 1, trunk: 1, trunk_link: 1,
+    primary: 1, primary_link: 1, secondary: 1.05, secondary_link: 1.05,
+    tertiary: 1.15, tertiary_link: 1.15, unclassified: 1.35,
+    residential: 1.6, living_street: 3, pedestrian: 1.2,
+  },
   /**
    * A station placed on existing rail takes the name of a real OSM station or
    * halt this close, m — about half a long platform. Further than that it is

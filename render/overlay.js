@@ -343,10 +343,11 @@ export function stopsPainter(game) {
       }
 
       if (stop.intercity) drawIntercityMark(ctx, x, y, stop.mode);
-      // The other half of a stop on a divided road, once a line calls there.
-      const twin = stop.lines.length ? game.network.twinOf(stop) : null;
-      if (twin) {
-        const [tx, ty] = overlay.project(twin.lon, twin.lat);
+      // Where a direction calls at this stop away from its own point — the
+      // far carriageway, or the parallel street of a one-way pair.
+      for (const node of servedFrom(game, stop)) {
+        const [lon, lat] = game.roadIndex.nodeLonLat(node);
+        const [tx, ty] = overlay.project(lon, lat);
         drawStopPair(ctx, x, y, tx, ty, stop.mode);
       }
       // A stop being dragged: a ghost where it would land, red where it can't.
@@ -403,6 +404,23 @@ export function flowsPainter(game) {
     }
     ctx.restore();
   };
+}
+
+/** Road nodes other than its own that any line calls at for this stop. */
+function servedFrom(game, stop) {
+  const nodes = new Set();
+  for (const lineId of stop.lines) {
+    const line = game.network.lines.get(lineId);
+    if (!line?.stopNodes) continue;
+    line.stops.forEach((id, index) => {
+      if (id !== stop.id) return;
+      for (const direction of [0, 1]) {
+        const node = line.stopNodes[direction]?.[index];
+        if (node !== undefined && node !== stop.node) nodes.add(node);
+      }
+    });
+  }
+  return nodes;
 }
 
 /** A stop, as opposed to a line or a piece of track. */

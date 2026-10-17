@@ -195,6 +195,12 @@ export class Line {
      * @type {Array<Object|null>|null}
      */
     this.backSegments = null;
+    /**
+     * The road node each direction calls at for each stop, from
+     * `Network.planStopNodes`: `{0: nodes, 1: nodes}` by stop index, or null
+     * for rail and for a line too short to plan.
+     */
+    this.stopNodes = null;
     /** A name the player gave the line, or null for the automatic one. */
     this.name = null;
     /** Skip stops nobody needs — buses and trams only (VEHICLES.SKIP_EMPTY_STOPS). */
@@ -433,55 +439,189 @@ export class Network {
     return `${first} ${words.to} ${last}`;
   }
 
-  // ─── Stops on divided roads ───────────────────────────────────────────────
-
-  /**
-   * The stop's twin across a divided road, if it stands on a one-way
-   * carriageway with the opposite one within BUILD.STOP_PAIR_M. Cached per
-   * stop and node, since a stop that moves gets a new twin.
-   * @returns {{node:number, lon:number, lat:number, flow:[number,number]}|null}
-   */
-  twinOf(stop) {
-    if (isRail(stop.mode)) return null;
-    const cached = this._twins?.get(stop.id);
-    if (cached && cached.node === stop.node) return cached.twin;
-    const found = this.roadIndex.twinOf(stop.node, stop.mode, BUILD.STOP_PAIR_M);
-    const twin = found && { ...found, ...lonLatOf(this.roadIndex, found.node) };
-    (this._twins ??= new Map()).set(stop.id, { node: stop.node, twin });
-    return twin;
-  }
+  // ─── Where each direction calls at a stop ─────────────────────────────────
 
   /**
    * The road node a line calls at for stop `index`, travelling in
-   * `direction`. A stop on a divided road is called at from the carriageway
-   * that runs the way the line is going there; everywhere else it is the
-   * stop's own node.
-   *
-   * At a line's end the two directions call at opposite sides too: the bus
-   * arrives on one carriageway and leaves on the other, crossing the median
-   * as it turns round during its layover — the U-turn a real bus makes. With
-   * one point for both, the way back had to find a turning, often a long way
-   * off (Patras: a median of 3.2× the way there, against 1.2–1.8× for lines
-   * that need no turn).
+   * `direction` — chosen by `planStopNodes` when the line was last routed.
    */
   stopNodeFor(line, index, direction) {
-    const stop = this.stops.get(line.stops[index]);
-    if (!stop || isRail(line.mode)) return stop?.node;
-    const count = line.stops.length;
-    if (count < 2) return stop.node;
-    const twin = this.twinOf(stop);
-    if (!twin) return stop.node;
-    // Which way direction 0 travels at this stop: from the stop before to
-    // the stop after, or, at an end, along the line's one segment there.
-    const atStart = !line.loop && index === 0;
-    const atEnd = !line.loop && index === count - 1;
-    const previous = this.stops.get(line.stops[atStart ? 0 : (index - 1 + count) % count]);
-    const next = this.stops.get(line.stops[atEnd ? index : (index + 1) % count]);
-    const [px, py] = this.frame.toLocal(previous.lon, previous.lat);
-    const [nx, ny] = this.frame.toLocal(next.lon, next.lat);
-    // Does the stop's own carriageway run the way direction 0 travels here?
-    const ownSideForward = twin.flow[0] * (nx - px) + twin.flow[1] * (ny - py) >= 0;
-    return ownSideForward === (direction === 0) ? stop.node : twin.node;
+    return line.stopNodes?.[direction]?.[index] ?? this.stops.get(line.stops[index])?.node;
+  }
+
+  /**
+   * Choose, for each direction of a bus or tram line, the road node it calls
+   * at for every stop — see `BUILD.STOP_AREA_M`. A stop is an area: on a
+   * divided road the way back calls at the far carriageway, on a one-way pair
+   * at the parallel street, as real stops for the two directions often stand
+   * apart. Before, a stop was one node, and a direction that could not pass
+   * it legally drove round the block to reach it (Alex, Oct 17 2026).
+   *
+   * Solved per direction as a shortest path through the stops in travel
+   * order (a Viterbi pass): each stop's candidates are the nearest usable
+   * nodes, each hop costs its weighted route, and serving a stop away from
+   * where the player put it costs `STOP_MOVE_WEIGHT` per metre.
+   *
+   * @returns {{0:number[], 1:number[]}|null} node per stop index, per direction
+   */
+  planStopNodes(line) {
+    if (isRail(line.mode) || line.stops.length < 2) return null;
+    const stops = line.stops.map((id) => this.stops.get(id));
+    if (stops.some((stop) => !stop)) return null;
+    const count = stops.length;
+    const candidates = stops.map((stop, index) => {
+      const end = !line.loop && (index === 0 || index === count - 1);
+      // A dead end is never a good place to serve a stop from — the bus would
+      // go in and back out — unless it is where the player put the stop.
+      const near = this.roadIndex.nodesNear(stop.node, line.mode,
+        end ? BUILD.STOP_PAIR_M : BUILD.STOP_AREA_M, BUILD.STOP_AREA_CANDIDATES * 2)
+        .filter((c) => c.node === stop.node || this.roadIndex.degree(c.node, line.mode) > 1)
+        .slice(0, BUILD.STOP_AREA_CANDIDATES);
+      if (!near.some((c) => c.node === stop.node)) near.unshift({ node: stop.node, distanceM: 0 });
+      return near;
+    });
+    const plan = {};
+    for (const direction of [0, 1]) {
+      plan[direction] = this.planDirection(line, stops, candidates, direction)
+        ?? stops.map((stop) => stop.node);
+    }
+    return plan;
+  }
+
+  /** One direction of `planStopNodes`. Null when no legal route exists at all. */
+  planDirection(line, stops, candidates, direction) {
+    const count = stops.length;
+    const order = [...Array(count).keys()];
+    if (direction === 1) order.reverse();
+    if (line.loop) order.push(order[0]);
+    const moveCost = (c) => c.distanceM * BUILD.STOP_MOVE_WEIGHT;
+    // A loop starts and ends at the same place, so its first stop is not moved.
+    const statesAt = (position) => {
+      const index = order[position];
+      const own = candidates[index];
+      if (line.loop && (position === 0 || position === order.length - 1)) {
+        return own.filter((c) => c.node === stops[index].node);
+      }
+      return own;
+    };
+
+    let costs = statesAt(0).map((c) => ({ c, cost: moveCost(c), back: null }));
+    const layers = [costs];
+    for (let position = 1; position < order.length; position++) {
+      const a = order[position - 1];
+      const b = order[position];
+      // The forward segment this hop rides, for its dragged via (if any).
+      const k = direction === 0 ? a : b;
+      const targets = statesAt(position);
+      const next = targets.map((c) => ({ c, cost: Infinity, back: null }));
+      // How far a hop's search may roam, in routing cost: generous enough for
+      // a one-way detour round several blocks, no further.
+      const reach = this.frame.distance(stops[a].lon, stops[a].lat, stops[b].lon, stops[b].lat) * 4 + 2000;
+      for (const from of costs) {
+        if (!Number.isFinite(from.cost)) continue;
+        const hop = this.hopCosts(line, stops, k, from.c.node, a, targets.map((t) => t.node), reach);
+        next.forEach((to) => {
+          const step = hop.get(to.c.node);
+          if (step === undefined) return;
+          // Two stops are never served from one spot: where their areas
+          // overlap, a hop of no length would otherwise look free.
+          if (to.c.node === from.c.node) return;
+          const total = from.cost + step + moveCost(to.c);
+          if (total < to.cost) { to.cost = total; to.back = from; }
+        });
+      }
+      layers.push(next);
+      costs = next;
+    }
+
+    let best = null;
+    for (const state of costs) if (!best || state.cost < best.cost) best = state;
+    if (!best || !Number.isFinite(best.cost)) return null;
+    const nodes = new Array(count);
+    for (let position = order.length - 1, state = best; state; position--, state = state.back) {
+      nodes[order[position]] = state.c.node;
+    }
+    this.repairDoublingBack(line, stops, candidates, order, nodes);
+    return nodes;
+  }
+
+  /**
+   * The hop-by-hop plan cannot see a bus arriving at a stop along a street
+   * and leaving back down it — a spike, which no real bus could drive. Where
+   * one is longer than a few metres, try the stop's other candidates with
+   * the real routes in and out, charging doubling back by its length, and
+   * keep the cheapest. On Patras's streets this, with the plan itself,
+   * roughly halved the spikes.
+   */
+  repairDoublingBack(line, stops, candidates, order, nodes) {
+    // A dragged line keeps its plan: its vias, not the shortest path, shape it.
+    if (line.vias?.size) return;
+    for (let position = 1; position < order.length - 1; position++) {
+      const index = order[position];
+      const before = nodes[order[position - 1]];
+      const after = nodes[order[position + 1]];
+      const score = (node) => {
+        const into = this.roadIndex.shortestPath(before, node, line.mode);
+        const out = this.roadIndex.shortestPath(node, after, line.mode);
+        if (!into || !out) return Infinity;
+        let cost = into.cost + out.cost;
+        const back = into.nodes.length > 1 && out.nodes.length > 1 && into.nodes.at(-2) === out.nodes[1];
+        if (back) {
+          const [ax, ay] = this.roadIndex.nodePosition(into.nodes.at(-2));
+          const [bx, by] = this.roadIndex.nodePosition(node);
+          cost += BUILD.DOUBLING_BACK_WEIGHT * Math.hypot(ax - bx, ay - by);
+        }
+        return cost;
+      };
+      const current = nodes[index];
+      const own = candidates[index];
+      const moveOf = (node) => (own.find((c) => c.node === node)?.distanceM ?? 0) * BUILD.STOP_MOVE_WEIGHT;
+      const currentScore = score(current) + moveOf(current);
+      if (!Number.isFinite(currentScore)) continue;
+      // Only stops that actually double back are worth the extra searches.
+      const into = this.roadIndex.shortestPath(before, current, line.mode);
+      const out = this.roadIndex.shortestPath(current, after, line.mode);
+      if (!into || !out || into.nodes.length < 2 || out.nodes.length < 2
+          || into.nodes.at(-2) !== out.nodes[1]) continue;
+      let bestNode = current;
+      let bestScore = currentScore;
+      for (const c of own) {
+        if (c.node === current || c.node === before || c.node === after) continue;
+        const total = score(c.node) + c.distanceM * BUILD.STOP_MOVE_WEIGHT;
+        if (total < bestScore) { bestScore = total; bestNode = c.node; }
+      }
+      nodes[index] = bestNode;
+    }
+  }
+
+  /**
+   * Routing cost from one node to each candidate of the next stop, for the
+   * hop that rides forward segment `k`. A dragged bus segment goes through
+   * its via; a dragged tram segment is dedicated track between the stops'
+   * own nodes, and only those.
+   * @returns {Map<number, number>}
+   */
+  hopCosts(line, stops, k, fromNode, fromIndex, targets, maxCost) {
+    const count = stops.length;
+    const via = line.vias?.get(Network.viaKey(stops[k].id, stops[(k + 1) % count].id));
+    if (via && line.mode === 'tram') {
+      const toIndex = fromIndex === k ? (k + 1) % count : k;
+      const result = new Map();
+      if (fromNode === stops[fromIndex].node && targets.includes(stops[toIndex].node)) {
+        result.set(stops[toIndex].node, 0);
+      }
+      return result;
+    }
+    if (via) {
+      const viaNode = this.roadIndex.snap(via[0], via[1], line.mode)?.node;
+      if (viaNode !== undefined) {
+        const toVia = this.roadIndex.costsTo(fromNode, [viaNode], line.mode, maxCost).get(viaNode);
+        if (toVia === undefined) return new Map();
+        const onward = this.roadIndex.costsTo(viaNode, targets, line.mode, maxCost);
+        return new Map([...onward].map(([node, cost]) => [node, cost + toVia]));
+      }
+    }
+    return this.roadIndex.costsTo(fromNode, targets, line.mode, maxCost);
   }
 
   /** Is this a station on an existing railway, where intercity trains may call? */
@@ -748,6 +888,8 @@ export class Network {
 
   /** Recompute every segment of a line after its stop list changed. */
   rebuildSegments(line) {
+    // Where each direction calls at each stop, before routing between them.
+    line.stopNodes = this.planStopNodes(line);
     const segments = [];
     const count = line.stops.length;
     const pairs = [];

@@ -56,11 +56,7 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
             class="${tool === state.tool ? 'on' : ''}">${STRINGS.toolbar[tool]}</button>`).join('')}
       </div>
       <div class="hint" id="tb-hint" hidden>${STRINGS.build.trackHint}</div>
-      <div class="draft-actions" id="tb-draft" hidden>
-        <button type="button" data-draft="undo" title="${STRINGS.draft.undoHint}">${STRINGS.draft.undo}</button>
-        <button type="button" data-draft="finish" class="primary">${STRINGS.draft.finish}</button>
-        <button type="button" data-draft="cancel">${STRINGS.draft.cancel}</button>
-      </div>
+
       <hr />
       <div class="group">
         <button type="button" id="t-heat">${STRINGS.toolbar.heatMap}</button>
@@ -75,7 +71,20 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
   const modes = root.querySelector('#tb-modes');
   const tools = root.querySelector('#tb-tools');
   const hint = root.querySelector('#tb-hint');
-  const draftBar = root.querySelector('#tb-draft');
+  // Undo / Done / Cancel float at the top centre of the screen while a line
+  // or track is being drawn — big enough for a finger, and off the toolbar,
+  // which has enough in it (Alex, Oct 17 2026).
+  const draftBar = document.createElement('div');
+  draftBar.className = 'draft-bar';
+  draftBar.id = 'tb-draft';
+  draftBar.hidden = true;
+  draftBar.innerHTML = `
+    <span class="draft-what" data-draft-what></span>
+    <button type="button" data-draft="undo" title="${STRINGS.draft.undoHint}">${STRINGS.draft.undo}</button>
+    <button type="button" data-draft="finish" class="primary" title="${STRINGS.draft.finishHint}">${STRINGS.draft.finish}</button>
+    <button type="button" data-draft="cancel" title="${STRINGS.draft.cancelHint}">${STRINGS.draft.cancel}</button>
+  `;
+  (root.closest('.game') || root).appendChild(draftBar);
   syncTools();
 
   // Undo, Finish and Cancel while a line or track is being drawn: what
@@ -94,19 +103,22 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
         const result = game.undoDraftStop();
         if (result.error) onFeedbackForDraft?.(STRINGS.errors[result.error] || result.error);
       } else if (action === 'finish') game.finishDraft();
-      else cancelDraft();
+      else game.discardDraft();
     }
     update();
     onChange?.(state);
   });
 
-  /** Show the draft buttons only while something is being drawn. */
+  /** Show the draft bar only while something is being drawn, saying what. */
   function update() {
     const drawing = Boolean(game.draft || game.trackDraft);
     if (draftBar.hidden === drawing) draftBar.hidden = !drawing;
-    const label = game.trackDraft ? STRINGS.draft.buildTrack : STRINGS.draft.finish;
-    const finish = draftBar.querySelector('[data-draft="finish"]');
-    if (finish.textContent !== label) finish.textContent = label;
+    if (!drawing) return;
+    const what = game.trackDraft
+      ? STRINGS.draft.drawingTrack(STRINGS.toolbar[game.trackDraft.mode], game.trackDraft.control.length)
+      : STRINGS.draft.drawingLine(STRINGS.toolbar[game.draft.line.mode], game.draft.line.stops.length);
+    const label = draftBar.querySelector('[data-draft-what]');
+    if (label.textContent !== what) label.textContent = what;
   }
   let onFeedbackForDraft = null;
 

@@ -723,21 +723,21 @@ export function runPhase2Tests(check, near) {
     check('a town-sized region produces visible dots',
       town.totals.spawned > 5, `${town.totals.spawned} dots in ~24 in-game days`);
 
-    // Money must follow the scale, not a hardcoded 10. Same network, same
-    // time, dot scale forced to 10: the euros per passenger must be identical.
-    const perPassenger = (game) => {
-      const tickets = game.economy.month.tickets + game.economy.lastMonth.tickets;
-      return tickets / Math.max(1, game.economy.transported);
-    };
-    const scaled = newGame('creative');
-    scaled.setDotSize(10);
-    buildLine(scaled, [
-      at(scaled, 1600, 2800), at(scaled, 2600, 2800), at(scaled, 3400, 2800),
-    ]);
-    scaled.invalidate();
-    run(scaled, 60, 3);
+    // Money must follow the scale, not a hardcoded 10: the same paid
+    // boardings earn ten times as much when a dot is ten people, at exactly
+    // the fare per person. (This used to compare tickets per ARRIVED
+    // passenger across two live games, which drifted with whoever was still
+    // riding when the run stopped.)
+    const empty = { lines: new Map(), stops: new Map(), tracks: new Map() };
+    const [one, ten] = [1, 10].map((people) => {
+      const economy = new Economy('normal', 100000, people);
+      economy.recordTick({ firstBoardings: 3, arrived: 3 });
+      economy.endDay(empty, 0, false);
+      return economy;
+    });
     near('fare per passenger is independent of the dot scale',
-      perPassenger(town), perPassenger(scaled), 0.01);
+      ten.month.tickets / one.month.tickets, 10, 1e-9);
+    near('…and is the fare exactly', one.month.tickets / (3 * CLOCK.DAILY_SCALE), 1.5, 1e-9);
   }
 
   // ─── Render helpers ─────────────────────────────────────────────────────

@@ -436,8 +436,8 @@ export class Game {
     let stopId = null;
     if (line.loop) {
       line.loop = false;
-      line.segments.pop();
-      this.network.refreshBackSegments(line);
+      // Re-planned and re-routed as the open line it now is.
+      this.network.rebuildSegments(line);
       this.network.touch();
     } else {
       stopId = line.stops.at(-1);
@@ -458,6 +458,23 @@ export class Game {
     }
     this.invalidate();
     return { ok: true };
+  }
+
+  /**
+   * Throw away the line being drawn — the Cancel button. Every step is
+   * undone, so the stops and track placed for it are given back in full;
+   * stops it shares with other lines stay. (Esc and changing tool keep what
+   * was drawn so far, as in Mini Metro.)
+   */
+  discardDraft() {
+    if (!this.draft) return;
+    while (this.draft.line.stops.length > 0 || this.draft.line.loop) {
+      if (this.undoDraftStop().error) break;
+    }
+    const line = this.draft.line;
+    this.draft = null;
+    this.network.deleteLine(line.id);
+    this.invalidate();
   }
 
   /** Finish drawing. A line with fewer than two stops is discarded. */

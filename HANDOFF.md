@@ -88,8 +88,8 @@ Both would have reached Alex as a broken screen, and both were invisible to 272 
 ## 2. Testing
 
 ```bash
-npm test                            # 721 logic assertions, plain Node, no dependencies
-npm run test:browser                # 173 assertions in real Chromium via Playwright
+npm test                            # 728 logic assertions, plain Node, no dependencies
+npm run test:browser                # 174 assertions in real Chromium via Playwright
 npm run test:browser -- --headed    # ...and watch it
 npm run test:live                   # 24 assertions against a REAL import — hits live OSM services
 npm run test:live -- --km 5         # ...at a given size (default 5, the slider minimum)
@@ -323,7 +323,7 @@ An escape hatch, not a default. [extract.bbbike.org](https://extract.bbbike.org)
 
 ## 6. What works
 
-Verified by `npm test` (721) and `npm run test:browser` (173). Phases 3 to 6 have their own sections: §9, §10, §11 and §14.
+Verified by `npm test` (728) and `npm run test:browser` (174). Phases 3 to 6 have their own sections: §9, §10, §11 and §14.
 
 **Phase 1.** `LocalFrame` and the bbox/chunk maths; terrain height grid with bilinear interpolation (exact on a ramp); 200 m demand grid; 10 m occupancy bitset; Overpass parsing with road-class filtering, abandoned-rail rejection, chunk-overlap de-duplication and shared-node collapsing; Terrarium decode and tile resampling; marching-squares contours and sea polygons; the base-map GeoJSON. In the browser: the new-game screen, search firing no request while typing, MapLibre rendering real pixels, layer toggles, zoom revealing minor roads, `maxBounds`, IndexedDB round-trips, the module worker booting.
 
@@ -963,3 +963,27 @@ Asserted in the logic suite (a gzipped file round-trips with no storage at all: 
 - **The palette is the logo's**, as CSS tokens in [style.css](style.css): OTOMIG blue `#306499` (`--accent`) for everything the game highlights — the selected tool, the Import button, sliders, Finish line, the tuning panel; the logo's red `#A03B2C` (`--danger`) only for what destroys or warns — Bulldoze, negative money, delete buttons, a refused track (`COLORS.blocked`); its gold `#CDB341` (`--gold`) for the day bar. Land, ink and lines stay the Mini Metro neutrals. Line colours are unchanged.
 - **Bulldoze** always wears a faint red outline, turns the logo's red when selected, and reads "Bulldoze /!\" — the one tool that destroys should never be picked up by mistake.
 - **The font is Sansation** (Bernd Montag, SIL Open Font License), regular and bold, Latin, extended Latin and Greek, **served from `vendor/fonts/`** like MapLibre rather than from Google, so the game still works offline. The canvas labels (drag cost, profile strip, level crossings) use it too. The licence is `vendor/fonts/OFL-Sansation.txt`.
+
+---
+
+## 23. Stops are areas; routes keep to main roads; Done and Cancel — Oct 17 2026
+
+Alex, after playing central Athens: the divided highway was "handled beautifully", but bus and tram routes elsewhere zigzagged and looped round blocks near stops. Two causes, both fixed:
+
+1. **A stop was one node.** On Athens's one-way pairs — a street each way, a block apart — the direction that could not pass the stop's node legally drove round the block to reach it, and back. §21's twin only looked 45 m across a median. **A stop is now an area** (`BUILD.STOP_AREA_M`, 110 m; 45 m at a line's ends): for each direction, `Network.planStopNodes` chooses the node every stop is called at, for the whole line at once — a Viterbi pass over each stop's nearest usable nodes (`STOP_AREA_CANDIDATES`, 12; dead ends excluded unless the player put the stop there), each hop costing its weighted route and each metre away from the player's point costing `STOP_MOVE_WEIGHT` (1.5 — it must stay under 2, or the way back still zigzags across to every stop on a one-way pair). Consecutive stops are never served from one node. A repair pass (`repairDoublingBack`) then looks at any stop where the bus would arrive along a street and leave back down it, trying the stop's other nodes with the real routes in and out and charging doubling back at `DOUBLING_BACK_WEIGHT` per metre. This replaces §21's twin; the divided road is simply one case of it. Where a direction calls away from the stop's own point, the overlay draws the small connected circle there.
+2. **Routes went by length alone**, so buses cut through residential streets to save fifty metres. **`BUILD.ROAD_CLASS_COST`** weights the routing cost by class (primary 1, secondary 1.05, tertiary 1.15, unclassified 1.35, residential 1.6, living street 3); `shortestPath` minimises it and still reports true length.
+
+**Measured on Patras**, 22 random six-stop lines through the dense centre, against one-point stops routed by length:
+
+| | route ÷ straight line, median | 90th percentile | visible spikes (doubling back >25 m) | drawing a line |
+| --- | --- | --- | --- | --- |
+| before | 1.83 | 2.70 | 25 of 132 stop calls | ~20–40 ms |
+| after | **1.66** | 2.66 | **4 of 132** | ~200–240 ms (about 35 ms a click) |
+
+And along Patras's divided roads, the way back ÷ the way there: median **1.00**, worst 1.33 — against 1.90 and 13.7 without stop areas.
+
+**One behaviour change to know:** a stop placed within 110 m of a clean route is served from that route rather than pulling the line up a side street and straight back; dragging such a stop moves its marker and catchment and where the line calls, but may not change the route. A stop further off (a cul-de-sac, say) is still driven to.
+
+**Done and Cancel.** While a line or track is drawn, a bar floats at the top centre — "Bus line · 3 stops", **↶ Undo**, **✓ Done**, **✕ Cancel** — finger-sized, and off the toolbar. **Cancel now throws the line away**, every step undone and refunded in full; stops it shares with other lines stay. Esc and changing tool still keep what was drawn so far, as in Mini Metro.
+
+**Waiting on Alex's approval before starting** (his instruction): new track joining existing track it crosses (and OSM rail), and a gentle grade check for trams.

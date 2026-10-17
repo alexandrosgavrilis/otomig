@@ -315,16 +315,41 @@ function runPlaytestFixes(check, near) {
         && game.draft.line.stops.length === 3) : true);
   }
 
+  // Cancel throws the new line away, for nothing.
+  {
+    const game = newGame('normal');
+    const keep = buildLine(game, [[1600, 2800], [2600, 2800]], 1);
+    const before = game.economy.balance;
+    const stopsBefore = game.network.stops.size;
+    game.startLine('bus');
+    game.extendDraft(...at(game, 2600, 2800));  // shares a stop with the other line
+    game.extendDraft(...at(game, 3400, 2800));
+    game.extendDraft(...at(game, 3400, 3600));
+    game.discardDraft();
+    check('Cancel throws away the line being drawn', !game.draft && game.network.lines.size === 1
+      && game.network.stops.size === stopsBefore);
+    near('…refunded in full', game.economy.balance, before, 1e-6);
+    check('…and leaves a stop it shared with another line alone',
+      game.network.stops.get(keep.stops[1])?.lines.join() === keep.id);
+  }
+
   // #10 Dragging a stop.
   {
     const game = newGame('normal');
     const line = buildLine(game, [[1600, 2800], [2600, 2800], [3400, 2800]], 1);
     const middle = game.network.stops.get(line.stops[1]);
-    const length = line.lengthM;
+    const servedBefore = game.network.stopNodeFor(line, 1, 0);
     const moved = game.moveStop(middle, ...at(game, 2600, 3200));
+    // The line follows: it calls at the moved stop — from the nearest
+    // sensible point in its area, which a stop beside a main road may share
+    // with the road rather than pull the line up a side street and back.
+    const servedAfter = game.network.stopNodeFor(line, 1, 0);
+    const [sx, sy] = game.roadIndex.nodePosition(servedAfter);
+    const [mx, my] = game.frame.toLocal(middle.lon, middle.lat);
     check('#10 a stop dragged along the roads moves, and its line follows', moved.ok
       && game.frame.distance(middle.lon, middle.lat, ...at(game, 2600, 3200)) < 60
-      && Math.abs(line.lengthM - length) > 100, JSON.stringify(moved));
+      && servedAfter !== servedBefore && Math.hypot(sx - mx, sy - my) <= BUILD.STOP_AREA_M,
+      JSON.stringify(moved));
     const onOther = game.moveStop(middle, game.network.stops.get(line.stops[0]).lon,
       game.network.stops.get(line.stops[0]).lat);
     check('#10 …but not onto another stop', onOther.error === 'stopThere');
@@ -487,6 +512,9 @@ function runImportFixes(check, near) {
       if (!nodes.has(edge.a) || !nodes.has(edge.b)) continue;
       const [ax] = game.roadIndex.nodePosition(edge.a);
       const [bx] = game.roadIndex.nodePosition(edge.b);
+      // East–west edges only: a north–south link has no "west to east", and
+      // making it one-way at random would cut the line's own route.
+      if (Math.abs(ax - bx) < 1) continue;
       edge.oneway = ax < bx ? 1 : -1;
       made++;
     }
@@ -499,9 +527,13 @@ function runImportFixes(check, near) {
         ((e.a === back.nodes[i - 1] && e.b === n) || (e.b === back.nodes[i - 1] && e.a === n))
         && !mayTravel(e, back.nodes[i - 1], 'bus'))));
     const segment = line.segments[line.backSegments.indexOf(back)];
+    // Its ends may be a stop's area away from the forward segment's (the way
+    // back can call elsewhere in the area), but it runs the same way round.
     check('#14 …and is stored start-to-end, so a vehicle walking it backwards drives it the right way',
-      game.frame.distance(...back.points[0], ...segment.points[0]) < 1
-      && game.frame.distance(...back.points.at(-1), ...segment.points.at(-1)) < 1);
+      game.frame.distance(...back.points[0], ...segment.points[0])
+        < game.frame.distance(...back.points[0], ...segment.points.at(-1))
+      && game.frame.distance(...back.points.at(-1), ...segment.points.at(-1))
+        < game.frame.distance(...back.points.at(-1), ...segment.points[0]));
     run(game, 30);
     check('#14 vehicles run the line both ways', line.vehicles.every((v) => Number.isFinite(v.lon)));
   }
@@ -664,53 +696,98 @@ export async function runSaveFileTests(check, near) {
 }
 
 /**
- * A stop on a divided road is a pair, one on each carriageway (HANDOFF §21).
- * A synthetic boulevard: eastbound at y=2000, westbound 30 m south, joined
- * at both ends; a three-stop line along the eastbound side.
+ * A stop is an area: each direction calls where it has a sensible legal
+ * route (HANDOFF §21, §23). Synthetic streets laid over the fixture's terrain.
  */
 function runStopPairs(check, near) {
-  const build = (pairM) => {
-    const saved = BUILD.STOP_PAIR_M;
-    BUILD.STOP_PAIR_M = pairM;
+  /** A game on hand-made roads; `streets` are [refs, tags] with node ids → [x, y]. */
+  const gameOn = (points, streets) => {
     const region = reviveRegion(JSON.parse(fixtureText));
     region.meta.difficulty = 'creative';
     region.meta.season = 'urban';
     const frame = new LocalFrame(region.meta.bbox);
-    const xs = [500, 1000, 1500, 2000, 2500, 3000, 3500];
-    const nodes = new Map();
-    xs.forEach((x, i) => {
-      nodes.set(100 + i, frame.toLonLat(x, 2000));   // eastbound
-      nodes.set(200 + i, frame.toLonLat(x, 1970));   // westbound
-    });
-    const way = (id, refs, tags) => ({ type: 'way', id, nodes: refs, tags: { highway: 'primary', ...tags } });
-    region.roads = buildGraph([
-      way(1, xs.map((_, i) => 100 + i), { oneway: 'yes' }),
-      way(2, xs.map((_, i) => 206 - i), { oneway: 'yes' }),
-      way(3, [100, 200], {}), way(4, [106, 206], {}),
-    ], nodes, frame);
-    const game = new Game(region);
+    const nodes = new Map([...points].map(([id, [x, y]]) => [id, frame.toLonLat(x, y)]));
+    region.roads = buildGraph(streets.map(([refs, tags], i) =>
+      ({ type: 'way', id: i + 1, nodes: refs, tags: { highway: 'primary', ...tags } })), nodes, frame);
+    return new Game(region);
+  };
+  const lineAlong = (game, xys) => {
     game.startLine('bus');
-    for (const x of [1000, 2000, 3000]) game.extendDraft(...frame.toLonLat(x, 2000));
-    const line = game.finishDraft();
-    BUILD.STOP_PAIR_M = saved;
-    const back = line.segments.reduce((sum, segment, k) =>
-      sum + (line.backSegments?.[k]?.lengthM ?? segment.lengthM), 0);
-    return { game, line, back, there: line.segments.reduce((sum, s) => sum + s.lengthM, 0) };
+    for (const [x, y] of xys) game.extendDraft(...game.frame.toLonLat(x, y));
+    return game.finishDraft();
+  };
+  const lengths = (line) => ({
+    there: line.segments.reduce((sum, s) => sum + s.lengthM, 0),
+    back: line.segments.reduce((sum, s, k) => sum + (line.backSegments?.[k]?.lengthM ?? s.lengthM), 0),
+  });
+  const withAreas = (area, pair, build) => {
+    const saved = [BUILD.STOP_AREA_M, BUILD.STOP_PAIR_M];
+    [BUILD.STOP_AREA_M, BUILD.STOP_PAIR_M] = [area, pair];
+    try { return build(); } finally { [BUILD.STOP_AREA_M, BUILD.STOP_PAIR_M] = saved; }
   };
 
-  const paired = build(BUILD.STOP_PAIR_M);
-  const single = build(0);
-  const middle = paired.line.stops[1];
-  const twin = paired.game.network.twinOf(paired.game.network.stops.get(middle));
-  const [tx, ty] = twin ? paired.game.frame.toLocal(twin.lon, twin.lat) : [0, 0];
-  check('a stop on one carriageway of a divided road has a twin on the other',
-    Boolean(twin) && Math.abs(tx - 2000) < 1 && Math.abs(ty - 1970) < 1, JSON.stringify([tx, ty]));
-  check('…and the way back calls at the twin, from the side running its way',
-    paired.game.network.stopNodeFor(paired.line, 1, 1) === twin.node
-    && paired.game.network.stopNodeFor(paired.line, 1, 0) === paired.game.network.stops.get(middle).node);
-  check('the way there is the same either way', Math.abs(paired.there - single.there) < 1);
-  check('with stop pairs, the way back is far shorter than driving round to the same kerb',
-    paired.back < 0.5 * single.back, `${Math.round(paired.back)} m against ${Math.round(single.back)} m`);
-  check('…and nothing has to break a one-way rule',
-    [...paired.line.segments, ...(paired.line.backSegments || [])].every((s) => !s?.ignoresOneway));
+  // A divided boulevard: eastbound at y=2000, westbound 30 m south.
+  const xs = [500, 1000, 1500, 2000, 2500, 3000, 3500];
+  const boulevard = () => {
+    const points = new Map();
+    xs.forEach((x, i) => { points.set(100 + i, [x, 2000]); points.set(200 + i, [x, 1970]); });
+    const game = gameOn(points, [
+      [xs.map((_, i) => 100 + i), { oneway: 'yes' }],
+      [xs.map((_, i) => 206 - i), { oneway: 'yes' }],
+      [[100, 200], {}], [[106, 206], {}],
+    ]);
+    return { game, line: lineAlong(game, [[1000, 2000], [2000, 2000], [3000, 2000]]) };
+  };
+  const paired = withAreas(BUILD.STOP_AREA_M, BUILD.STOP_PAIR_M, boulevard);
+  const single = withAreas(0, 0, boulevard);
+  const [, by] = paired.game.frame.toLocal(...paired.game.roadIndex.nodeLonLat(
+    paired.game.network.stopNodeFor(paired.line, 1, 1)));
+  check('on a divided road, the way back calls at the far carriageway', Math.abs(by - 1970) < 1, `${by}`);
+  check('…while the way there calls where the stop was put',
+    paired.game.network.stopNodeFor(paired.line, 1, 0) === paired.game.network.stops.get(paired.line.stops[1]).node);
+  check('…making the way back far shorter than driving round to the same kerb',
+    lengths(paired.line).back < 0.5 * lengths(single.line).back,
+    `${Math.round(lengths(paired.line).back)} m against ${Math.round(lengths(single.line).back)} m`);
+
+  // A one-way pair a block apart, as in Athens: eastbound at y=2000,
+  // westbound at y=1900, joined by two-way cross streets every 250 m.
+  const crossXs = [500, 750, 1000, 1250, 1500, 1750, 2000, 2250, 2500, 2750, 3000, 3250, 3500];
+  const couplet = () => {
+    const points = new Map();
+    crossXs.forEach((x, i) => { points.set(300 + i, [x, 2000]); points.set(400 + i, [x, 1900]); });
+    const game = gameOn(points, [
+      [crossXs.map((_, i) => 300 + i), { oneway: 'yes', highway: 'secondary' }],
+      [crossXs.map((_, i) => 400 + crossXs.length - 1 - i), { oneway: 'yes', highway: 'secondary' }],
+      ...crossXs.map((_, i) => [[300 + i, 400 + i], { highway: 'tertiary' }]),
+    ]);
+    return { game, line: lineAlong(game, [[1000, 2000], [1500, 2000], [2000, 2000], [2500, 2000], [3000, 2000]]) };
+  };
+  const areas = withAreas(BUILD.STOP_AREA_M, BUILD.STOP_PAIR_M, couplet);
+  const points = withAreas(0, 0, couplet);
+  const [, cy] = areas.game.frame.toLocal(...areas.game.roadIndex.nodeLonLat(
+    areas.game.network.stopNodeFor(areas.line, 1, 1)));
+  check('on a one-way pair a block apart, the way back calls on the parallel street',
+    Math.abs(cy - 1900) < 1, `${cy}`);
+  const a = lengths(areas.line);
+  // The ends still cross over (a line's end is a single point, where the bus
+  // turns), 100 m each; the middle stops no longer zigzag across and back.
+  check('…so the way back is as long as the way there plus the turns at its ends, not a zigzag',
+    a.back <= a.there + 2 * 100 + 1 && a.back < 0.85 * lengths(points.line).back,
+    `${Math.round(a.back)} m back, ${Math.round(a.there)} m there; ${Math.round(lengths(points.line).back)} m with one point per stop`);
+  check('…without breaking a one-way rule',
+    [...areas.line.segments, ...(areas.line.backSegments || [])].every((seg) => !seg?.ignoresOneway));
+
+  // Main roads over back streets: a residential short cut against a primary
+  // road round the block.
+  const choice = (detourY) => {
+    const game = gameOn(new Map([[1, [1000, 3000]], [2, [2000, 3000]], [3, [1000, detourY]], [4, [2000, detourY]]]), [
+      [[1, 2], { highway: 'residential' }],
+      [[1, 3, 4, 2], { highway: 'primary' }],
+    ]);
+    const route = game.roadIndex.shortestPath(0, 1, 'bus');
+    return route.lengthM;
+  };
+  check('a bus takes the main road round rather than a slightly shorter back street',
+    Math.round(choice(3100)) === 1200, `${choice(3100)}`);
+  check('…but not a long way round', Math.round(choice(3500)) === 1000, `${choice(3500)}`);
 }
