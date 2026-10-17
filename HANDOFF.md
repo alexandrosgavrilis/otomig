@@ -88,7 +88,7 @@ Both would have reached Alex as a broken screen, and both were invisible to 272 
 ## 2. Testing
 
 ```bash
-npm test                            # 746 logic assertions, plain Node, no dependencies
+npm test                            # 749 logic assertions, plain Node, no dependencies
 npm run test:browser                # 177 assertions in real Chromium via Playwright
 npm run test:browser -- --headed    # ...and watch it
 npm run test:live                   # 24 assertions against a REAL import — hits live OSM services
@@ -323,7 +323,7 @@ An escape hatch, not a default. [extract.bbbike.org](https://extract.bbbike.org)
 
 ## 6. What works
 
-Verified by `npm test` (746) and `npm run test:browser` (177). Phases 3 to 6 have their own sections: §9, §10, §11 and §14.
+Verified by `npm test` (749) and `npm run test:browser` (177). Phases 3 to 6 have their own sections: §9, §10, §11 and §14.
 
 **Phase 1.** `LocalFrame` and the bbox/chunk maths; terrain height grid with bilinear interpolation (exact on a ramp); 200 m demand grid; 10 m occupancy bitset; Overpass parsing with road-class filtering, abandoned-rail rejection, chunk-overlap de-duplication and shared-node collapsing; Terrarium decode and tile resampling; marching-squares contours and sea polygons; the base-map GeoJSON. In the browser: the new-game screen, search firing no request while typing, MapLibre rendering real pixels, layer toggles, zoom revealing minor roads, `maxBounds`, IndexedDB round-trips, the module worker booting.
 
@@ -1042,3 +1042,5 @@ Alex, after adding five double stops along a major avenue in Athens: "What I wou
 The same cause as §26, in the twin search: `RoadIndex.twinOf` looked for a NODE on the opposite carriageway within 35 m, and a main road's carriageways have nodes only at junctions, so a stop placed between junctions found none. It now looks for the nearest point **on an opposite carriageway's edge** — running exactly the other way, directly across, within `STOP_PAIR_M` — and `Network.twinOf` makes a node there (`nodeAt`, splitting the edge as §26 does), re-made on load like any split.
 
 **Measured on Patras**, twelve lines of five double stops clicked along genuinely divided roads: middle stops paired across **18 of 36 → 36 of 36**; the trip down between them **median 2.21× → 1.02×** the trip up, worst 6.18 → 1.03, hops over 1.5×: 13 of 24 → 0. A synthetic avenue with junctions 2 km apart and stops clicked between them is asserted in `tests/phase7.js`.
+
+**Boarding checked afterwards (Alex asked).** Sixty days on Patras with four lines — a double-stop bus line along the divided avenue (all five stops paired across), a double-stop line through the one-way old town, a single-stop loop and a double-stop tram — every boarding recorded by stop and direction: 48 boardings, **0 onto a vehicle going the wrong way or on the wrong line**, both directions boarding on every double-stop line (the loop one way only, as designed), 45 arrived and 3 still aboard at the end, none gave up, nobody left waiting. Kept as a test: a synthetic divided avenue with paired stops and turns at its ends, run for sixty days, must board riders both ways and never the wrong way.

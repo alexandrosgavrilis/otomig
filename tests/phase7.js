@@ -829,6 +829,39 @@ function runStopPairs(check, near) {
       downs.every((d, i) => Math.abs(d - ups[i]) <= 1), `up ${ups.join(',')} down ${downs.join(',')}`);
   }
 
+  // Passengers still board as normal on a divided avenue: both ways, from
+  // the right side, through the turns at the ends (Alex asked, Oct 17 2026).
+  {
+    const xs = [500, 4500];
+    const points = new Map([[1, [500, 2000]], [2, [4500, 2000]], [11, [500, 1975]], [12, [4500, 1975]]]);
+    const game = gameOn(points, [
+      [[1, 2], { oneway: 'yes' }], [[12, 11], { oneway: 'yes' }],
+      [[1, 11], { highway: 'secondary' }], [[2, 12], { highway: 'secondary' }],
+    ]);
+    const line = lineAlong(game, [1000, 2000, 3000, 4000].map((x) => [x, 2000]));
+    while (line.vehicles.length < 3 && game.addVehicle(line));
+    const boarded = new Map();
+    let wrong = 0;
+    game.clock.setSpeedIndex(3);
+    for (let t = 0; t < 150; t += CLOCK.TICK_MS / 1000) {
+      const had = new Map(line.vehicles.map((v) => [v, new Set(v.passengers.map((d) => d.id))]));
+      game.tick(CLOCK.TICK_MS / 1000);
+      for (const v of line.vehicles) {
+        if (!v.justArrivedAt) continue;
+        for (const dot of v.passengers) {
+          if (had.get(v).has(dot.id)) continue;
+          if (dot.leg?.direction !== v.direction) wrong++;
+          boarded.set(v.direction, (boarded.get(v.direction) ?? 0) + 1);
+        }
+      }
+    }
+    check('on a divided avenue with paired stops and turns at its ends, riders board both ways',
+      (boarded.get(0) ?? 0) > 0 && (boarded.get(1) ?? 0) > 0 && game.totals.arrived > 0,
+      JSON.stringify({ up: boarded.get(0), down: boarded.get(1), arrived: game.totals.arrived }));
+    check('…every one onto a vehicle going their way', wrong === 0, `${wrong}`);
+    check('…and nobody is left behind', game.totals.gaveUp === 0, `${game.totals.gaveUp}`);
+  }
+
   // A stop goes on the road that was clicked, even when that road has no
   // node nearby and the side street beside it has one every few metres.
   {
