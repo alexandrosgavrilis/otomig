@@ -23,7 +23,7 @@ import { patienceFor } from '../sim/passengers.js';
 import {
   strokePath, drawLinePattern, drawVehicle, drawStop, drawInterchange,
   drawTrackStructure, drawDragPreview, drawBareTrack, drawLevelCrossing,
-  drawTrackPreview, drawWaypoint, drawIntercityMark, drawStopGhost,
+  drawTrackPreview, drawWaypoint, drawIntercityMark, drawStopGhost, drawStopPair,
   drawWaiting, drawWaitRing, offsetPolyline, shade,
 } from './shapes.js';
 
@@ -145,25 +145,42 @@ export function linesPainter(game) {
       }
     }
 
+    // A selected line stands out: every other line fades, and the selected
+    // one is drawn last, on top, over a dark halo.
+    const selected = game.selection && game.selection.segments !== undefined ? game.selection : null;
+    const pieces = [];
     for (const bundle of bundles.values()) {
       bundle.forEach(({ line, segment }, index) => {
         const points = segment.points.map(([lon, lat]) => overlay.project(lon, lat));
         if (points.length < 2) return;
-
         // Centre the bundle on the road: one line sits on it, two straddle it.
         const spread = (index - (bundle.length - 1) / 2) * RENDER.LINE_OFFSET_PX * zoomScale;
-        const drawn = offsetPolyline(points, spread);
-
-        if (segment.offRoad || segment.onTrack) {
-          // Dedicated track: draw it by structure so the tunnels and bridges
-          // the terrain forced on the player are visible without a legend.
-          drawTrackStructure(ctx, drawn, segment.kinds, line.color, width, line.mode);
-        } else {
-          // One direction only: a little thinner than a street served both ways.
-          strokePath(ctx, drawn, line.color, segment.back ? width * 0.7 : width);
-        }
-        drawLinePattern(ctx, drawn, line.mode, line.color, segment.back ? width * 0.7 : width);
+        pieces.push({ line, segment, drawn: offsetPolyline(points, spread) });
       });
+    }
+
+    const drawPiece = ({ line, segment, drawn }) => {
+      // One direction only: a little thinner than a street served both ways.
+      const own = segment.back ? width * 0.7 : width;
+      if (segment.offRoad || segment.onTrack) {
+        // Dedicated track: draw it by structure so the tunnels and bridges
+        // the terrain forced on the player are visible without a legend.
+        drawTrackStructure(ctx, drawn, segment.kinds, line.color, width, line.mode);
+      } else {
+        strokePath(ctx, drawn, line.color, own);
+      }
+      drawLinePattern(ctx, drawn, line.mode, line.color, own);
+    };
+
+    ctx.save();
+    if (selected) ctx.globalAlpha = RENDER.UNSELECTED_LINE_ALPHA;
+    for (const piece of pieces) if (piece.line !== selected) drawPiece(piece);
+    ctx.restore();
+    if (selected) {
+      for (const piece of pieces) {
+        if (piece.line === selected) strokePath(ctx, piece.drawn, COLORS.selectionHalo, width * 2.4);
+      }
+      for (const piece of pieces) if (piece.line === selected) drawPiece(piece);
     }
 
     // The segment currently being dragged, on top of everything, dashed.
@@ -326,6 +343,12 @@ export function stopsPainter(game) {
       }
 
       if (stop.intercity) drawIntercityMark(ctx, x, y, stop.mode);
+      // The other half of a stop on a divided road, once a line calls there.
+      const twin = stop.lines.length ? game.network.twinOf(stop) : null;
+      if (twin) {
+        const [tx, ty] = overlay.project(twin.lon, twin.lat);
+        drawStopPair(ctx, x, y, tx, ty, stop.mode);
+      }
       // A stop being dragged: a ghost where it would land, red where it can't.
       if (game.stopDrag?.stop === stop && game.stopDrag.preview) {
         const ghost = game.stopDrag.preview;
@@ -479,7 +502,7 @@ function drawDragLabel(ctx, at, drag) {
 /** A small dark tag beside the cursor, red when what it describes is refused. */
 function drawTag(ctx, at, text, blocked) {
   ctx.save();
-  ctx.font = '600 12px ui-sans-serif, system-ui, sans-serif';
+  ctx.font = "700 12px 'Sansation', system-ui, sans-serif";
   ctx.textBaseline = 'middle';
   const padding = 6;
   const metrics = ctx.measureText(text);

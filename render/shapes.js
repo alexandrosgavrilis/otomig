@@ -214,6 +214,29 @@ export function drawIntercityMark(ctx, x, y, mode) {
 }
 
 /**
+ * A stop on a divided road, called at from both carriageways: a short bar
+ * across the median to a smaller circle on the far side, the pair of stops
+ * facing each other that real dual carriageways have.
+ */
+export function drawStopPair(ctx, x, y, tx, ty, mode) {
+  const radius = RENDER.STOP_RADIUS_PX[mode] ?? 4;
+  ctx.save();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = COLORS.stopStroke;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(tx, ty);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(tx, ty, Math.max(2.5, radius - 1), 0, Math.PI * 2);
+  ctx.fillStyle = COLORS.stopFill;
+  ctx.fill();
+  ctx.lineWidth = 1.4;
+  ctx.stroke();
+  ctx.restore();
+}
+
+/**
  * Where a dragged stop would land: a dashed tether from where it stands and
  * a hollow ring at the target, red where it cannot go.
  */
@@ -280,7 +303,7 @@ export function drawWaiting(ctx, x, y, count, radius) {
   }
 
   if (count > shown) {
-    ctx.font = '600 9px system-ui, sans-serif';
+    ctx.font = "700 9px 'Sansation', system-ui, sans-serif";
     ctx.textBaseline = 'middle';
     ctx.fillText(`+${count - shown}`,
       x + radius + 5 + perRow * gap, y - radius - 2 + gap);

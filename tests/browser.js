@@ -81,7 +81,14 @@ try {
   await page.waitForSelector('.ng-panel', { timeout: 10000 });
 
   check('new-game screen mounts', await page.isVisible('.ng-panel'));
-  check('the title renders', (await page.textContent('.ng-panel h1'))?.trim() === 'OTOMIG');
+  // The title is the logo now; it must actually load, and still say OTOMIG.
+  const logo = await page.evaluate(async () => {
+    const img = document.querySelector('.ng-panel h1 img');
+    if (img && !img.complete) await new Promise((resolve) => { img.onload = img.onerror = resolve; });
+    return { alt: img?.alt, width: img?.naturalWidth || 0 };
+  });
+  check('the title is the logo, loaded, and says OTOMIG', logo.alt === 'OTOMIG' && logo.width > 0,
+    JSON.stringify(logo));
   check('all four seasons are offered',
     (await page.locator('#ng-season button').count()) === 4);
   check('all four difficulties are offered',
@@ -1304,6 +1311,30 @@ try {
     await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false });
 
     // The line panel: its name, and the two running rules.
+    const toolColours = await page.evaluate(() => ({
+      tool: getComputedStyle(document.querySelector('#tb-tools button.on')).backgroundColor,
+      mode: getComputedStyle(document.querySelector('#tb-modes button.on')).backgroundColor,
+    }));
+    check('the selected tool is OTOMIG blue, set apart from the selected mode',
+      toolColours.tool === 'rgb(48, 100, 153)' && toolColours.mode !== toolColours.tool,
+      JSON.stringify(toolColours));
+    const bulldoze = await page.evaluate(() => {
+      const button = document.querySelector('#tb-tools button[data-tool="bulldoze"]');
+      const idle = { border: getComputedStyle(button).borderColor, text: button.textContent.trim() };
+      button.click();
+      const on = getComputedStyle(button).backgroundColor;
+      document.querySelector('#tb-tools button[data-tool="editStops"]').click();
+      return { ...idle, on };
+    });
+    check('Bulldoze always wears a faint red outline and a warning sign',
+      bulldoze.border === 'rgba(160, 59, 44, 0.42)' && bulldoze.text === 'Bulldoze /!\\', JSON.stringify(bulldoze));
+    check('…and turns the logo\'s red when selected', bulldoze.on === 'rgb(160, 59, 44)', bulldoze.on);
+    const font = await page.evaluate(async () => {
+      await document.fonts.ready;
+      return { family: getComputedStyle(document.body).fontFamily, loaded: document.fonts.check("14px 'Sansation'") };
+    });
+    check('the game is set in Sansation, served from the project', /Sansation/.test(font.family) && font.loaded,
+      JSON.stringify(font));
     check('Edit stops is now labelled Line / Stops', await page.evaluate(() =>
       document.querySelector('#tb-tools button[data-tool="editStops"]')?.textContent.trim()) === 'Line / Stops');
     await page.evaluate(() => {

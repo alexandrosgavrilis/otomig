@@ -45,6 +45,11 @@ const STATION_PRICE = {
 
 const isRail = (mode) => mode === 'metro' || mode === 'train';
 
+const lonLatOf = (roadIndex, node) => {
+  const [lon, lat] = roadIndex.nodeLonLat(node);
+  return { lon, lat };
+};
+
 /** The number in an id like "s42", for ordering by when things were built. */
 const idNumber = (id) => Number(String(id).replace(/\D+/g, '')) || 0;
 
@@ -428,6 +433,57 @@ export class Network {
     return `${first} ${words.to} ${last}`;
   }
 
+  // ─── Stops on divided roads ───────────────────────────────────────────────
+
+  /**
+   * The stop's twin across a divided road, if it stands on a one-way
+   * carriageway with the opposite one within BUILD.STOP_PAIR_M. Cached per
+   * stop and node, since a stop that moves gets a new twin.
+   * @returns {{node:number, lon:number, lat:number, flow:[number,number]}|null}
+   */
+  twinOf(stop) {
+    if (isRail(stop.mode)) return null;
+    const cached = this._twins?.get(stop.id);
+    if (cached && cached.node === stop.node) return cached.twin;
+    const found = this.roadIndex.twinOf(stop.node, stop.mode, BUILD.STOP_PAIR_M);
+    const twin = found && { ...found, ...lonLatOf(this.roadIndex, found.node) };
+    (this._twins ??= new Map()).set(stop.id, { node: stop.node, twin });
+    return twin;
+  }
+
+  /**
+   * The road node a line calls at for stop `index`, travelling in
+   * `direction`. A stop on a divided road is called at from the carriageway
+   * that runs the way the line is going there; everywhere else it is the
+   * stop's own node.
+   *
+   * At a line's end the two directions call at opposite sides too: the bus
+   * arrives on one carriageway and leaves on the other, crossing the median
+   * as it turns round during its layover — the U-turn a real bus makes. With
+   * one point for both, the way back had to find a turning, often a long way
+   * off (Patras: a median of 3.2× the way there, against 1.2–1.8× for lines
+   * that need no turn).
+   */
+  stopNodeFor(line, index, direction) {
+    const stop = this.stops.get(line.stops[index]);
+    if (!stop || isRail(line.mode)) return stop?.node;
+    const count = line.stops.length;
+    if (count < 2) return stop.node;
+    const twin = this.twinOf(stop);
+    if (!twin) return stop.node;
+    // Which way direction 0 travels at this stop: from the stop before to
+    // the stop after, or, at an end, along the line's one segment there.
+    const atStart = !line.loop && index === 0;
+    const atEnd = !line.loop && index === count - 1;
+    const previous = this.stops.get(line.stops[atStart ? 0 : (index - 1 + count) % count]);
+    const next = this.stops.get(line.stops[atEnd ? index : (index + 1) % count]);
+    const [px, py] = this.frame.toLocal(previous.lon, previous.lat);
+    const [nx, ny] = this.frame.toLocal(next.lon, next.lat);
+    // Does the stop's own carriageway run the way direction 0 travels here?
+    const ownSideForward = twin.flow[0] * (nx - px) + twin.flow[1] * (ny - py) >= 0;
+    return ownSideForward === (direction === 0) ? stop.node : twin.node;
+  }
+
   /** Is this a station on an existing railway, where intercity trains may call? */
   onOsmRail(stop) {
     if (!isRail(stop.mode) || typeof stop.node !== 'string') return false;
@@ -524,7 +580,7 @@ export class Network {
       if (!closing) return { error: noPath };
       line.segments.push(closing);
       line.loop = true;
-      this.refreshBackSegments(line);
+      this.settleLine(line);
       this.touch();
       return { ok: true };
     }
@@ -540,7 +596,7 @@ export class Network {
 
     line.stops.push(stop.id);
     if (!stop.lines.includes(line.id)) stop.lines.push(line.id);
-    this.refreshBackSegments(line);
+    this.settleLine(line);
     this.touch();
     return { ok: true };
   }
@@ -619,7 +675,7 @@ export class Network {
    *            kinds?:string[], runs?:Object[], blocked?:boolean,
    *            height?:number[], terrain?:number[], cost?:number}|null}
    */
-  routeBetween(line, from, to) {
+  routeBetween(line, from, to, fromNode = from.node, toNode = to.node) {
     // Metro and train never touch the roads: their stations sit on track, and
     // the path between them is the shortest on track their vehicles may use.
     if (isRail(line.mode)) {
@@ -631,7 +687,7 @@ export class Network {
 
     if (via && line.mode === 'tram' && this.region) {
       const track = buildTrack(
-        [this.roadIndex.nodeLonLat(from.node), via, this.roadIndex.nodeLonLat(to.node)],
+        [this.roadIndex.nodeLonLat(fromNode), via, this.roadIndex.nodeLonLat(toNode)],
         this.region, this.frame, line.mode);
       // A segment that cannot be built is not silently replaced by a road
       // route — the player dragged it there deliberately and needs to see it
@@ -649,14 +705,14 @@ export class Network {
     if (via) {
       const viaNode = this.roadIndex.snap(via[0], via[1], line.mode);
       if (viaNode) {
-        const path = this.roadPath([from.node, viaNode.node, to.node], line.mode);
+        const path = this.roadPath([fromNode, viaNode.node, toNode], line.mode);
         if (path) return asSegment(path);
       }
       // The drag landed somewhere unroutable; fall through to the plain route
       // rather than breaking the line.
     }
 
-    const path = this.roadPath([from.node, to.node], line.mode);
+    const path = this.roadPath([fromNode, toNode], line.mode);
     return path ? asSegment(path) : null;
   }
 
@@ -693,21 +749,30 @@ export class Network {
   /** Recompute every segment of a line after its stop list changed. */
   rebuildSegments(line) {
     const segments = [];
-    for (let i = 0; i < line.stops.length - 1; i++) {
+    const count = line.stops.length;
+    const pairs = [];
+    for (let i = 0; i < count - 1; i++) pairs.push([i, i + 1]);
+    if (line.loop && count >= 3) pairs.push([count - 1, 0]);
+    for (const [i, j] of pairs) {
       const segment = this.routeBetween(line,
-        this.stops.get(line.stops[i]), this.stops.get(line.stops[i + 1]));
+        this.stops.get(line.stops[i]), this.stops.get(line.stops[j]),
+        this.stopNodeFor(line, i, 0), this.stopNodeFor(line, j, 0));
       if (!segment) return false;
       segments.push(segment);
-    }
-    if (line.loop && line.stops.length >= 3) {
-      const closing = this.routeBetween(line,
-        this.stops.get(line.stops.at(-1)), this.stops.get(line.stops[0]));
-      if (!closing) return false;
-      segments.push(closing);
     }
     line.segments = segments;
     this.refreshBackSegments(line);
     return true;
+  }
+
+  /**
+   * After a stop is added: re-route a road line throughout, because the stop
+   * that was its end is now in the middle, and on a divided road that can
+   * change which side each direction calls at. Rail only needs its way back.
+   */
+  settleLine(line) {
+    if (!isRail(line.mode) && this.rebuildSegments(line)) return;
+    this.refreshBackSegments(line);
   }
 
   /**
@@ -725,8 +790,11 @@ export class Network {
       if (!start || !end) return null;
       const via = this.viaFor(line, start, end);
       const viaNode = via ? this.roadIndex.snap(via[0], via[1], line.mode)?.node : undefined;
+      // The way back calls at each stop from the side running its way.
+      const from = this.stopNodeFor(line, (k + 1) % count, 1);
+      const to = this.stopNodeFor(line, k, 1);
       const path = this.roadPath(
-        [end.node, ...(viaNode !== undefined ? [viaNode] : []), start.node], line.mode);
+        [from, ...(viaNode !== undefined ? [viaNode] : []), to], line.mode);
       if (!path) return null;
       const reversed = [...segment.nodes].reverse();
       if (path.nodes.length === reversed.length && path.nodes.every((n, i) => n === reversed[i])) {

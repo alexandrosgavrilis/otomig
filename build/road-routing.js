@@ -94,6 +94,79 @@ export class RoadIndex {
     return { node: best, lon: bLon, lat: bLat, distanceM: bestDist, name: this.streetName(best) };
   }
 
+  /**
+   * Which way traffic flows at a node on a one-way carriageway, as a unit
+   * vector in local metres — or null if any road at the node the mode may use
+   * runs both ways (it is not a carriageway, or it is a junction with one).
+   */
+  flowAt(node, mode) {
+    const allowed = ALLOWED_CLASSES[mode];
+    const { start, edges } = this.adjacency;
+    const [x, y] = this.nodePosition(node);
+    let fx = 0;
+    let fy = 0;
+    let count = 0;
+    for (let i = start[node]; i < start[node + 1]; i++) {
+      const edge = this.graph.edges[edges[i]];
+      if (!allowed.has(edge.cls)) continue;
+      if (!edge.oneway || edge.onewayExempt?.includes(mode)) return null;
+      const other = edge.a === node ? edge.b : edge.a;
+      const [ox, oy] = this.nodePosition(other);
+      const length = Math.hypot(ox - x, oy - y) || 1;
+      // Leaving along it, or arriving along it: either way, the flow.
+      const sign = mayTravel(edge, node, mode) ? 1 : -1;
+      fx += sign * (ox - x) / length;
+      fy += sign * (oy - y) / length;
+      count++;
+    }
+    const length = Math.hypot(fx, fy);
+    return count && length > 0 ? [fx / length, fy / length] : null;
+  }
+
+  /**
+   * The other half of a divided road: the nearest node within `maxM` on a
+   * one-way carriageway running the opposite way to this one. A stop on one
+   * side of a dual carriageway has a twin across the median, as real stops do.
+   * @returns {{node:number, flow:[number,number]}|null} `flow` is THIS node's
+   */
+  twinOf(node, mode, maxM) {
+    const flow = this.flowAt(node, mode);
+    if (!flow) return null;
+    const allowed = ALLOWED_CLASSES[mode];
+    const [x, y] = this.nodePosition(node);
+    const { cellM, cols, rows, cellStart, cellNodes } = this.spatial;
+    const radius = Math.ceil(maxM / cellM);
+    const col0 = Math.floor(x / cellM);
+    const row0 = Math.floor(y / cellM);
+    let best = null;
+    let bestDist = maxM;
+    for (let row = row0 - radius; row <= row0 + radius; row++) {
+      if (row < 0 || row >= rows) continue;
+      for (let col = col0 - radius; col <= col0 + radius; col++) {
+        if (col < 0 || col >= cols) continue;
+        const cell = row * cols + col;
+        for (let i = cellStart[cell]; i < cellStart[cell + 1]; i++) {
+          const other = cellNodes[i];
+          if (other === node || !this.nodeServes(other, allowed)) continue;
+          const [ox, oy] = this.nodePosition(other);
+          const distance = Math.hypot(ox - x, oy - y);
+          if (distance >= bestDist) continue;
+          // Across the road, not along it: a node further down the same
+          // carriageway, or round a corner, is not the other half.
+          const along = Math.abs((ox - x) * flow[0] + (oy - y) * flow[1]);
+          if (along > 0.5 * distance) continue;
+          // And running the other way, near enough exactly — not a one-way
+          // side street that happens to be close.
+          const otherFlow = this.flowAt(other, mode);
+          if (!otherFlow || otherFlow[0] * flow[0] + otherFlow[1] * flow[1] > -0.8) continue;
+          bestDist = distance;
+          best = other;
+        }
+      }
+    }
+    return best === null ? null : { node: best, flow };
+  }
+
   /** Does any edge at this node belong to a class the mode may use? */
   nodeServes(node, allowed) {
     const { start, edges } = this.adjacency;

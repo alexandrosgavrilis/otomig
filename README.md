@@ -26,8 +26,8 @@ Click **Use the test region** for a synthetic region that needs no network at al
 Serve it over `http://` — don't open `index.html` as a `file://` URL. ES modules, the import worker and the OSM services all need a real origin.
 
 ```bash
-npm test               # 716 logic assertions, plain Node, no framework, no dependencies
-npm run test:browser   # 169 assertions driving real Chromium (needs: npm install)
+npm test               # 721 logic assertions, plain Node, no framework, no dependencies
+npm run test:browser   # 173 assertions driving real Chromium (needs: npm install)
 npm run test:live      # 25 assertions against a REAL import — hits live OSM services
 npm run fixture        # regenerate fixtures/test-region.json
 ```
@@ -51,6 +51,8 @@ Plain JavaScript ES modules with JSDoc types. No TypeScript, no bundler, no fram
 Map data © OpenStreetMap contributors, [ODbL](https://opendatacommons.org/licenses/odbl/). Roads, buildings, water, the coastline and existing railways come from the [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API); place search from [Nominatim](https://nominatim.org/).
 
 Where OSM has the roads but not the buildings — much of Greece outside its cities — the import fills the gap with Microsoft's ML building footprints, read from [Overture Maps](https://overturemaps.org)' buildings tiles (Overture Maps Foundation; Microsoft, [ODbL](https://opendatacommons.org/licenses/odbl/)). It fetches only tiles where OSM looks unmapped, and the footer credits them for any region that used them.
+
+The typeface is [Sansation](https://fonts.google.com/specimen/Sansation) by Bernd Montag, under the [SIL Open Font License](vendor/fonts/OFL-Sansation.txt), served from `vendor/fonts/` so the game works offline.
 
 Elevation from [Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) on the Registry of Open Data on AWS — Terrain Tiles by Mapzen/Tilezen, from SRTM (NASA), 3DEP (USGS), GMTED2010 (USGS), ETOPO1 (NOAA) and other sources.
 

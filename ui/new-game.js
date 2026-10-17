@@ -88,7 +88,7 @@ export function mountNewGame(root, onReady, { onResume } = {}) {
     <div class="ng">
       <div class="ng-map" id="ng-map"></div>
       <div class="ng-panel">
-        <h1>${STRINGS.title}</h1>
+        <h1><img src="ui/logo.png" alt="${STRINGS.title}" width="1100" height="199" /></h1>
         <p class="ng-sub">${STRINGS.newGame.subtitle}</p>
 
         <div class="ng-continue" id="ng-continue-wrap" hidden>

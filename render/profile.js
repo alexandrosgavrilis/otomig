@@ -150,7 +150,7 @@ export function drawProfile(ctx, track, width, height) {
 
   // Height scale: just the top and bottom, in metres.
   ctx.fillStyle = COLORS.stopStroke;
-  ctx.font = '10px system-ui, sans-serif';
+  ctx.font = "10px 'Sansation', system-ui, sans-serif";
   ctx.textBaseline = 'top';
   ctx.fillText(`${Math.round(high)} m`, 2, pad.top);
   ctx.textBaseline = 'bottom';

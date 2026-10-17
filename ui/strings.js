@@ -190,7 +190,7 @@ export const STRINGS = {
     extendLine: 'Extend line',
     editStops: 'Line / Stops',
     buildTrack: 'Build track',
-    bulldoze: 'Bulldoze',
+    bulldoze: 'Bulldoze /!\\',
     heatMap: 'Demand',
     flows: 'Flows',
     flowsHint: 'Where people on your network want to go: one arc per pair of '

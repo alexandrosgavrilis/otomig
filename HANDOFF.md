@@ -88,8 +88,8 @@ Both would have reached Alex as a broken screen, and both were invisible to 272 
 ## 2. Testing
 
 ```bash
-npm test                            # 716 logic assertions, plain Node, no dependencies
-npm run test:browser                # 169 assertions in real Chromium via Playwright
+npm test                            # 721 logic assertions, plain Node, no dependencies
+npm run test:browser                # 173 assertions in real Chromium via Playwright
 npm run test:browser -- --headed    # ...and watch it
 npm run test:live                   # 24 assertions against a REAL import — hits live OSM services
 npm run test:live -- --km 5         # ...at a given size (default 5, the slider minimum)
@@ -323,7 +323,7 @@ An escape hatch, not a default. [extract.bbbike.org](https://extract.bbbike.org)
 
 ## 6. What works
 
-Verified by `npm test` (716) and `npm run test:browser` (169). Phases 3 to 6 have their own sections: §9, §10, §11 and §14.
+Verified by `npm test` (721) and `npm run test:browser` (173). Phases 3 to 6 have their own sections: §9, §10, §11 and §14.
 
 **Phase 1.** `LocalFrame` and the bbox/chunk maths; terrain height grid with bilinear interpolation (exact on a ramp); 200 m demand grid; 10 m occupancy bitset; Overpass parsing with road-class filtering, abandoned-rail rejection, chunk-overlap de-duplication and shared-node collapsing; Terrarium decode and tile resampling; marching-squares contours and sea polygons; the base-map GeoJSON. In the browser: the new-game screen, search firing no request while typing, MapLibre rendering real pixels, layer toggles, zoom revealing minor roads, `maxBounds`, IndexedDB round-trips, the module worker booting.
 
@@ -942,3 +942,24 @@ Alex: "it didn't store my network and money … we need a way to save both the r
 Asserted in the logic suite (a gzipped file round-trips with no storage at all: network, money, loans, calendar, line names) and in the browser: Save then Load restores; after a load Space pauses once; a downloaded file opens in a **fresh browser context with nothing stored**, with the network and money intact and its map cached there; and that browser's start screen then offers Continue.
 
 **Known gaps:** saves have no names of their own and there is no way to delete one; a region refreshed by a newer import (`REGION.IMPORT_VERSION`) under the same key is what later in-browser saves load against — a save file is the way to keep a game on its exact original map.
+
+---
+
+## 21. Selected lines, red tools, and stops on divided roads — Oct 17 2026
+
+- **A selected line stands out**: every other line fades to `RENDER.UNSELECTED_LINE_ALPHA` (0.3) and the selected one is drawn last, over a dark halo (`COLORS.selectionHalo`).
+- **The tools group selects in red** (New line, Extend line, Line / Stops, Build track, Bulldoze), so the toolbar's three groups — modes, tools, layers — read apart. Modes and layers stay ink.
+- **Stops on divided roads are pairs.** Alex: stops and pathfinding went odd where a road splits into two one-way carriageways, and building a line along one meant drawing a ring. The cause: a stop snapped to ONE node, on one carriageway, so the line going the other way could only reach it by driving on to a turning and coming back down the same carriageway. Real stops on such roads face each other across the median, so now a bus or tram stop on a one-way carriageway gets a **twin** — the nearest node within `BUILD.STOP_PAIR_M` (45 m) on a carriageway running exactly the other way, *across* the road rather than along it — and each direction calls at the side running its way (`Network.stopNodeFor`, `RoadIndex.twinOf`). At a line's end the two directions use opposite sides too: the bus arrives on one carriageway and leaves from the other, jumping the 20–40 m across the median during its layover in place of the U-turn. The pair is drawn as a small second circle joined across the road.
+
+**Measured on Patras** (12 test lines along divided roads, way back ÷ way there): **median 1.12, worst 2.07** with pairs, against **median 5.67, worst 19.08** without. A first version that left line ends unpaired and matched twins loosely managed only a median of 3.2 and one case of 30.7 — a one-way side street taken for the other carriageway — which is why the across-the-road and exactly-opposite tests are there. A synthetic boulevard in [tests/phase7.js](tests/phase7.js) asserts the twin, which side each direction uses, and a way back under half as long as without.
+
+**Not done:** a turn round through a real gap in the median at a line's end; the jump stands in for it.
+
+---
+
+## 22. The OTOMIG look — Oct 17 2026
+
+- **The logo** (designed by Alex's girlfriend, `ui/Otoming.png`, 3508×2480 with a transparent background) is cropped to `ui/logo.png` (1100 px wide) and is the new-game screen's title. Its emblem — the O and the arrows — is the browser-tab icon, `ui/icon.png`.
+- **The palette is the logo's**, as CSS tokens in [style.css](style.css): OTOMIG blue `#306499` (`--accent`) for everything the game highlights — the selected tool, the Import button, sliders, Finish line, the tuning panel; the logo's red `#A03B2C` (`--danger`) only for what destroys or warns — Bulldoze, negative money, delete buttons, a refused track (`COLORS.blocked`); its gold `#CDB341` (`--gold`) for the day bar. Land, ink and lines stay the Mini Metro neutrals. Line colours are unchanged.
+- **Bulldoze** always wears a faint red outline, turns the logo's red when selected, and reads "Bulldoze /!\" — the one tool that destroys should never be picked up by mistake.
+- **The font is Sansation** (Bernd Montag, SIL Open Font License), regular and bold, Latin, extended Latin and Greek, **served from `vendor/fonts/`** like MapLibre rather than from Google, so the game still works offline. The canvas labels (drag cost, profile strip, level crossings) use it too. The licence is `vendor/fonts/OFL-Sansation.txt`.

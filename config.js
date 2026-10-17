@@ -560,6 +560,14 @@ export const BUILD = {
    */
   JUNCTION_SNAP_M: 30,
   /**
+   * A bus or tram stop on one carriageway of a divided road is served from
+   * the other carriageway, by the line running the other way, if there is
+   * one this close — the pair of stops facing each other across a median
+   * that real roads have. Without it, the way back had to drive round the
+   * block to reach a stop on the wrong side (Alex, Oct 17 2026).
+   */
+  STOP_PAIR_M: 45,
+  /**
    * A station placed on existing rail takes the name of a real OSM station or
    * halt this close, m — about half a long platform. Further than that it is
    * a new station and is named after its street like any other.
@@ -836,13 +844,15 @@ export const COLORS = {
   stopFill: '#FFFFFF',
   stopStroke: '#2B2B2B',
   passenger: '#2B2B2B',
+  /** The halo under a selected line. */
+  selectionHalo: 'rgba(43, 43, 43, 0.28)',
   /** Flows layer arcs: the ink, faded, so lines and stops stay on top. */
   flow: 'rgba(110, 84, 168, 0.42)',
   bareTrack: '#B5AFA4',
   /** Train track's sleeper ticks, a shade darker than the rail itself. */
   sleeper: '#9C958A',
   /** Anything that cannot be built: a blocked preview, a refused crossing. */
-  blocked: '#D14A3F',
+  blocked: '#A03B2C', // the logo's red
 
   /**
    * Track being drawn is coloured by structure, before it belongs to any line
@@ -906,6 +916,9 @@ export const RENDER = {
   FLOW_MAX_ARCS: 300,
   FLOW_MAX_PX: 14,
   FLOW_MIN_PX: 1,
+  /** While a line is selected, every other line is drawn at this opacity. */
+  UNSELECTED_LINE_ALPHA: 0.3,
+
   /** How far an arc bows out from the straight line, as a share of its length. */
   FLOW_BOW: 0.18,
 };
