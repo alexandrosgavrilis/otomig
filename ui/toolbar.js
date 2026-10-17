@@ -94,11 +94,9 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
     const action = event.target.closest('button[data-draft]')?.dataset.draft;
     if (!action) return;
     if (action === 'stops') {
-      if (game.draft) {
-        const single = !game.draft.line.singleSided;
-        game.setSingleSided(game.draft.line, single);
-        game.singleStopsDefault = single;
-      }
+      // A tool, not a setting of the line: it decides the kind of the stops
+      // placed from now on, and leaves those already placed as they are.
+      game.singleStopsDefault = !game.singleStopsDefault;
       update();
       onChange?.(state);
       return;
@@ -135,7 +133,7 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
     const road = game.draft && (game.draft.line.mode === 'bus' || game.draft.line.mode === 'tram');
     if (toggle.hidden === Boolean(road)) toggle.hidden = !road;
     if (road) {
-      const single = game.draft.line.singleSided;
+      const single = game.singleStopsDefault;
       const text = single ? STRINGS.draft.singleStops : STRINGS.draft.doubleStops;
       if (toggle.textContent !== text) toggle.textContent = text;
       toggle.title = single ? STRINGS.draft.singleStopsHint : STRINGS.draft.doubleStopsHint;

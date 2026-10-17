@@ -1213,22 +1213,36 @@ try {
     }
     const shown = await page.isVisible('#tb-draft');
     await page.screenshot({ path: join(SHOTS, '19-draft-bar.png') });
-    // Double or single stops, switched from the drawing bar.
+    // Double or single stops, switched from the drawing bar: a tool for the
+    // stops placed next, not a setting of the whole line.
     await page.click('#tb-draft [data-draft="stops"]');
     await page.waitForTimeout(100);
     const switched = await page.evaluate(() => ({
-      single: window.otomig.game.draft?.line.singleSided,
+      single: window.otomig.game.singleStopsDefault,
       loop: window.otomig.game.draft?.line.loop,
+      singles: window.otomig.game.draft?.line.singleStops.size,
       label: document.querySelector('#tb-draft [data-draft="stops"]').textContent,
     }));
+    const extra = await pointOf(3400, 3600);
+    await page.mouse.click(extra.x, extra.y);
+    await page.waitForTimeout(100);
+    const placedSingle = await page.evaluate(() => {
+      const line = window.otomig.game.draft?.line;
+      return line ? line.singleStops.has(line.stops.at(-1)) && line.singleStops.size === 1 : false;
+    });
     await page.click('#tb-draft [data-draft="stops"]');
     await page.waitForTimeout(100);
     const back = await page.evaluate(() => ({
-      single: window.otomig.game.draft?.line.singleSided, loop: window.otomig.game.draft?.line.loop,
+      single: window.otomig.game.singleStopsDefault, loop: window.otomig.game.draft?.line.loop,
     }));
-    check('the drawing bar switches a bus line to single stops, one way round',
-      switched.single === true && switched.loop === true && /Single/.test(switched.label), JSON.stringify(switched));
-    check('…and back to double stops', back.single === false && back.loop === false, JSON.stringify(back));
+    check('the drawing bar switches the next stops to single, leaving those placed double',
+      switched.single === true && switched.loop === false && switched.singles === 0
+      && /Single/.test(switched.label), JSON.stringify(switched));
+    check('…the next stop placed is single', placedSingle);
+    check('…and it switches back to double stops', back.single === false && back.loop === false,
+      JSON.stringify(back));
+    // Undo takes back the single stop too (it did nothing in single-stop mode).
+    await page.click('#tb-draft [data-draft="undo"]');
     await page.click('#tb-draft [data-draft="undo"]');
     await page.click('#tb-draft [data-draft="finish"]');
     await page.waitForTimeout(100);

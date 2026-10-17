@@ -445,7 +445,7 @@ function stopKerbs(game, overlay, stop, x, y) {
     const [tx, ty] = tangent;
     // Right of travel on screen (y down): (−ty, tx).
     const right = BUILD.RIGHT_HAND_TRAFFIC ? [-ty, tx] : [ty, -tx];
-    if (line.singleSided) {
+    if (line.singleStops.has(stop.id)) {
       result.sides.push([x + right[0] * offset, y + right[1] * offset]);
       continue;
     }

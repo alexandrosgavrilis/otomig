@@ -16,7 +16,7 @@ import { buildTrack, onStreetCost } from '../build/track-geometry.js';
 import { osmRailTracks } from '../build/osm-rail.js';
 import { Clock } from './clock.js';
 import { DemandModel } from './demand.js';
-import { Router } from './routing.js';
+import { Router, stopOrder } from './routing.js';
 import { Vehicle, stepVehicle, respaceVehicles } from './vehicles.js';
 import { stepPassengers, spawnDots, revalidateDots } from './passengers.js';
 import { Economy } from './economy.js';
@@ -49,9 +49,10 @@ export class Game {
       this.passengersPerDot);
 
     /**
-     * Whether new bus and tram lines use single stops — the last choice made
-     * in the drawing bar, so a player who prefers them does not have to pick
-     * it every time. Not saved.
+     * Whether the next bus or tram stop drawn is a single stop: the drawing
+     * bar's switch, a tool that can change between one stop and the next
+     * (`Line.singleStops`). It stays as last set, so a player who prefers
+     * single stops does not have to pick it every time. Not saved.
      */
     this.singleStopsDefault = false;
     /** Whether the Flows layer is drawn. A view setting, never saved. */
@@ -211,7 +212,6 @@ export class Game {
   /** Start a new line in a mode. */
   startLine(mode) {
     const line = this.network.createLine(mode);
-    if (mode === 'bus' || mode === 'tram') line.singleSided = this.singleStopsDefault;
     this.draft = { line, cursor: null, valid: true };
     return line;
   }
@@ -224,7 +224,8 @@ export class Game {
     if (placed.error) return placed;
 
     const before = this.network.trackCostOf(line);
-    const result = this.network.extendLine(line, placed.stop);
+    const result = this.network.extendLine(line, placed.stop,
+      { single: this.singleStopsDefault && (line.mode === 'bus' || line.mode === 'tram') });
     if (result.error) {
       this.refundStop(placed);
       return result;
@@ -646,11 +647,12 @@ export class Game {
   }
 
   /**
-   * Double stops or single stops for a bus or tram line — see
-   * `Line.singleSided`. Re-routes the line and re-spaces its vehicles.
+   * Make a bus or tram line's stops single or double — all of them, or the
+   * ones given. See `Line.singleStops`. Re-routes the line and re-spaces its
+   * vehicles.
    */
-  setSingleSided(line, on) {
-    this.network.setSingleSided(line, on);
+  setSingleStops(line, single, stopIds) {
+    this.network.setSingleStops(line, single, stopIds);
     respaceVehicles(line);
     this.invalidate();
   }
@@ -673,7 +675,8 @@ export class Game {
   addVehicle(line, direction = 0) {
     if (line.vehicles.length >= line.maxVehicles) return false;
     if (!this.economy.spend(COSTS.VEHICLE[line.mode], 'construction')) return false;
-    const vehicle = new Vehicle(line, line.loop ? direction : 0);
+    // Round a loop either way — unless backwards would call at nothing.
+    const vehicle = new Vehicle(line, line.loop && this.network.runsBothWays(line) ? direction : 0);
     vehicle.dotSize = this.passengersPerDot;
     line.vehicles.push(vehicle);
     respaceVehicles(line);
@@ -847,7 +850,7 @@ export class Game {
         id: line.id, mode: line.mode, color: line.color, stops: line.stops,
         loop: line.loop,
         name: line.name,
-        ...(line.singleSided ? { singleSided: true, autoLoop: line.autoLoop } : {}),
+        ...(line.singleStops.size ? { singleStops: [...line.singleStops] } : {}),
         skipEmptyStops: line.skipEmptyStops,
         keepSpacing: line.keepSpacing,
         // Segments are derived and not stored, but the drags that shape them
@@ -919,8 +922,10 @@ export class Game {
       line.stops = saved.stops;
       line.loop = saved.loop;
       line.name = saved.name || null;
-      line.singleSided = Boolean(saved.singleSided);
-      line.autoLoop = Boolean(saved.autoLoop);
+      // Saves from when a whole line was single or double: `singleSided`,
+      // and a loop it closed itself, which is now an open line coming back.
+      line.singleStops = new Set(saved.singleStops ?? (saved.singleSided ? saved.stops : []));
+      if (saved.autoLoop) line.loop = false;
       // Saves from before these switches existed get the defaults.
       if (saved.skipEmptyStops !== undefined) line.skipEmptyStops = saved.skipEmptyStops;
       if (saved.keepSpacing !== undefined) line.keepSpacing = saved.keepSpacing;
@@ -940,6 +945,13 @@ export class Game {
         vehicle.dwellRemaining = savedVehicle.dwellRemaining;
         vehicle.dotSize = game.passengersPerDot;
         line.vehicles.push(vehicle);
+      }
+      // A vehicle on a hop the line no longer has — an old save's loop that
+      // is now an open line — starts again from its first stop.
+      if (!game.network.runsBothWays(line)) for (const v of line.vehicles) v.direction = 0;
+      for (const vehicle of line.vehicles) {
+        if (vehicle.hop < stopOrder(line, vehicle.direction).length - 1) continue;
+        Object.assign(vehicle, { hop: 0, progress: 0, dwellRemaining: 0 });
       }
     }
 

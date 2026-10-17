@@ -88,8 +88,8 @@ Both would have reached Alex as a broken screen, and both were invisible to 272 
 ## 2. Testing
 
 ```bash
-npm test                            # 754 logic assertions, plain Node, no dependencies
-npm run test:browser                # 178 assertions in real Chromium via Playwright
+npm test                            # 766 logic assertions, plain Node, no dependencies
+npm run test:browser                # 179 assertions in real Chromium via Playwright
 npm run test:browser -- --headed    # ...and watch it
 npm run test:live                   # 24 assertions against a REAL import — hits live OSM services
 npm run test:live -- --km 5         # ...at a given size (default 5, the slider minimum)
@@ -323,7 +323,7 @@ An escape hatch, not a default. [extract.bbbike.org](https://extract.bbbike.org)
 
 ## 6. What works
 
-Verified by `npm test` (754) and `npm run test:browser` (178). Phases 3 to 6 have their own sections: §9, §10, §11 and §14.
+Verified by `npm test` (766) and `npm run test:browser` (179). Phases 3 to 6 have their own sections: §9, §10, §11 and §14.
 
 **Phase 1.** `LocalFrame` and the bbox/chunk maths; terrain height grid with bilinear interpolation (exact on a ramp); 200 m demand grid; 10 m occupancy bitset; Overpass parsing with road-class filtering, abandoned-rail rejection, chunk-overlap de-duplication and shared-node collapsing; Terrarium decode and tile resampling; marching-squares contours and sea polygons; the base-map GeoJSON. In the browser: the new-game screen, search firing no request while typing, MapLibre rendering real pixels, layer toggles, zoom revealing minor roads, `maxBounds`, IndexedDB round-trips, the module worker booting.
 
@@ -998,7 +998,7 @@ Alex, after trying §23's stop areas in Athens: "this made it worse" — stops s
 
 - **No turning round in the middle of a road**, for buses and trams, anywhere: a route leaves each stop forwards (`shortestPath`'s `avoidFirst`, carried hop to hop in `rebuildSegments` and `refreshBackSegments`, and through a dragged via). The only exception is a dead end — or a street whose only way out is back the way it came — where no legal path exists; on Patras every remaining doubling back was one of those. A double-stop line still reverses at its two end stops, during the layover.
 - **Double stops** (`line.singleSided = false`, the default): the line runs both ways along the same streets, and a stop serves both sides of the road — drawn as two small stops facing each other across it, and passengers board whichever direction suits their trip. On a **one-way** road, a stop is paired with the opposite carriageway only if that runs exactly the other way and lies **directly across within `BUILD.STOP_PAIR_M` (35 m)** — a road with a divider; a parallel street a block away is not paired (`RoadIndex.twinOf`, restored from §21, tightened).
-- **Single stops** (`line.singleSided = true`): each stop is on one side, as in Cities: Skylines, and the line runs **one way round as a loop** — closed back to its first stop automatically (`line.autoLoop`), even with two stops, and still extendable while drawing; the player places the stops for each direction. Each stop is drawn on the kerb of the side it serves (`BUILD.RIGHT_HAND_TRAFFIC`). Switching back to double stops reopens a loop that single stops closed; one the player closed stays closed.
+- *(Superseded by §29: single or double is now chosen stop by stop, and there is no automatic loop.)* **Single stops** (`line.singleSided = true`): each stop is on one side, as in Cities: Skylines, and the line runs **one way round as a loop** — closed back to its first stop automatically (`line.autoLoop`), even with two stops, and still extendable while drawing; the player places the stops for each direction. Each stop is drawn on the kerb of the side it serves (`BUILD.RIGHT_HAND_TRAFFIC`). Switching back to double stops reopens a loop that single stops closed; one the player closed stays closed.
 - **The switch** is in the drawing bar ("⇄ Double stops" / "→ Single stops", remembered for the next line as `game.singleStopsDefault`) and on the line panel ("Stops: Double / Single"). `Network.setSingleSided` / `Game.setSingleSided`.
 - **One-way arrows**: black arrows on every one-way street from zoom 15 (a MapLibre symbol layer, `oneway-arrows`, one arrow per stretch of 25 m or more, decluttered by MapLibre), and drawn again **on top of** bus and tram lines wherever they run along a one-way street, since the lines hide the map beneath.
 
@@ -1056,3 +1056,19 @@ Alex: "no passengers boarded any bus lines no matter how long or how many stops"
 **Still sparse, by the model's own rule.** With the fix, the Megara line through the town centre (four stops, 2 people per dot) wants about 350 trips a day, which is about one dot every two calendar days — 4 spawned in 12 days. That is the 324× sample of §16 working as designed, not a bug; whether a small network should look busier is a tuning question for Alex.
 
 **Open question for Alex:** should buses be allowed to stop on motorways at all? A real bus would use the parallel road (at Megara, the one-way *Παράπλευρη Οδός* either side); stops could snap to the nearest non-motorway road while buses still drive on motorways between stops.
+
+## 29. Single or double, stop by stop — Oct 17 2026
+
+Alex: "single stop vs double stop should be more like a tool while drawing the road, rather than working as either–or. I should be able to create some sections fast and efficiently using double stop, and some where detail matters using single stop." Also: Undo did nothing in single-stop mode.
+
+**The rule.** A line keeps `singleStops`, a set of its stop ids; every other stop is double. The trip out calls at every stop in the order drawn. The way back (direction 1) calls at the double stops, in reverse and from the far side of the road, and at both ends of the line, where the vehicle turns round. A single stop is therefore served one way only, exactly where it was placed; to serve the other direction, place another single stop on the way back. All double is the line as before. All single runs out calling everywhere and comes straight back — what the old automatic loop did, without being one. `Network.downCallsOf` / `line.downCalls` hold the way back's stops, and `backSegments[j]` is now the hop between `downCalls[j+1]` and `downCalls[j]` (with only double stops, j is still the segment index, so nothing else had to change). `stopOrder` and `segmentFor` read these, and the router, vehicles, spacing and boarding all go through those two.
+
+**Drawing.** The drawing bar's *Double / Single stops* switch is `game.singleStopsDefault`: it decides the kind of the NEXT stop placed and leaves the ones already placed alone. Afterwards, the line panel shows Double, Single or Mixed and sets every stop at once; a stop's own panel has a Double/Single switch per line calling there.
+
+**Riding round the end.** A passenger at a single stop beyond the last double one gets back by riding round the end of the line. The router has a `turn` edge from a line end's platform in one direction to the other, costing the layover, and a passenger whose next leg is the same vehicle's next trip stays aboard (`alightHere`) — no transfer penalty, no getting off.
+
+**Undo and Cancel.** A single-stop line closed itself into a loop; Undo reopened it and the rebuild closed it again, so nothing happened — and Cancel, which repeats Undo until the line is empty, never finished. There is no automatic loop any more. Old saves (`singleSided`, `autoLoop`) load as open lines with every stop single.
+
+**Found on the way:** a vehicle going round a loop *backwards* walked each hop along the neighbouring segment — `segmentFor` took the closing segment for the first hop — so it announced each stop a whole hop away from it (1,000 m on the fixture). Fixed by the new hop numbering; a test now checks that every vehicle reaching a stop is at it, on double, single and mixed lines and round loops both ways.
+
+Trams follow the same rule but still reverse at their ends rather than turning round a block, and a tram's way back only pays for track the way out has not laid.

@@ -107,6 +107,15 @@ function alightHere(game, vehicle, stop, simNow, stats) {
       continue;
     }
 
+    // Riding on through the end of the line: the vehicle has turned round
+    // here and its next trip is the passenger's next leg.
+    const next = dot.leg;
+    if (next.lineId === vehicle.lineId && next.direction === vehicle.direction
+        && next.fromStop === stop.id) {
+      staying.push(dot);
+      continue;
+    }
+
     // A transfer: walk to the next leg's boarding stop and wait again.
     const nextStopId = dot.route.legs[dot.legIndex].fromStop;
     const nextStop = network.stops.get(nextStopId);

@@ -118,8 +118,11 @@ export const STRINGS = {
     stopsKind: 'Stops',
     stopsDouble: 'Double',
     stopsSingle: 'Single',
-    stopsKindHint: 'Double: the line runs both ways and every stop serves both sides. '
-      + 'Single: each stop serves one side and the line runs one way round.',
+    stopsMixed: 'Mixed',
+    stopsKindHint: 'Double: called at both ways, from either side of the road. '
+      + 'Single: on one side, called at one way only, where it was placed. '
+      + 'Click to make every stop of the line one kind; a single stop can be changed from its own panel.',
+    stopKindHint: 'Double: this line calls here both ways. Single: one way only, where it was placed.',
     skipStopsHint: 'Drive past a stop where nobody is getting on or off.',
     on: 'On',
     off: 'Off',
@@ -341,10 +344,10 @@ export const STRINGS = {
     cancelHint: 'Throw away what is being drawn, refunded in full. (Esc instead keeps a line\'s stops so far.)',
     doubleStops: '⇄ Double stops',
     singleStops: '→ Single stops',
-    doubleStopsHint: 'The line runs both ways; every stop serves both sides of the road. '
-      + 'Click to use single stops instead.',
-    singleStopsHint: 'Each stop is on one side of the road and the line runs one way round, '
-      + 'as a loop — place the stops for each direction yourself. Click for double stops.',
+    doubleStopsHint: 'The next stops are double: called at on the way out and again on the way back, '
+      + 'from the other side of the road. Click to place single stops.',
+    singleStopsHint: 'The next stops are single: on one side of the road, called at one way only — '
+      + 'the way back passes by. Place the stops for each direction yourself. Click for double stops.',
     drawingLine: (mode, stops) => `${mode} line · ${stops} ${stops === 1 ? 'stop' : 'stops'}`,
     drawingTrack: (mode, points) => `${mode} track · ${points} ${points === 1 ? 'point' : 'points'}`,
   },

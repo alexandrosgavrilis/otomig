@@ -153,7 +153,8 @@ export function mountPanels(root, game, { onChange }) {
         clear(); onChange?.();
       });
       container.querySelector('[data-act="stops-kind"]')?.addEventListener('click', () => {
-        game.setSingleSided(selection, !selection.singleSided);
+        // All double becomes all single; anything else, all double.
+        game.setSingleStops(selection, game.network.stopsKind(selection) === 'double');
         render(); onChange?.();
       });
       container.querySelector('[data-act="keep-spacing"]')?.addEventListener('click', () => {
@@ -187,6 +188,13 @@ export function mountPanels(root, game, { onChange }) {
         game.toggleIntercity(selection);
         render(); onChange?.();
       });
+      for (const button of container.querySelectorAll('[data-act="stop-kind"]')) {
+        button.addEventListener('click', () => {
+          const line = game.network.lines.get(button.dataset.line);
+          if (line) game.setSingleStops(line, !line.singleStops.has(selection.id), [selection.id]);
+          render(); onChange?.();
+        });
+      }
       const rename = container.querySelector('[data-act="rename"]');
       rename?.addEventListener('change', () => {
         const value = rename.value.trim();
@@ -356,7 +364,8 @@ function lineHtml(game, line) {
       ${line.mode === 'bus' || line.mode === 'tram' ? `
         <div class="row" title="${STRINGS.panel.stopsKindHint}"><span>${STRINGS.panel.stopsKind}</span>
           <button type="button" data-act="stops-kind">
-            ${line.singleSided ? STRINGS.panel.stopsSingle : STRINGS.panel.stopsDouble}</button></div>` : ''}
+            ${{ double: STRINGS.panel.stopsDouble, single: STRINGS.panel.stopsSingle,
+              mixed: STRINGS.panel.stopsMixed }[game.network.stopsKind(line)]}</button></div>` : ''}
       <div class="row" title="${STRINGS.panel.keepSpacingHint}"><span>${STRINGS.panel.keepSpacing}</span>
         <button type="button" data-act="keep-spacing" class="${line.keepSpacing ? 'on' : ''}">
           ${line.keepSpacing ? STRINGS.panel.on : STRINGS.panel.off}</button></div>
@@ -421,6 +430,8 @@ function stopHtml(game, stop) {
             <span>${stop.intercityCalls}</span></div>` : ''}
       </div>` : ''}
 
+    ${stop.mode === 'bus' || stop.mode === 'tram' ? stopKindsHtml(game, stop, lines) : ''}
+
     ${flowsHtml(game, stop)}
 
     <div class="lines-served">
@@ -431,6 +442,19 @@ function stopHtml(game, stop) {
 
     <button type="button" data-act="delete" class="danger">${STRINGS.panel.deleteStop}</button>
   `;
+}
+
+/** Single or double, for each line calling at a bus or tram stop. */
+function stopKindsHtml(game, stop, lines) {
+  if (lines.length === 0) return '';
+  return `
+    <div class="rows" title="${STRINGS.panel.stopKindHint}">
+      ${lines.map((line) => `
+        <div class="row"><span><span class="chip" style="background:${line.color}"></span>
+          ${escapeHtml(lineLabel(game, line))}</span>
+          <button type="button" data-act="stop-kind" data-line="${line.id}">
+            ${line.singleStops.has(stop.id) ? STRINGS.panel.stopsSingle : STRINGS.panel.stopsDouble}</button></div>`).join('')}
+    </div>`;
 }
 
 /**

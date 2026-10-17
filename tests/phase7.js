@@ -25,7 +25,7 @@ import { isStale } from '../ui/new-game.js';
 import { Game } from '../sim/game.js';
 import { Vehicle, cycleOf, phaseOf } from '../sim/vehicles.js';
 import { placeDot, patienceFor } from '../sim/passengers.js';
-import { stopOrder, hopSeconds } from '../sim/routing.js';
+import { stopOrder, hopSeconds, segmentFor } from '../sim/routing.js';
 import { Clock } from '../sim/clock.js';
 import { setTunable, resetAll, readout } from '../sim/tuning.js';
 
@@ -706,19 +706,28 @@ function runStopPairs(check, near) {
       ({ type: 'way', id: i + 1, nodes: refs, tags: { highway: 'primary', ...tags } })), nodes, frame);
     return new Game(region);
   };
-  const lineAlong = (game, xys, singleSided = false) => {
+  /** A bus line through these points; `single` is all single stops, or a flag per stop. */
+  const lineAlong = (game, xys, single = false) => {
     game.startLine('bus');
-    game.draft.line.singleSided = singleSided;
-    for (const [x, y] of xys) game.extendDraft(...game.frame.toLonLat(x, y));
+    xys.forEach(([x, y], i) => {
+      game.singleStopsDefault = Array.isArray(single) ? Boolean(single[i]) : single;
+      game.extendDraft(...game.frame.toLonLat(x, y));
+    });
+    game.singleStopsDefault = false;
     return game.finishDraft();
   };
   const at = (game, node) => game.frame.toLocal(...game.roadIndex.nodeLonLat(node)).map(Math.round);
   /** Every place a line's vehicles leave a stop back the way they came. */
   const uTurns = (game, line) => {
-    const chains = [line.segments.map((s) => s.nodes)];
-    if (line.backSegments || !line.singleSided) {
-      chains.push(line.segments.map((s, k) => line.backSegments?.[k]?.nodes ?? [...s.nodes].reverse()).reverse());
-    }
+    // Each direction's hops in travel order, as road nodes.
+    const chains = [0, 1].map((direction) => {
+      const hops = [];
+      for (let i = 0; i < stopOrder(line, direction).length - 1; i++) {
+        const segment = segmentFor(line, direction, i);
+        hops.push(direction === 1 && !segment.back ? [...segment.nodes].reverse() : segment.nodes);
+      }
+      return hops;
+    });
     let turns = 0;
     for (const chain of chains) {
       for (let k = 0; k + 1 < chain.length; k++) {
@@ -974,19 +983,137 @@ function runStopPairs(check, near) {
       lines.every((line) => uTurns(game, line) === 0), lines.map((l) => uTurns(game, l)).join());
   }
 
-  // Single stops: the line runs one way round, as a loop.
+  // Single stops, chosen stop by stop (Alex, Oct 17 2026).
   {
     const game = newGame('creative');
     const line = lineAlong(game, [[1600, 2800], [2600, 2800], [3400, 2800]], true);
-    check('a single-stop line runs one way round: a loop, with no separate way back',
-      line.loop && line.segments.length === 3 && line.backSegments === null);
-    check('…its vehicles all go the one way', line.vehicles.every((v) => v.direction === 0));
-    check('…and it never turns round in the road either', uTurns(game, line) === 0);
+    check('a line of single stops calls at every one on the way out and comes straight back',
+      !line.loop && stopOrder(line, 1).join() === [line.stops[2], line.stops[0]].join(),
+      stopOrder(line, 1).join());
+    check('…and never turns round in the road', uTurns(game, line) === 0);
     const two = lineAlong(game, [[1600, 3600], [2600, 3600]], true);
-    check('…even with only two stops', two.loop && two.segments.length === 2);
-    game.network.setSingleSided(two, false);
-    check('switching back to double stops reopens a line it closed itself',
-      !two.loop && two.segments.length === 1, `${two.loop} ${two.segments.length}`);
+    check('…even with only two stops', !two.loop && two.segments.length === 1);
+    game.setSingleStops(two, false);
+    check('making them double changes the stops, not the line\'s shape', !two.loop
+      && game.network.stopsKind(two) === 'double');
+
+    // The kind is a tool: switching it mid-line changes the stops placed next.
+    const mixed = lineAlong(game, [[1000, 3600], [1600, 3600], [2200, 3700], [2600, 4400], [3400, 4300]],
+      [false, false, true, false, true]);
+    const kinds = mixed.stops.map((id) => (mixed.singleStops.has(id) ? 'S' : 'D')).join('');
+    check('a line can mix double and single stops, each the kind it was placed as', kinds === 'DDSDS', kinds);
+    check('…the way back calls at the double ones and the far end, skipping the single ones',
+      stopOrder(mixed, 1).join() === [4, 3, 1, 0].map((i) => mixed.stops[i]).join(),
+      stopOrder(mixed, 1).map((id) => mixed.stops.indexOf(id)).join());
+    check('…and it still never turns round in the road', uTurns(game, mixed) === 0);
+    check('the line panel calls such a line mixed', game.network.stopsKind(mixed) === 'mixed');
+    const middle = mixed.stops[2];
+    game.setSingleStops(mixed, false, [middle]);
+    check('one stop can be made double afterwards, and the way back then calls there',
+      stopOrder(mixed, 1).includes(middle) && game.network.stopsKind(mixed) === 'mixed');
+
+    // Undo and Cancel with single stops: Undo reopened a loop that the
+    // single stops closed straight back up, so it did nothing, and Cancel
+    // never finished.
+    game.singleStopsDefault = true;
+    game.startLine('bus');
+    for (const x of [1600, 2600, 3400]) game.extendDraft(...game.frame.toLonLat(x, 2000));
+    const undone = game.undoDraftStop();
+    check('Undo takes back a single stop', undone.ok && game.draft.line.stops.length === 2,
+      `${game.draft.line.stops.length} stops`);
+    const linesBefore = game.network.lines.size;
+    game.discardDraft();
+    check('…and Cancel throws a single-stop line away', !game.draft && game.network.lines.size === linesBefore - 1);
+    game.singleStopsDefault = false;
+
+    // Saves keep each stop's kind; old saves of whole single-stop lines,
+    // closed into loops by themselves, open again.
+    const saved = game.toJSON('test');
+    const restored = Game.fromJSON(JSON.parse(JSON.stringify(saved)), reviveRegion(JSON.parse(fixtureText)));
+    const again = restored.network.lines.get(mixed.id);
+    check('a reload keeps which stops are single', [...again.singleStops].sort().join()
+      === [...mixed.singleStops].sort().join());
+    const old = JSON.parse(JSON.stringify(saved));
+    const oldLine = old.lines.find((l) => l.id === line.id);
+    delete oldLine.singleStops;
+    Object.assign(oldLine, { singleSided: true, autoLoop: true, loop: true });
+    const migrated = Game.fromJSON(old, reviveRegion(JSON.parse(fixtureText))).network.lines.get(line.id);
+    check('…and an older save\'s single-stop line opens with every stop single',
+      !migrated.loop && migrated.singleStops.size === 3);
+  }
+
+  // Wherever a vehicle says it has reached a stop, it is there — on double,
+  // single and mixed lines, and round loops both ways.
+  {
+    const game = newGame('creative');
+    game.economy.balance = 1e9;
+    const lines = [
+      lineAlong(game, [[1600, 2800], [2600, 2800], [3400, 2800]]),
+      lineAlong(game, [[1000, 3600], [2200, 3700], [2600, 4400], [3400, 4300]], true),
+      lineAlong(game, [[1000, 3600], [1600, 3600], [2200, 3700], [2600, 4400], [3400, 4300]],
+        [true, false, true, false, true]),
+    ];
+    const loop = lineAlong(game, [[1600, 2800], [2600, 2800], [2600, 3600], [1600, 3600]]);
+    game.network.extendLine(loop, game.network.stops.get(loop.stops[0]));
+    game.addVehicle(loop, 1);
+    lines.push(loop);
+    for (const line of lines) while (line.vehicles.length < 2 && game.addVehicle(line));
+    let worst = 0;
+    let arrivals = 0;
+    game.clock.setSpeedIndex(3);
+    for (let t = 0; t < 30; t += CLOCK.TICK_MS / 1000) {
+      game.tick(CLOCK.TICK_MS / 1000);
+      for (const line of lines) for (const v of line.vehicles) {
+        if (!v.justArrivedAt) continue;
+        arrivals++;
+        const index = line.stops.indexOf(v.justArrivedAt);
+        const [vx, vy] = game.frame.toLocal(v.lon, v.lat);
+        const off = Math.min(...[0, 1].map((d) => {
+          const [nx, ny] = game.frame.toLocal(...game.roadIndex.nodeLonLat(game.network.stopNodeFor(line, index, d)));
+          return Math.hypot(vx - nx, vy - ny);
+        }));
+        worst = Math.max(worst, off);
+      }
+    }
+    check('every vehicle that reaches a stop is at it, on every kind of line',
+      arrivals > 20 && worst < 5, `${arrivals} arrivals, worst ${worst.toFixed(1)} m off`);
+  }
+
+  // A single stop beyond the last double one is still a ride, not a change,
+  // from the way back: the vehicle turns round with its passengers aboard.
+  {
+    const game = newGame('creative');
+    const line = lineAlong(game, [[1600, 2800], [2600, 2800], [3400, 2800], [3400, 3600]],
+      [false, false, true, true]);
+    while (line.vehicles.length < 2 && game.addVehicle(line));
+    game.tick(CLOCK.TICK_MS / 1000);
+    const route = game.router.route(line.stops[2], line.stops[0]);
+    check('from a single stop, the way to a stop behind it rides on round the end of the line',
+      route?.legs.length === 2 && route.legs.every((leg) => leg.lineId === line.id)
+      && route.legs[0].direction === 0 && route.legs[1].direction === 1, JSON.stringify(route?.legs));
+    // Riding through the end is not a change of vehicle: no transfer penalty.
+    const rides = [0, 1].reduce((sum, direction) => {
+      const order = stopOrder(line, direction);
+      const from = order.indexOf(direction === 0 ? line.stops[2] : line.stops[3]);
+      const to = order.indexOf(direction === 0 ? line.stops[3] : line.stops[0]);
+      let seconds = 0;
+      for (let i = from; i < to; i++) seconds += hopSeconds(line, direction, i);
+      return sum + seconds;
+    }, 0);
+    check('…paying no transfer penalty for it', route.seconds < rides + ROUTING.TRANSFER_PENALTY_S,
+      `${Math.round(route.seconds)} s against ${Math.round(rides)} s of riding`);
+    const dot = placeDot(game, line.stops[2], line.stops[0]);
+    let aboard = null;
+    let stayed = true;
+    game.clock.setSpeedIndex(3);
+    for (let t = 0; t < 40 && dot.legIndex < 2; t += CLOCK.TICK_MS / 1000) {
+      game.tick(CLOCK.TICK_MS / 1000);
+      const now = line.vehicles.find((v) => v.passengers.includes(dot)) ?? null;
+      if (aboard && now !== aboard && dot.legIndex < 2) stayed = false;
+      if (now) aboard = now;
+    }
+    check('…and the passenger stays aboard while the vehicle turns round', aboard && stayed
+      && dot.legIndex === 2, `leg ${dot.legIndex}, stayed ${stayed}`);
   }
 
   // One-way arrows point the way traffic may go.
