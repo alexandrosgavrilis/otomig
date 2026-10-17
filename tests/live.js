@@ -57,7 +57,7 @@ function check(name, condition, detail = '') {
 }
 
 async function serve() {
-  const server = spawn('python3', ['-m', 'http.server', String(PORT)],
+  const server = spawn(process.execPath, [join(ROOT, 'tools', 'serve.js'), String(PORT)],
     { cwd: ROOT, stdio: 'ignore' });
   for (let i = 0; i < 50; i++) {
     try {

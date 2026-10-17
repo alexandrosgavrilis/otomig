@@ -45,6 +45,9 @@ const STATION_PRICE = {
 
 const isRail = (mode) => mode === 'metro' || mode === 'train';
 
+/** The number in an id like "s42", for ordering by when things were built. */
+const idNumber = (id) => Number(String(id).replace(/\D+/g, '')) || 0;
+
 export class Stop {
   /**
    * @param {Mode} mode
@@ -62,7 +65,10 @@ export class Stop {
     this.lon = lon;
     this.lat = lat;
     this.node = node;
+    /** The street or station it was named after when built. */
     this.name = name;
+    /** A name the player gave it, or null to use the street's (numbered). */
+    this.customName = null;
     this.structure = structure;
     /** Line ids calling here. */
     this.lines = [];
@@ -184,6 +190,12 @@ export class Line {
      * @type {Array<Object|null>|null}
      */
     this.backSegments = null;
+    /** A name the player gave the line, or null for the automatic one. */
+    this.name = null;
+    /** Skip stops nobody needs — buses and trams only (VEHICLES.SKIP_EMPTY_STOPS). */
+    this.skipEmptyStops = VEHICLES.SKIP_EMPTY_STOPS.includes(mode);
+    /** Hold vehicles at stops to keep them evenly spread. */
+    this.keepSpacing = true;
     /**
      * Via-points, one per segment that has been dragged off its default route,
      * keyed `"fromStopId>toStopId"`.
@@ -375,6 +387,45 @@ export class Network {
     this.recomputeInterchanges();
     this.touch();
     return { stop, reused: false };
+  }
+
+  // ─── Names ────────────────────────────────────────────────────────────────
+
+  /**
+   * A stop's name as shown: the player's own if they gave one, otherwise its
+   * street (or station). Stops of a mode sharing a street name are numbered
+   * in the order they were built — "Ermou 1", "Ermou 2" — so two stops on
+   * one long road can be told apart (Alex, Oct 17 2026).
+   */
+  stopLabel(stop) {
+    if (stop.customName) return stop.customName;
+    const twins = [...this.stops.values()]
+      .filter((other) => !other.customName && other.mode === stop.mode && other.name === stop.name);
+    if (twins.length < 2) return stop.name;
+    twins.sort((a, b) => idNumber(a.id) - idNumber(b.id));
+    return `${stop.name} ${twins.indexOf(stop) + 1}`;
+  }
+
+  /**
+   * A line's name: the player's own, or "first stop to last stop" by their
+   * street names (unnumbered). When both ends share a name — a loop, or a
+   * line up and down one long road — it is that name and the mode instead.
+   *
+   * @param {Object} line
+   * @param {{to:string, mode:Object<string,string>}} words the UI's strings
+   */
+  lineLabel(line, words) {
+    if (line.name) return line.name;
+    const place = (id) => {
+      const stop = this.stops.get(id);
+      return stop ? stop.customName || stop.name : null;
+    };
+    const first = place(line.stops[0]);
+    const last = place(line.stops.at(-1));
+    const mode = words.mode[line.mode] ?? line.mode;
+    if (!first) return mode;
+    if (line.loop || !last || first === last) return `${first} – ${mode}`;
+    return `${first} ${words.to} ${last}`;
   }
 
   /** Is this a station on an existing railway, where intercity trains may call? */

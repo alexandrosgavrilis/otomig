@@ -459,6 +459,17 @@ export const VEHICLES = {
    * and train always stop. Line ends always dwell: that is the layover.
    */
   SKIP_EMPTY_STOPS: ['bus', 'tram'],
+
+  /**
+   * Keeping vehicles evenly spread (each line's "Keep even spacing" switch,
+   * on by default). A vehicle less than (1 − tolerance) of the target gap
+   * behind the one ahead waits at its stop for this share of the shortfall,
+   * at most this long. Half the shortfall settles bunching over a few stops
+   * without the gaps swinging past even and back.
+   */
+  SPACING_TOLERANCE: 0.1,
+  SPACING_HOLD_SHARE: 0.5,
+  SPACING_MAX_HOLD_S: 90,
 };
 
 // ─── Building rules ───────────────────────────────────────────────────────────

@@ -32,7 +32,7 @@ import { runPhase4Tests } from './phase4.js';
 import { runProfileTests } from './profiles.js';
 import { runPhase5Tests } from './phase5.js';
 import { runPhase6Tests } from './phase6.js';
-import { runPhase7Tests } from './phase7.js';
+import { runPhase7Tests, runSaveFileTests } from './phase7.js';
 
 let passed = 0;
 const failures = [];
@@ -624,6 +624,7 @@ runProfileTests(check, near);
 runPhase5Tests(check, near);
 runPhase6Tests(check, near);
 runPhase7Tests(check, near);
+await runSaveFileTests(check, near);
 
 // ─── report ───────────────────────────────────────────────────────────────────
 

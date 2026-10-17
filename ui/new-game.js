@@ -12,6 +12,9 @@
 import { REGION, NOMINATIM, SEASON_PROFILES, DIFFICULTY, ATTRIBUTION } from '../config.js';
 import { squareBbox } from '../model/region.js';
 import { getGeocode, putGeocode, regionKey, getRegion, putRegion, listRegions } from '../data/cache.js';
+import { listSaveSlots, loadGame, importSaveFile } from '../model/save.js';
+import { formatMoney } from '../sim/economy.js';
+import { formatDate } from '../sim/clock.js';
 import { STRINGS } from './strings.js';
 
 /** Enforces Nominatim's one-request-per-second limit across the whole session. */
@@ -65,8 +68,10 @@ export async function searchPlace(query) {
  * @param {HTMLElement} root
  * @param {(region: import('../model/region.js').Region) => void} onReady
  *        Called with the imported (or cached, or fixture) region.
+ * @param {{onResume?: (loaded: {game: Object, regionKey: string}) => void}} [options]
+ *        Called with a game loaded from a save or a save file.
  */
-export function mountNewGame(root, onReady) {
+export function mountNewGame(root, onReady, { onResume } = {}) {
   const state = {
     lon: 23.6,
     lat: 37.95,
@@ -85,6 +90,16 @@ export function mountNewGame(root, onReady) {
       <div class="ng-panel">
         <h1>${STRINGS.title}</h1>
         <p class="ng-sub">${STRINGS.newGame.subtitle}</p>
+
+        <div class="ng-continue" id="ng-continue-wrap" hidden>
+          <label class="ng-label">${STRINGS.newGame.continue}</label>
+          <ul class="ng-results" id="ng-continue"></ul>
+        </div>
+        <div class="ng-open">
+          <button type="button" id="ng-open-file">${STRINGS.newGame.openFile}</button>
+          <input type="file" id="ng-file" accept=".otomig,.json,.gz,application/json,application/gzip" hidden />
+          <div class="ng-hint">${STRINGS.newGame.openFileHint}</div>
+        </div>
 
         <label class="ng-label">${STRINGS.newGame.search}</label>
         <form class="ng-search" id="ng-search-form">
@@ -373,6 +388,44 @@ export function mountNewGame(root, onReady) {
     } catch (error) {
       showError(`${STRINGS.newGame.fixtureFailed} ${error.message}`);
     }
+  });
+
+  // ─── Carrying on: saves in this browser, or a save file from anywhere ──────
+  listSaveSlots().then((saves) => {
+    if (!saves.length) return;
+    $('ng-continue-wrap').hidden = false;
+    const list = $('ng-continue');
+    for (const save of saves.slice(0, 8)) {
+      const item = document.createElement('li');
+      const date = save.date
+        ? formatDate({ dayOfMonth: save.date.day, month: save.date.month, year: save.date.year }) : '';
+      item.innerHTML = `<b></b> <span class="ng-muted-inline"></span>`;
+      item.querySelector('b').textContent = save.regionName || STRINGS.newGame.unnamed;
+      item.querySelector('span').textContent = [
+        date,
+        Number.isFinite(save.balance) ? formatMoney(save.balance) : '',
+        save.auto ? STRINGS.newGame.autosave : '',
+      ].filter(Boolean).join(' · ');
+      item.addEventListener('click', async () => {
+        $('ng-error').hidden = true;
+        showProgress(0.5, STRINGS.newGame.loadingSave);
+        const result = await loadGame(save.slot);
+        if (result.error) { showError(STRINGS.saves[result.error] || result.error); return; }
+        onResume?.(result);
+      });
+      list.appendChild(item);
+    }
+  }).catch((error) => console.warn('listing saves failed:', error));
+
+  $('ng-open-file').addEventListener('click', () => $('ng-file').click());
+  $('ng-file').addEventListener('change', async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    $('ng-error').hidden = true;
+    showProgress(0.5, STRINGS.newGame.loadingSave);
+    const result = await importSaveFile(file);
+    if (result.error) { showError(STRINGS.saves[result.error] || result.error); return; }
+    onResume?.(result);
   });
 
   // Offer anything already in the cache.

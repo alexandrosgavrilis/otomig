@@ -11,7 +11,7 @@
  * editing the line underneath it, which a global distance would not.
  */
 
-import { MODES, COSTS } from '../config.js';
+import { MODES, COSTS, VEHICLES } from '../config.js';
 import { stopOrder, hopSeconds, segmentFor } from './routing.js';
 
 let nextVehicleId = 1;
@@ -190,39 +190,118 @@ export function pointAlong(segment, frame, distanceM) {
  * by distance would still bunch vehicles where stops are close together.
  */
 export function respaceVehicles(line) {
-  const byDirection = new Map();
-  for (const vehicle of line.vehicles) {
-    if (!byDirection.has(vehicle.direction)) byDirection.set(vehicle.direction, []);
-    byDirection.get(vehicle.direction).push(vehicle);
-  }
-
-  for (const [direction, vehicles] of byDirection) {
-    const order = stopOrder(line, direction);
-    const hops = [];
-    let total = 0;
-    for (let i = 0; i < order.length - 1; i++) {
-      const seconds = hopSeconds(line, direction, i);
-      hops.push(seconds);
-      total += seconds;
-    }
-    if (total <= 0) continue;
-
-    vehicles.forEach((vehicle, index) => {
-      // Place vehicle k at k/n of the way round the cycle.
-      let offset = (total * index) / vehicles.length;
-      let hop = 0;
-      while (hop < hops.length - 1 && offset >= hops[hop]) {
-        offset -= hops[hop];
-        hop++;
-      }
-      const segment = segmentFor(line, direction, hop);
-      const hopLength = segment?.lengthM ?? 0;
-      const fraction = hops[hop] > 0 ? offset / hops[hop] : 0;
-      vehicle.hop = hop;
-      vehicle.progress = Math.min(hopLength, hopLength * fraction);
-      vehicle.dwellRemaining = 0;
+  for (const group of spacingGroups(line)) {
+    const cycle = cycleOf(line, group.direction);
+    if (cycle.total <= 0) continue;
+    group.vehicles.forEach((vehicle, index) => {
+      // Vehicle k at k/n of the way round the WHOLE cycle — out and back on
+      // an open line. Spreading over the outbound half only, as before Oct 17
+      // 2026, left two buses half an outbound trip apart for ever: departures
+      // a quarter and three quarters of the cycle apart instead of a half.
+      placeAt(vehicle, line, cycle, (cycle.total * index) / group.vehicles.length);
     });
   }
+}
+
+/**
+ * Vehicles that share one cycle and should be spread along it. On an open
+ * line every vehicle runs the same out-and-back cycle; on a loop, each
+ * direction is its own cycle.
+ */
+export function spacingGroups(line) {
+  if (!line.loop) return [{ direction: 0, vehicles: [...line.vehicles] }];
+  const groups = new Map();
+  for (const vehicle of line.vehicles) {
+    if (!groups.has(vehicle.direction)) groups.set(vehicle.direction, []);
+    groups.get(vehicle.direction).push(vehicle);
+  }
+  return [...groups].map(([direction, vehicles]) => ({ direction, vehicles }));
+}
+
+/**
+ * One full cycle as a list of hops in time: out and back on an open line,
+ * once round on a loop. Each hop's seconds include the dwell at the stop it
+ * arrives at, as `hopSeconds` does.
+ */
+export function cycleOf(line, direction = 0) {
+  const hops = [];
+  const directions = line.loop ? [direction] : [0, 1];
+  for (const d of directions) {
+    const order = stopOrder(line, d);
+    for (let i = 0; i < order.length - 1; i++) hops.push({ direction: d, hop: i, seconds: hopSeconds(line, d, i) });
+  }
+  return { hops, total: hops.reduce((sum, h) => sum + h.seconds, 0) };
+}
+
+/**
+ * Where a vehicle is in its cycle, in seconds from the cycle's start. A
+ * vehicle still dwelling — or held — at a stop counts as that much behind.
+ */
+export function phaseOf(vehicle, line, cycle) {
+  let elapsed = 0;
+  for (const h of cycle.hops) {
+    if (h.direction === vehicle.direction && h.hop === vehicle.hop) {
+      const metresPerSecond = (line.cruiseKmh * 1000) / 3600;
+      return elapsed - vehicle.dwellRemaining + vehicle.progress / metresPerSecond;
+    }
+    elapsed += h.seconds;
+  }
+  return 0;
+}
+
+/** Put a vehicle at a phase of its cycle. */
+function placeAt(vehicle, line, cycle, phase) {
+  let offset = phase;
+  let index = 0;
+  while (index < cycle.hops.length - 1 && offset >= cycle.hops[index].seconds) {
+    offset -= cycle.hops[index].seconds;
+    index++;
+  }
+  const { direction, hop, seconds } = cycle.hops[index];
+  const segment = segmentFor(line, direction, hop);
+  const hopLength = segment?.lengthM ?? 0;
+  const fraction = seconds > 0 ? offset / seconds : 0;
+  vehicle.direction = direction;
+  vehicle.hop = hop;
+  vehicle.progress = Math.min(hopLength, hopLength * fraction);
+  vehicle.dwellRemaining = 0;
+}
+
+/**
+ * Keep a line's vehicles evenly spread (line.keepSpacing). A vehicle that has
+ * caught up with the one ahead waits at the stop it has just reached — the
+ * dispatcher's oldest trick — for part of the shortfall, so the gaps settle
+ * over a few stops rather than overshooting. Only ever holds, never hurries:
+ * a real bus cannot make up time it does not have.
+ *
+ * Call for vehicles that have just arrived at a stop.
+ * @returns {number} sim seconds of holding added
+ */
+export function holdForSpacing(vehicle, line) {
+  if (!line.keepSpacing || line.vehicles.length < 2) return 0;
+  const group = spacingGroups(line).find((g) => g.vehicles.includes(vehicle));
+  if (!group || group.vehicles.length < 2) return 0;
+  const cycle = cycleOf(line, group.direction);
+  if (cycle.total <= 0) return 0;
+
+  const mine = phaseOf(vehicle, line, cycle);
+  const myIndex = group.vehicles.indexOf(vehicle);
+  let gapAhead = Infinity;
+  group.vehicles.forEach((other, index) => {
+    if (other === vehicle) return;
+    let gap = ((phaseOf(other, line, cycle) - mine) % cycle.total + cycle.total) % cycle.total;
+    // Exactly level — which bunching produces, since vehicles reaching a stop
+    // in the same tick all stand on it — the one listed first is ahead.
+    // Without this tie-break a bunch that had fully merged was never split.
+    if (gap === 0) gap = index < myIndex ? 0 : cycle.total;
+    if (gap < gapAhead) gapAhead = gap;
+  });
+  const target = cycle.total / group.vehicles.length;
+  if (!Number.isFinite(gapAhead) || gapAhead >= target * (1 - VEHICLES.SPACING_TOLERANCE)) return 0;
+  const hold = Math.min(VEHICLES.SPACING_MAX_HOLD_S, (target - gapAhead) * VEHICLES.SPACING_HOLD_SHARE);
+  vehicle.dwellRemaining += hold;
+  vehicle.held = (vehicle.held ?? 0) + hold;
+  return hold;
 }
 
 /**

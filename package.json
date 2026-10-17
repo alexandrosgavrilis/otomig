@@ -5,7 +5,7 @@
   "description": "Open Transit On Map Info Game — a transit sandbox on a real 15x15 km piece of the world",
   "type": "module",
   "scripts": {
-    "start": "python3 -m http.server 8000",
+    "start": "node tools/serve.js 8000",
     "fixture": "node fixtures/make-fixture.js",
     "test": "node tests/run.js",
     "test:browser": "node tests/browser.js",

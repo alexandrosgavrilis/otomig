@@ -53,6 +53,8 @@ Everything is verified against the fixture, which needs no network. The assembly
 npm start      # then open http://localhost:8000
 ```
 
+**`npm start` is [tools/serve.js](tools/serve.js), not Python's server, since Oct 17 2026.** `python3 -m http.server` sends no cache headers, so a browser could keep an old module after an update and run a mix of old and new files; Alex's import failed with "ways is not iterable" when a new worker met a cached old `data/overpass.js`. The Node server sends `Cache-Control: no-cache` (unchanged files still return a quick 304), listens on every interface like Python's did so a tablet on the network can play, and is what the browser suite, the live test and `tools/import-region.js` now use. After pulling an update into a browser that last ran the old server, hard-refresh once (Ctrl+Shift+R).
+
 **Never open `index.html` as a `file://` URL.** `User-Agent` is a forbidden header name, so a browser silently ignores any attempt to set it; we identify to the OSM services via `Referer`, which is only sent over `http://`.
 
 **Done, Oct 10 2026 — and it found two bugs that the fixture could never have caught.** Phase 0 recorded that the sandbox could not reach the OSM endpoints, which was false, so this is automated now: `npm run test:live` drives a real import of central Athens through Chromium. 24 assertions. See §2.
@@ -86,8 +88,8 @@ Both would have reached Alex as a broken screen, and both were invisible to 272 
 ## 2. Testing
 
 ```bash
-npm test                            # 695 logic assertions, plain Node, no dependencies
-npm run test:browser                # 158 assertions in real Chromium via Playwright
+npm test                            # 716 logic assertions, plain Node, no dependencies
+npm run test:browser                # 169 assertions in real Chromium via Playwright
 npm run test:browser -- --headed    # ...and watch it
 npm run test:live                   # 24 assertions against a REAL import — hits live OSM services
 npm run test:live -- --km 5         # ...at a given size (default 5, the slider minimum)
@@ -321,7 +323,7 @@ An escape hatch, not a default. [extract.bbbike.org](https://extract.bbbike.org)
 
 ## 6. What works
 
-Verified by `npm test` (695) and `npm run test:browser` (158). Phases 3 to 6 have their own sections: §9, §10, §11 and §14.
+Verified by `npm test` (716) and `npm run test:browser` (169). Phases 3 to 6 have their own sections: §9, §10, §11 and §14.
 
 **Phase 1.** `LocalFrame` and the bbox/chunk maths; terrain height grid with bilinear interpolation (exact on a ramp); 200 m demand grid; 10 m occupancy bitset; Overpass parsing with road-class filtering, abandoned-rail rejection, chunk-overlap de-duplication and shared-node collapsing; Terrarium decode and tile resampling; marching-squares contours and sea polygons; the base-map GeoJSON. In the browser: the new-game screen, search firing no request while typing, MapLibre rendering real pixels, layer toggles, zoom revealing minor roads, `maxBounds`, IndexedDB round-trips, the module worker booting.
 
@@ -361,7 +363,7 @@ The fixture is a 6×6 km synthetic coast: a bay in the south-west, a lake, a riv
 - **A cost preview follows the cursor only while dragging a segment**, not while placing stops. The drag is the gesture that can spend tens of millions without placing anything, so it was the one that needed it most; stop placement still gives no running total.
 - **Water from multipolygon relations is not imported.** Only `way[natural=water]`. Big lakes and most coastal water in OSM are relations, so a region with one will be missing it. The sea mask comes from elevation and is unaffected.
 - **A land island inside a sea area is painted as sea** — the tracer returns it as its own ring, not a hole. Rare; fix is ring-containment tests.
-- **Save slots are one slot** in the UI. `model/save.js` supports any number.
+- ~~**Save slots are one slot** in the UI.~~ One save and one autosave per region, and save files that carry the map (§20).
 - **`revalidateDots` releases passengers aboard a deleted line** at the next stop rather than somewhere sensible.
 - **Nominatim's `population` extratag is often absent**, and the new-game screen has no "type the population" field, which the spec allows for.
 - ~~**One-way roads are ignored**, per the spec's v1 decision.~~ Obeyed since Oct 17 (§18).
@@ -904,3 +906,39 @@ Fourteen items, all done. Asserted in [tests/phase7.js](tests/phase7.js) (`#1`�
 - **Dots still appear at random times**, even for a timetabled line (§16).
 - **The fixture has no coastline**, so the browser suite runs the elevation fallback; the OSM path is covered by synthetic coasts in the logic suite and by Patras.
 - **A tram on a one-way street pays for track both ways** where the way back runs elsewhere — right for a tram, which needs rails on both streets.
+
+---
+
+## 19. Names, and keeping vehicles spread — Oct 17 2026
+
+Alex's requests, all in [tests/phase7.js](tests/phase7.js) and, for the panel, [tests/browser.js](tests/browser.js):
+
+- **Lines have names.** By default "first stop to last stop", by the stops' street names; when both ends share a name (a loop, or a line along one road) it is "Name – Bus" (Tram, Metro, Train). Renamed in the line panel; clearing the field, or typing the automatic name back, returns to automatic. `Network.lineLabel`.
+- **Stops sharing a street are numbered** in the order they were built — "Ermou 1", "Ermou 2" — within a mode. A stop the player renamed keeps its name and drops out of the numbering. The street name is kept as `stop.name` and the player's as `stop.customName`, so renaming no longer overwrites what the stop was named after. `Network.stopLabel`. Old saves treat their stored name as the street name.
+- **Edit stops is now "Line / Stops".** Only the label; the tool id is still `editStops`.
+- **Keeping vehicles evenly spread** (`line.keepSpacing`, on by default, all modes). A vehicle that has caught up with the one ahead (closer than 90% of the even gap, by time round the cycle) waits at the stop it has just reached for half the shortfall, at most 90 s — even at a stop it would otherwise skip. `holdForSpacing` in [sim/vehicles.js](sim/vehicles.js). It only ever holds; a bus cannot make up time it does not have.
+- **Skip empty stops is per line** (`line.skipEmptyStops`), on by default for buses and trams, not offered for metro and train.
+
+**A spacing bug found on the way, there since Phase 2:** on an open line, `respaceVehicles` spread vehicles over the *outbound half* of the cycle only, so two buses left the first stop a quarter and three quarters of the cycle apart instead of half and half — built-in bunching from the moment a bus was added. Vehicles are now placed by phase round the whole out-and-back cycle (`cycleOf`, `phaseOf`), half of them starting on the way back.
+
+**And one in the hold itself:** vehicles that reach a stop in the same tick all stand exactly on it, so a fully merged bunch had no vehicle "behind" another and was never split. Level vehicles now count the one listed first as ahead. The test that caught it bunches three buses on a line nobody rides and checks they spread out with the rule on and stay bunched with it off.
+
+---
+
+## 20. Saving that works, and save files that carry the map — Oct 17 2026
+
+Alex: "it didn't store my network and money … we need a way to save both the region locally to prevent needless re-imports and the network, so people can play again even on another browser/device if they have the file."
+
+**The bug: Load never loaded anything, since Phase 2.** `startGame(result.game.region)` was handed only the loaded game's region and built a fresh `Game` on it, so Load and Import file always showed an empty network and the starting money. The logic suite proved `Game.fromJSON` restores everything; no test ever clicked Load. `startGame(region, loaded)` now takes the loaded game, and the browser suite clicks Save, changes the network, clicks Load and compares.
+
+**A second bug behind it:** every load built a new game screen without stopping the old one, so the old frame loop, keyboard handler and monthly autosave kept running — Space paused twice (doing nothing), and the abandoned game could overwrite the autosave. `startGame` now shuts the previous screen down (an `AbortController` for the listeners, the frame loop stops, the map is removed).
+
+**What saves now:**
+
+- **In the browser**: one save and one autosave **per region** (`game:<key>`, `auto:<key>`) — before, one slot was shared by every region. A save holds the game and refers to the region by key; saving puts the region in the cache if it is not there (the test region never was, so its saves could not load). Load in the game takes the region's newest save.
+- **The start screen** lists saves under **Continue** (region, in-game date, balance, autosave or not) and has **Open save file**, so a new device can start from a file before importing anything.
+- **Save to file** (was "Export file") writes **one file with the game and its whole region**, `format: 'otomig-save', version: 2`, gzip-compressed where the browser can (`CompressionStream`) as `.otomig` — about a seventh of the JSON. **Opening it** rebuilds the game on the file's own region, exactly as saved, and caches that region if the browser has none under its key; one already cached is left alone, since it may be a newer import and other saves may rely on it. Old game-only files (`version: 1`) still open where their region is cached, and say what to do where it is not.
+
+Asserted in the logic suite (a gzipped file round-trips with no storage at all: network, money, loans, calendar, line names) and in the browser: Save then Load restores; after a load Space pauses once; a downloaded file opens in a **fresh browser context with nothing stored**, with the network and money intact and its map cached there; and that browser's start screen then offers Continue.
+
+**Known gaps:** saves have no names of their own and there is no way to delete one; a region refreshed by a newer import (`REGION.IMPORT_VERSION`) under the same key is what later in-browser saves load against — a save file is the way to keep a game on its exact original map.

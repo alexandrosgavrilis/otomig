@@ -15,7 +15,7 @@
  */
 
 import { PATIENCE, DIFFICULTY, ROUTING, VEHICLES } from '../config.js';
-import { secondsToStop } from './vehicles.js';
+import { secondsToStop, holdForSpacing } from './vehicles.js';
 
 let nextDotId = 1;
 
@@ -72,13 +72,17 @@ export function stepPassengers(game, simSeconds) {
       boardHere(game, line, vehicle, stop, stats);
       const nobody = stats.arrived + stats.boarded + stats.transferred === before;
 
-      // A request stop: nobody off, nobody on, so a bus or tram drives on.
-      // Not at a line end, where the vehicle turns round and lays over.
+      // A request stop: nobody off, nobody on, so a bus or tram drives on —
+      // if its line skips empty stops. Not at a line end, where the vehicle
+      // turns round and lays over.
       const lineEnd = !line.loop && vehicle.hop === 0;
-      if (nobody && !lineEnd && VEHICLES.SKIP_EMPTY_STOPS.includes(line.mode)) {
+      if (nobody && !lineEnd && line.skipEmptyStops
+          && VEHICLES.SKIP_EMPTY_STOPS.includes(line.mode)) {
         vehicle.dwellRemaining = 0;
         vehicle.skipped = (vehicle.skipped ?? 0) + 1;
       }
+      // Too close behind the vehicle ahead: wait here, even at an empty stop.
+      holdForSpacing(vehicle, line);
     }
   }
 

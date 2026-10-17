@@ -787,6 +787,7 @@ export class Game {
       stops: [...this.network.stops.values()].map((stop) => ({
         id: stop.id, mode: stop.mode, lon: stop.lon, lat: stop.lat,
         node: stop.node, name: stop.name, lines: stop.lines, structure: stop.structure,
+        ...(stop.customName ? { customName: stop.customName } : {}),
         ...(stop.intercity || stop.intercityCalls ? {
           intercity: stop.intercity, intercityTimer: stop.intercityTimer,
           intercityCarry: stop.intercityCarry, intercityCalls: stop.intercityCalls,
@@ -795,6 +796,9 @@ export class Game {
       lines: [...this.network.lines.values()].map((line) => ({
         id: line.id, mode: line.mode, color: line.color, stops: line.stops,
         loop: line.loop,
+        name: line.name,
+        skipEmptyStops: line.skipEmptyStops,
+        keepSpacing: line.keepSpacing,
         // Segments are derived and not stored, but the drags that shape them
         // are the player's own decisions and have to survive a reload.
         vias: [...line.vias.entries()],
@@ -842,6 +846,7 @@ export class Game {
         saved.structure);
       stop.id = saved.id;
       stop.lines = saved.lines;
+      stop.customName = saved.customName || null;
       stop.intercity = Boolean(saved.intercity);
       stop.intercityTimer = saved.intercityTimer || 0;
       stop.intercityCarry = saved.intercityCarry || 0;
@@ -854,6 +859,10 @@ export class Game {
       line.id = saved.id;
       line.stops = saved.stops;
       line.loop = saved.loop;
+      line.name = saved.name || null;
+      // Saves from before these switches existed get the defaults.
+      if (saved.skipEmptyStops !== undefined) line.skipEmptyStops = saved.skipEmptyStops;
+      if (saved.keepSpacing !== undefined) line.keepSpacing = saved.keepSpacing;
       // Vias must be restored BEFORE the segments are rebuilt, or every
       // dragged segment silently snaps back to its default road route.
       line.vias = new Map(saved.vias || []);

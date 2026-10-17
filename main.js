@@ -17,7 +17,9 @@ import {
 } from './render/overlay.js';
 import { mountProfile } from './render/profile.js';
 import { Game } from './sim/game.js';
-import { autosave, saveGame, loadGame, exportSaveFile, importSaveFile } from './model/save.js';
+import {
+  autosave, saveGame, loadGame, newestSaveOf, exportSaveFile, importSaveFile,
+} from './model/save.js';
 import { mountNewGame } from './ui/new-game.js';
 import { mountHud, mountLegend } from './ui/hud.js';
 import { mountToolbar, wireMapInteraction } from './ui/toolbar.js';
@@ -27,15 +29,35 @@ import { applyOverrides, loadSaved } from './sim/tuning.js';
 import { STRINGS } from './ui/strings.js';
 
 const app = document.getElementById('app');
-mountNewGame(app, (region) => startGame(region));
+mountNewGame(app, (region) => startGame(region), {
+  // A save chosen on the start screen, or a save file opened there.
+  onResume: ({ game }) => startGame(game.region, game),
+});
 
-/** @param {import('./model/region.js').Region} region */
-function startGame(region) {
+/**
+ * Show the game screen: a new game on a region, or a loaded one.
+ *
+ * Until Oct 17 2026 Load and Import file passed only the loaded game's REGION
+ * here, and a fresh game was made on it — so loading always showed an empty
+ * network and the starting money, and nothing ever seemed to have been saved.
+ *
+ * @param {import('./model/region.js').Region} region
+ * @param {Game} [loaded] a game rebuilt from a save
+ */
+/** Shuts the running game screen down, before another replaces it. */
+let stopCurrent = null;
+
+function startGame(region, loaded = null) {
+  // A load replaces the screen. Without stopping the old one, its frame loop,
+  // monthly autosave and keyboard handlers all kept running: Space paused
+  // twice (doing nothing) and the abandoned game could overwrite the autosave.
+  stopCurrent?.();
+  const shutdown = new AbortController();
   reviveRegion(region);
   // Play-testing overrides from the tuning panel, kept from the last session.
   // Applied before the game exists, so its first demand table uses them.
   applyOverrides(null, loadSaved());
-  const game = new Game(region);
+  const game = loaded ?? new Game(region);
   const regionKey = makeRegionKey(region.meta.center[0], region.meta.center[1], region.meta.sizeKm);
 
   app.innerHTML = `
@@ -54,7 +76,7 @@ function startGame(region) {
         <button type="button" id="s-load">${STRINGS.saves.load}</button>
         <button type="button" id="s-export">${STRINGS.saves.export}</button>
         <button type="button" id="s-import">${STRINGS.saves.import}</button>
-        <input type="file" id="s-file" accept="application/json" hidden />
+        <input type="file" id="s-file" accept=".otomig,.json,.gz,application/json,application/gzip" hidden />
       </div>
       <div class="attribution">${ATTRIBUTION.osm} · ${ATTRIBUTION.terrain}${
         region.meta.buildingSources?.overture > 0 ? ` · ${ATTRIBUTION.overture}` : ''}</div>
@@ -115,7 +137,7 @@ function startGame(region) {
   });
 
   wireSaveButtons(game, regionKey, panels, hud);
-  wireKeyboard(game, toolbar, panels, hud, tuning, (message) => showFeedback(message));
+  wireKeyboard(game, toolbar, panels, hud, tuning, (message) => showFeedback(message), shutdown.signal);
 
   // Keep the heat map honest as coverage changes.
   let lastHeatVersion = -1;
@@ -150,12 +172,21 @@ function startGame(region) {
   // ─── The loop ─────────────────────────────────────────────────────────────
   let previous = performance.now();
   function frame(now) {
+    if (shutdown.signal.aborted) return;
     const realSeconds = Math.min(0.25, (now - previous) / 1000);
     previous = now;
     game.advance(realSeconds);
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
+
+  stopCurrent = () => {
+    shutdown.abort();
+    // The debugging handle pointed at this game; it must not outlive it.
+    if (window.otomig?.game === game) window.otomig = null;
+    game.listeners.clear();
+    map.remove();
+  };
 }
 
 /**
@@ -164,7 +195,7 @@ function startGame(region) {
  * waypoint instead — the only way to reroute around something blocking it
  * without starting again. ` opens the play-testing panel.
  */
-function wireKeyboard(game, toolbar, panels, hud, tuning, feedback) {
+function wireKeyboard(game, toolbar, panels, hud, tuning, feedback, signal) {
   window.addEventListener('keydown', (event) => {
     if (event.target instanceof HTMLInputElement) return;
     if (event.target instanceof HTMLTextAreaElement) return;
@@ -203,7 +234,7 @@ function wireKeyboard(game, toolbar, panels, hud, tuning, feedback) {
         hud.update();
       } else if (game.draft) game.finishDraft();
     }
-  });
+  }, { signal });
 }
 
 function wireSaveButtons(game, regionKey, panels, hud) {
@@ -213,27 +244,38 @@ function wireSaveButtons(game, regionKey, panels, hud) {
   $('s-finances').addEventListener('click', () => panels.showFinances());
 
   $('s-save').addEventListener('click', async () => {
-    await saveGame(game, regionKey, 'slot1');
-    toast(STRINGS.saves.saved);
+    try {
+      await saveGame(game, regionKey);
+      toast(STRINGS.saves.saved);
+    } catch (error) {
+      toast(`${STRINGS.saves.failed} ${error.message}`);
+    }
   });
 
+  // Load this region's newest save, manual or auto.
   $('s-load').addEventListener('click', async () => {
-    const result = await loadGame('slot1');
+    const slot = await newestSaveOf(regionKey);
+    if (!slot) { toast(STRINGS.saves.noSave); return; }
+    const result = await loadGame(slot);
     if (result.error) { toast(STRINGS.saves[result.error] || result.error); return; }
     // Reloading rebuilds the whole screen, which is simpler and less
     // error-prone than swapping a live Game out from under the renderer.
-    startGame(result.game.region);
+    startGame(result.game.region, result.game);
     toast(STRINGS.saves.loaded);
   });
 
-  $('s-export').addEventListener('click', () => exportSaveFile(game, regionKey));
+  $('s-export').addEventListener('click', async () => {
+    toast(STRINGS.saves.exporting);
+    await exportSaveFile(game, regionKey);
+  });
   $('s-import').addEventListener('click', () => $('s-file').click());
   $('s-file').addEventListener('change', async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
     const result = await importSaveFile(file);
     if (result.error) { toast(STRINGS.saves[result.error] || result.error); return; }
-    startGame(result.game.region);
+    startGame(result.game.region, result.game);
+    toast(STRINGS.saves.loaded);
   });
 }
 

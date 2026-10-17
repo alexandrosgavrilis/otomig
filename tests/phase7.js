@@ -22,7 +22,7 @@ import { RoadIndex, mayTravel } from '../build/road-routing.js';
 import { roadProximity, processBuildings } from '../model/population.js';
 import { isStale } from '../ui/new-game.js';
 import { Game } from '../sim/game.js';
-import { Vehicle } from '../sim/vehicles.js';
+import { Vehicle, cycleOf, phaseOf } from '../sim/vehicles.js';
 import { placeDot, patienceFor } from '../sim/passengers.js';
 import { stopOrder, hopSeconds } from '../sim/routing.js';
 import { Clock } from '../sim/clock.js';
@@ -184,6 +184,7 @@ export function runPhase7Tests(check, near) {
 
   runPlaytestFixes(check, near);
   runImportFixes(check, near);
+  runNamesAndSpacing(check, near);
 
   // ─── Ferry groundwork ───────────────────────────────────────────────────
   {
@@ -537,4 +538,126 @@ function runImportFixes(check, near) {
   check('a region without the current import version is stale',
     isStale({ meta: {} }) && isStale({ meta: { importVersion: REGION.IMPORT_VERSION - 1 } })
     && !isStale({ meta: { importVersion: REGION.IMPORT_VERSION } }));
+}
+
+/** Line names, numbered stops, and keeping vehicles evenly spread (HANDOFF §19). */
+function runNamesAndSpacing(check, near) {
+  const words = { to: 'to', mode: { bus: 'Bus', tram: 'Tram', metro: 'Metro', train: 'Train' } };
+
+  // ─── Stop names are numbered along a shared street ────────────────────
+  {
+    const game = newGame('creative');
+    const line = buildLine(game, [[1600, 2800], [2600, 2800], [3400, 2800]]);
+    const [a, b, c] = line.stops.map((id) => game.network.stops.get(id));
+    a.name = 'Ermou'; b.name = 'Ermou'; c.name = 'Athinas';
+    const label = (stop) => game.network.stopLabel(stop);
+    check('stops sharing a street name are numbered in the order they were built',
+      label(a) === 'Ermou 1' && label(b) === 'Ermou 2' && label(c) === 'Athinas',
+      [a, b, c].map(label).join(' / '));
+    b.customName = 'Monastiraki';
+    check('…a renamed stop keeps its own name, and the other loses its number',
+      label(b) === 'Monastiraki' && label(a) === 'Ermou');
+    b.customName = null;
+
+    // ─── Line names ──────────────────────────────────────────────────────
+    check('a line is named after its first and last stops by default',
+      game.network.lineLabel(line, words) === 'Ermou to Athinas', game.network.lineLabel(line, words));
+    c.name = 'Ermou';
+    check('…by street name, not number — and "Name – Mode" when both ends share it',
+      game.network.lineLabel(line, words) === 'Ermou – Bus', game.network.lineLabel(line, words));
+    line.name = 'The Red Line';
+    check('a renamed line keeps its name', game.network.lineLabel(line, words) === 'The Red Line');
+
+    const restored = Game.fromJSON(JSON.parse(JSON.stringify(game.toJSON('k'))), game.region);
+    a.customName = null;
+    check('a reload keeps line names and stop names',
+      restored.network.lines.get(line.id).name === 'The Red Line'
+      && restored.network.stops.get(b.id).name === 'Ermou');
+  }
+  {
+    const game = newGame('creative');
+    game.startLine('bus');
+    for (const [x, y] of [[1600, 2800], [2600, 2800], [2600, 3600], [1600, 2800]]) {
+      game.extendDraft(...at(game, x, y));
+    }
+    const loop = game.finishDraft();
+    const first = game.network.stops.get(loop.stops[0]);
+    check('a loop is named after where it starts, and its mode',
+      !loop.loop || game.network.lineLabel(loop, words) === `${first.name} – Bus`,
+      game.network.lineLabel(loop, words));
+  }
+
+  // ─── Keeping vehicles evenly spread ───────────────────────────────────
+  const bunchedRun = (keepSpacing) => {
+    const game = newGame('creative');
+    const line = buildLine(game, [[1000, 2800], [1800, 2800], [2600, 2800], [3400, 2800], [4200, 2800]], 3);
+    line.keepSpacing = keepSpacing;
+    // Nobody travels, so every stop is skipped and nothing else separates them.
+    setTunable(game, 'DEMAND.TRIPS_PER_RESIDENT', 0);
+    line.vehicles.forEach((vehicle, i) => {
+      vehicle.direction = 0; vehicle.hop = 0; vehicle.progress = 5 * i; vehicle.dwellRemaining = 0;
+    });
+    run(game, 150);
+    resetAll(game);
+    const cycle = cycleOf(line);
+    const phases = line.vehicles.map((v) => phaseOf(v, line, cycle)).sort((p, q) => p - q);
+    const gaps = phases.map((p, i) => ((phases[(i + 1) % phases.length] - p) + cycle.total) % cycle.total);
+    return { smallest: Math.min(...gaps) / (cycle.total / phases.length), held: line.vehicles.reduce((t, v) => t + (v.held ?? 0), 0) };
+  };
+  const spread = bunchedRun(true);
+  const bunched = bunchedRun(false);
+  check('with even spacing on, a bunched line spreads itself out by holding at stops',
+    spread.smallest > 0.6 && spread.held > 0, JSON.stringify(spread));
+  check('…and with it off, the bunch stays bunched', bunched.smallest < 0.1 && bunched.held === 0,
+    JSON.stringify(bunched));
+
+  {
+    const game = newGame('creative');
+    const line = buildLine(game, [[1600, 2800], [2200, 2800], [2800, 2800], [3400, 2800]], 1);
+    line.skipEmptyStops = false;
+    setTunable(game, 'DEMAND.TRIPS_PER_RESIDENT', 0);
+    run(game, 40);
+    resetAll(game);
+    check('with Skip empty stops off, a bus stops everywhere', !line.vehicles[0].skipped);
+    check('lines default to keeping even spacing, and buses and trams to skipping empty stops',
+      line.keepSpacing && new (line.constructor)('bus', '#000').skipEmptyStops
+      && !new (line.constructor)('train', '#000').skipEmptyStops);
+  }
+}
+
+/** Save files that carry the whole game, map included (HANDOFF §20). */
+export async function runSaveFileTests(check, near) {
+  const { encodeSaveFile, decodeSaveFile, restore, bundle, FILE_FORMAT } = await import('../model/save.js');
+  const game = newGame('normal');
+  const line = buildLine(game, [[1600, 2800], [2600, 2800], [3400, 2800]], 2);
+  line.name = 'Πάτρα Express';
+  game.economy.takeLoan('small');
+  run(game, 30);
+
+  const { blob, extension } = await encodeSaveFile(game, 'k');
+  const plain = JSON.stringify(bundle(game, 'k')).length;
+  check('a save file is gzip-compressed', extension === 'otomig' && blob.size < plain / 3,
+    `${blob.size} bytes against ${plain} as JSON`);
+  const data = await decodeSaveFile(blob);
+  check('…and carries the game and its whole map',
+    data.format === FILE_FORMAT && data.game && data.region?.roads?.edges?.length === game.region.roads.edges.length);
+
+  // Restored with no cache at all — another device — from the file alone.
+  const restored = await restore(data);
+  const again = restored.game;
+  check('a save file opens with nothing cached, on its own map', Boolean(again),
+    JSON.stringify(restored.error));
+  check('…with the network as it was', again.network.lines.size === game.network.lines.size
+    && again.network.stops.size === game.network.stops.size
+    && again.network.lines.get(line.id).name === 'Πάτρα Express');
+  near('…the money as it was', again.economy.balance, game.economy.balance, 1e-6);
+  check('…the loans and the calendar as they were',
+    again.economy.loanIn('small')?.outstanding === game.economy.loanIn('small')?.outstanding
+    && again.clock.days === game.clock.days);
+
+  const plainFile = await decodeSaveFile(new Blob([JSON.stringify(data)]));
+  check('an uncompressed save file opens too', plainFile.format === FILE_FORMAT);
+  check('a save from before files carried their map says where to find it',
+    (await restore({ ...game.toJSON('nowhere') })).error === 'regionMissing');
+  check('anything else is refused as not a save', (await restore({ hello: 1 })).error === 'badFile');
 }

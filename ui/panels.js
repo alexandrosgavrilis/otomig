@@ -19,7 +19,7 @@
 import { STRINGS } from './strings.js';
 import { formatMoney, CATEGORIES } from '../sim/economy.js';
 import { fareFactor } from '../sim/demand.js';
-import { COSTS, MODES, INCOME, LOANS, INTERCITY } from '../config.js';
+import { COSTS, MODES, INCOME, LOANS, INTERCITY, VEHICLES } from '../config.js';
 
 export function mountPanels(root, game, { onChange }) {
   const container = document.createElement('div');
@@ -152,6 +152,22 @@ export function mountPanels(root, game, { onChange }) {
         game.bulldoze(selection);
         clear(); onChange?.();
       });
+      container.querySelector('[data-act="keep-spacing"]')?.addEventListener('click', () => {
+        selection.keepSpacing = !selection.keepSpacing;
+        render(); onChange?.();
+      });
+      container.querySelector('[data-act="skip-stops"]')?.addEventListener('click', () => {
+        selection.skipEmptyStops = !selection.skipEmptyStops;
+        render(); onChange?.();
+      });
+      const renameLine = container.querySelector('[data-act="rename-line"]');
+      renameLine?.addEventListener('change', () => {
+        // Empty, or the automatic name typed back in, returns to automatic.
+        const value = renameLine.value.trim();
+        selection.name = null;
+        selection.name = value && value !== lineLabel(game, selection) ? value : null;
+        render(); onChange?.();
+      });
       for (const swatch of container.querySelectorAll('[data-color]')) {
         swatch.addEventListener('click', () => {
           selection.color = swatch.dataset.color;
@@ -169,8 +185,10 @@ export function mountPanels(root, game, { onChange }) {
       });
       const rename = container.querySelector('[data-act="rename"]');
       rename?.addEventListener('change', () => {
-        selection.name = rename.value.trim() || selection.name;
-        onChange?.();
+        const value = rename.value.trim();
+        selection.customName = null;
+        selection.customName = value && value !== game.network.stopLabel(selection) ? value : null;
+        render(); onChange?.();
       });
     }
   }
@@ -294,6 +312,9 @@ function lineHtml(game, line) {
       <button type="button" data-act="close" class="icon">×</button>
     </header>
 
+    <input type="text" data-act="rename-line" value="${escapeHtml(lineLabel(game, line))}"
+      aria-label="${STRINGS.panel.lineName}" />
+
     <div class="swatches">
       ${['#E4463C', '#2C7BD6', '#3FA64B', '#F0A52E', '#8E54A8', '#19A6A6',
          '#D9478C', '#6B4F3A', '#5A6B8C', '#9BBF30', '#E0742E', '#3C3C3C']
@@ -326,6 +347,17 @@ function lineHtml(game, line) {
         <span>${Math.round(line.ridersPerDay).toLocaleString()}</span></div>
     </div>
 
+    <div class="rows">
+      <span class="section">${STRINGS.panel.rules}</span>
+      <div class="row" title="${STRINGS.panel.keepSpacingHint}"><span>${STRINGS.panel.keepSpacing}</span>
+        <button type="button" data-act="keep-spacing" class="${line.keepSpacing ? 'on' : ''}">
+          ${line.keepSpacing ? STRINGS.panel.on : STRINGS.panel.off}</button></div>
+      ${VEHICLES.SKIP_EMPTY_STOPS.includes(line.mode) ? `
+        <div class="row" title="${STRINGS.panel.skipStopsHint}"><span>${STRINGS.panel.skipStops}</span>
+          <button type="button" data-act="skip-stops" class="${line.skipEmptyStops ? 'on' : ''}">
+            ${line.skipEmptyStops ? STRINGS.panel.on : STRINGS.panel.off}</button></div>` : ''}
+    </div>
+
     <button type="button" data-act="delete" class="danger">${STRINGS.panel.deleteLine}</button>
   `;
 }
@@ -349,7 +381,8 @@ function stopHtml(game, stop) {
       <button type="button" data-act="close" class="icon">×</button>
     </header>
 
-    <input type="text" data-act="rename" value="${escapeHtml(stop.name)}" />
+    <input type="text" data-act="rename" value="${escapeHtml(game.network.stopLabel(stop))}"
+      aria-label="${STRINGS.panel.stopName}" />
 
     <div class="rows">
       <div class="row" title="${STRINGS.clocks.live}"><span>${STRINGS.panel.waiting}</span>
@@ -384,7 +417,8 @@ function stopHtml(game, stop) {
 
     <div class="lines-served">
       ${lines.length === 0 ? `<span class="muted">${STRINGS.panel.noLines}</span>`
-        : lines.map((line) => `<span class="chip" style="background:${line.color}"></span>`).join('')}
+        : lines.map((line) => `<span class="chip" style="background:${line.color}"
+            title="${escapeHtml(lineLabel(game, line))}"></span>`).join('')}
     </div>
 
     <button type="button" data-act="delete" class="danger">${STRINGS.panel.deleteStop}</button>
@@ -528,9 +562,19 @@ function flowsHtml(game, stop) {
       <span class="section">${STRINGS.panel.topFlows}</span>
       ${flows.length === 0 ? `<span class="muted">${STRINGS.panel.noFlows}</span>`
         : flows.map((flow) => `
-          <div class="row"><span>${escapeHtml(game.network.stops.get(flow.other)?.name ?? '?')}</span>
+          <div class="row"><span>${escapeHtml(labelOf(game, flow.other))}</span>
             <span>${Math.round(flow.perDay).toLocaleString()}${STRINGS.panel.perDay}</span></div>`).join('')}
     </div>`;
+}
+
+/** A line's name as shown — the player's, or the automatic one. */
+function lineLabel(game, line) {
+  return game.network.lineLabel(line, { to: STRINGS.panel.to, mode: STRINGS.toolbar });
+}
+
+function labelOf(game, stopId) {
+  const stop = game.network.stops.get(stopId);
+  return stop ? game.network.stopLabel(stop) : '?';
 }
 
 function escapeHtml(text) {

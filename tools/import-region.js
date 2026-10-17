@@ -42,7 +42,7 @@ const PORT = 4003;
 const BASE = `http://localhost:${PORT}`;
 const TIMEOUT_MS = 15 * 60 * 1000;
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: ROOT, stdio: 'ignore' });
+const server = spawn(process.execPath, [join(ROOT, 'tools', 'serve.js'), String(PORT)], { cwd: ROOT, stdio: 'ignore' });
 for (let i = 0; i < 50; i++) {
   try { if ((await fetch(BASE)).ok) break; } catch { /* not up yet */ }
   await new Promise((resolve) => setTimeout(resolve, 100));

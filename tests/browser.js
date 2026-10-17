@@ -32,7 +32,7 @@ function check(name, condition, detail = '') {
 
 /** Serve the project on PORT and wait until it answers. */
 async function serve() {
-  const server = spawn('python3', ['-m', 'http.server', String(PORT)],
+  const server = spawn(process.execPath, [join(ROOT, 'tools', 'serve.js'), String(PORT)],
     { cwd: ROOT, stdio: 'ignore' });
   for (let i = 0; i < 50; i++) {
     try {
@@ -580,7 +580,7 @@ try {
 
   // Save and load round trip through IndexedDB.
   const roundTrip = await page.evaluate(async () => {
-    const { saveGame, loadGame } = await import('/model/save.js');
+    const { saveGame, loadGame, manualSlot } = await import('/model/save.js');
     const game = window.otomig.game;
     const key = 'browser-test-region';
     // The save references a region by key, so the region must be cached first.
@@ -589,8 +589,8 @@ try {
       ...game.region,
       occupancy: { ...game.region.occupancy, bits: Array.from(game.region.occupancy.bits) },
     })));
-    await saveGame(game, key, 'browser-test');
-    const result = await loadGame('browser-test');
+    await saveGame(game, key);
+    const result = await loadGame(manualSlot(key));
     if (result.error) return { error: result.error };
     return {
       stops: result.game.network.stops.size,
@@ -1303,6 +1303,31 @@ try {
       JSON.stringify({ centreBefore, ...swiped }));
     await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false });
 
+    // The line panel: its name, and the two running rules.
+    check('Edit stops is now labelled Line / Stops', await page.evaluate(() =>
+      document.querySelector('#tb-tools button[data-tool="editStops"]')?.textContent.trim()) === 'Line / Stops');
+    await page.evaluate(() => {
+      const game = window.otomig.game;
+      game.selection = [...game.network.lines.values()].filter((l) => l.mode === 'bus').at(-1);
+    });
+    await page.waitForTimeout(150);
+    const named = await page.evaluate(() => document.querySelector('.panel [data-act="rename-line"]')?.value || '');
+    check('a line is named after its ends by default', / to | – Bus/.test(named), named);
+    await page.fill('.panel [data-act="rename-line"]', 'Harbour Express');
+    await page.press('.panel [data-act="rename-line"]', 'Enter');
+    await page.waitForTimeout(100);
+    await page.click('.panel [data-act="keep-spacing"]');
+    await page.click('.panel [data-act="skip-stops"]');
+    await page.waitForTimeout(100);
+    const rules = await page.evaluate(() => {
+      const line = window.otomig.game.selection;
+      return { name: line.name, keep: line.keepSpacing, skip: line.skipEmptyStops };
+    });
+    check('the line can be renamed in its panel', rules.name === 'Harbour Express', JSON.stringify(rules));
+    check('…and its spacing and skipping rules switched off there', !rules.keep && !rules.skip,
+      JSON.stringify(rules));
+    await page.keyboard.press('Escape');
+
     // The day bar moves as the day goes by.
     const widths = [];
     await page.evaluate(() => window.otomig.game.clock.setSpeedIndex(3));
@@ -1312,6 +1337,97 @@ try {
     }
     await page.evaluate(() => window.otomig.game.clock.setSpeedIndex(0));
     check('the day bar shows how far through the day it is', widths[0] !== widths[1], widths.join(' → '));
+  }
+
+  // ─── Saving progress, and carrying it to another device ───────────────────
+  {
+    await page.keyboard.press('Escape');
+    const snapshot = () => page.evaluate(() => {
+      const game = window.otomig.game;
+      return {
+        lines: game.network.lines.size,
+        stops: game.network.stops.size,
+        balance: game.economy.balance,
+        names: [...game.network.lines.values()].map((l) => l.name).filter(Boolean).join(),
+      };
+    });
+    const saved = await snapshot();
+    await page.click('#s-save');
+    await page.waitForTimeout(400);
+
+    // Change things, then Load: everything must come back as saved. Until
+    // Oct 17 2026 Load quietly started a fresh game on the same map.
+    await page.evaluate(() => {
+      const game = window.otomig.game;
+      game.bulldoze([...game.network.lines.values()].at(-1));
+    });
+    const changed = await snapshot();
+    // The old screen's handle goes away; wait for the loaded screen's own.
+    await page.evaluate(() => { window.otomig = null; });
+    await page.click('#s-load');
+    await page.waitForFunction(() => window.otomig?.map?.loaded?.(), null, { timeout: 30000 });
+    await page.waitForTimeout(300);
+    const loaded = await snapshot();
+    check('Load really restores the network and the money saved',
+      changed.lines < saved.lines && loaded.lines === saved.lines && loaded.stops === saved.stops
+      && loaded.balance === saved.balance && loaded.names === saved.names,
+      JSON.stringify({ saved, changed, loaded }));
+
+    const paused = await page.evaluate(() => window.otomig.game.clock.paused);
+    await page.keyboard.press('Space');
+    check('after a load only one game runs: Space pauses once, not twice',
+      await page.evaluate((was) => window.otomig.game.clock.paused !== was, paused));
+
+    // Save to file, then open it in a browser with nothing in it at all.
+    const [download] = await Promise.all([
+      page.waitForEvent('download', { timeout: 30000 }),
+      page.click('#s-export'),
+    ]);
+    const filePath = await download.path();
+    check('Save to file downloads one compressed file',
+      /\.otomig$/.test(download.suggestedFilename()), download.suggestedFilename());
+
+    const fresh = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const other = await fresh.newPage();
+    const otherErrors = [];
+    other.on('pageerror', (error) => otherErrors.push(String(error)));
+    await other.goto(BASE, { waitUntil: 'load' });
+    await other.waitForSelector('.ng-panel', { timeout: 10000 });
+    await other.setInputFiles('#ng-file', filePath);
+    await other.waitForFunction(() => window.otomig?.map?.loaded?.(), null, { timeout: 60000 });
+    await other.waitForTimeout(300);
+    const elsewhere = await other.evaluate(() => {
+      const game = window.otomig.game;
+      return {
+        lines: game.network.lines.size,
+        stops: game.network.stops.size,
+        balance: game.economy.balance,
+        names: [...game.network.lines.values()].map((l) => l.name).filter(Boolean).join(),
+      };
+    });
+    check('a save file opens in a browser that has never seen the map, network and money intact',
+      elsewhere.lines === loaded.lines && elsewhere.stops === loaded.stops
+      && elsewhere.balance === loaded.balance && elsewhere.names === loaded.names,
+      JSON.stringify({ loaded, elsewhere }));
+    const cachedThere = await other.evaluate(async () => {
+      const { listRegions } = await import('/data/cache.js');
+      return (await listRegions()).length;
+    });
+    check('…and caches its map there, so it is never imported again', cachedThere === 1, `${cachedThere}`);
+
+    // That browser now lists the save to carry on from, after a reload.
+    await other.evaluate(() => document.getElementById('s-save').click());
+    await other.waitForTimeout(400);
+    await other.reload({ waitUntil: 'load' });
+    await other.waitForSelector('#ng-continue li', { timeout: 10000 });
+    await other.screenshot({ path: join(SHOTS, '18-continue.png') });
+    await other.click('#ng-continue li');
+    await other.waitForFunction(() => window.otomig?.map?.loaded?.(), null, { timeout: 60000 });
+    const continued = await other.evaluate(() => window.otomig.game.network.lines.size);
+    check('the start screen offers Continue, which picks the game up again',
+      continued === loaded.lines, `${continued}`);
+    check('…with no errors in that browser', otherErrors.length === 0, otherErrors.join(' | '));
+    await fresh.close();
   }
 
   // ─── Nothing threw ────────────────────────────────────────────────────────

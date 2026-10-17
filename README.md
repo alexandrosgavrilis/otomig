@@ -11,7 +11,7 @@ You draw bus, tram, metro and train lines. Passengers appear where people live a
 No build step and no dependencies to install.
 
 ```bash
-npm start          # python3 -m http.server 8000
+npm start          # node tools/serve.js 8000 — a no-cache server, so updates always load
 # then open http://localhost:8000
 ```
 
@@ -19,13 +19,15 @@ Click **Use the test region** for a synthetic region that needs no network at al
 
 **On screen:** a dot is one person in a town; in a big city it grows so that no more than about 200 are drawn, and the legend in the bottom-left corner says what a dot is worth. The **Flows** toggle draws where people on your network want to go, one arc per pair of stops. Buses running less often than every 10 minutes keep a timetable, and their passengers wait for them. Buses and trams obey one-way streets, and skip stops nobody needs.
 
+**Saving:** *Save* keeps a save for each region in the browser, with an autosave every in-game month, and the start screen offers them under *Continue*. *Save to file* writes one compressed file holding the whole game — network, money and the map itself — which opens on any browser or device with *Open save file*, nothing to import.
+
 **Play-testing:** press **`** in a game for the tuning panel — live sliders for passenger behaviour and money. Changes survive a reload, a red badge shows while any are active, and *Copy changes* gives the list of new values to make the defaults.
 
 Serve it over `http://` — don't open `index.html` as a `file://` URL. ES modules, the import worker and the OSM services all need a real origin.
 
 ```bash
-npm test               # 695 logic assertions, plain Node, no framework, no dependencies
-npm run test:browser   # 158 assertions driving real Chromium (needs: npm install)
+npm test               # 716 logic assertions, plain Node, no framework, no dependencies
+npm run test:browser   # 169 assertions driving real Chromium (needs: npm install)
 npm run test:live      # 25 assertions against a REAL import — hits live OSM services
 npm run fixture        # regenerate fixtures/test-region.json
 ```

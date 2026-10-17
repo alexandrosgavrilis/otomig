@@ -26,7 +26,7 @@ import { Clock, daysInMonth, formatDate } from '../sim/clock.js';
 import { Game } from '../sim/game.js';
 import { Economy, formatMoney, formatThousands } from '../sim/economy.js';
 import { stopOrder, directionsServed, hopSeconds } from '../sim/routing.js';
-import { respaceVehicles } from '../sim/vehicles.js';
+import { respaceVehicles, cycleOf, phaseOf } from '../sim/vehicles.js';
 import { offsetPolyline, shade } from '../render/shapes.js';
 
 const fixturePath = join(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'test-region.json');
@@ -421,10 +421,15 @@ export function runPhase2Tests(check, near) {
     ]);
     for (let i = 0; i < 3; i++) spaced.addVehicle(spacedLine);
     respaceVehicles(spacedLine);
-    const hops = spacedLine.vehicles.map((v) => v.hop + v.progress / 1000);
-    check('added vehicles are spread along the line',
-      new Set(hops.map((h) => h.toFixed(2))).size === hops.length,
-      `positions ${hops.map((h) => h.toFixed(2)).join(', ')}`);
+    // Spread around the WHOLE cycle — out and back — at equal gaps in time.
+    const cycle = cycleOf(spacedLine);
+    const phases = spacedLine.vehicles.map((v) => phaseOf(v, spacedLine, cycle)).sort((a, b) => a - b);
+    const target = cycle.total / phases.length;
+    check('added vehicles are spread evenly round the whole out-and-back cycle',
+      phases.every((p, i) => Math.abs(p - i * target) < 1),
+      `phases ${phases.map((p) => p.toFixed(0)).join(', ')} of ${cycle.total.toFixed(0)}`);
+    check('…so half of them start on the way back',
+      spacedLine.vehicles.filter((v) => v.direction === 1).length === phases.length / 2);
 
     check('directionsServed gives both ways on an open line',
       directionsServed(spacedLine).length === 2);

@@ -527,3 +527,9 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 /* Undo / Finish / Cancel while drawing — the touch screen's Backspace, Enter, Esc. */
 .toolbar .draft-actions { display: flex; flex-direction: column; gap: 4px; }
 .toolbar .draft-actions button.primary { background: var(--ink); border-color: var(--ink); color: var(--land); }
+
+/* Carrying on from a save, at the top of the new-game panel. */
+.ng-continue .ng-results li { display: flex; flex-direction: column; gap: 1px; }
+.ng-muted-inline { font-size: 12px; color: var(--ink-soft); }
+.ng-open { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.ng-open button { align-self: flex-start; }
