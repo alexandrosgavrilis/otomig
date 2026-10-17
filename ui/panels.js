@@ -152,6 +152,10 @@ export function mountPanels(root, game, { onChange }) {
         game.bulldoze(selection);
         clear(); onChange?.();
       });
+      container.querySelector('[data-act="stops-kind"]')?.addEventListener('click', () => {
+        game.setSingleSided(selection, !selection.singleSided);
+        render(); onChange?.();
+      });
       container.querySelector('[data-act="keep-spacing"]')?.addEventListener('click', () => {
         selection.keepSpacing = !selection.keepSpacing;
         render(); onChange?.();
@@ -349,6 +353,10 @@ function lineHtml(game, line) {
 
     <div class="rows">
       <span class="section">${STRINGS.panel.rules}</span>
+      ${line.mode === 'bus' || line.mode === 'tram' ? `
+        <div class="row" title="${STRINGS.panel.stopsKindHint}"><span>${STRINGS.panel.stopsKind}</span>
+          <button type="button" data-act="stops-kind">
+            ${line.singleSided ? STRINGS.panel.stopsSingle : STRINGS.panel.stopsDouble}</button></div>` : ''}
       <div class="row" title="${STRINGS.panel.keepSpacingHint}"><span>${STRINGS.panel.keepSpacing}</span>
         <button type="button" data-act="keep-spacing" class="${line.keepSpacing ? 'on' : ''}">
           ${line.keepSpacing ? STRINGS.panel.on : STRINGS.panel.off}</button></div>

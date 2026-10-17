@@ -641,3 +641,5 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   border-color: var(--danger);
   color: #fff;
 }
+.draft-bar button.stops-toggle { font-size: 13px; padding: 8px 12px; }
+.draft-bar button.stops-toggle.on { background: var(--ink); border-color: var(--ink); color: var(--land); }

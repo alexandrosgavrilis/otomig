@@ -16,14 +16,15 @@
  * projection and the device-pixel scaling are right. Phase 2 fills it in.
  */
 
-import { COLORS, RENDER } from '../config.js';
+import { COLORS, RENDER, BUILD } from '../config.js';
 import { STRINGS } from '../ui/strings.js';
 import { formatMoney } from '../sim/economy.js';
 import { patienceFor } from '../sim/passengers.js';
 import {
   strokePath, drawLinePattern, drawVehicle, drawStop, drawInterchange,
   drawTrackStructure, drawDragPreview, drawBareTrack, drawLevelCrossing,
-  drawTrackPreview, drawWaypoint, drawIntercityMark, drawStopGhost, drawStopPair,
+  drawTrackPreview, drawWaypoint, drawIntercityMark, drawStopGhost, drawStopPair, drawDoubleStop,
+  drawOnewayArrow,
   drawWaiting, drawWaitRing, offsetPolyline, shade,
 } from './shapes.js';
 
@@ -181,6 +182,17 @@ export function linesPainter(game) {
         if (piece.line === selected) strokePath(ctx, piece.drawn, COLORS.selectionHalo, width * 2.4);
       }
       for (const piece of pieces) if (piece.line === selected) drawPiece(piece);
+    }
+
+    // One-way arrows on top of the lines that run along one-way streets: the
+    // map's own arrows are hidden underneath them.
+    if (overlay.map.getZoom() >= RENDER.ONEWAY_ARROW_MIN_ZOOM) {
+      for (const line of network.lines.values()) {
+        if (line.mode !== 'bus' && line.mode !== 'tram') continue;
+        for (const segment of [...line.segments, ...(line.backSegments || []).filter(Boolean)]) {
+          drawOnewayOnSegment(ctx, overlay, game.roadIndex, segment, zoomScale);
+        }
+      }
     }
 
     // The segment currently being dragged, on top of everything, dashed.
@@ -343,20 +355,25 @@ export function stopsPainter(game) {
       }
 
       if (stop.intercity) drawIntercityMark(ctx, x, y, stop.mode);
-      // Where a direction calls at this stop away from its own point — the
-      // far carriageway, or the parallel street of a one-way pair.
-      for (const node of servedFrom(game, stop)) {
-        const [lon, lat] = game.roadIndex.nodeLonLat(node);
-        const [tx, ty] = overlay.project(lon, lat);
-        drawStopPair(ctx, x, y, tx, ty, stop.mode);
-      }
       // A stop being dragged: a ghost where it would land, red where it can't.
       if (game.stopDrag?.stop === stop && game.stopDrag.preview) {
         const ghost = game.stopDrag.preview;
         const [gx, gy] = overlay.project(ghost.lon, ghost.lat);
         drawStopGhost(ctx, x, y, gx, gy, stop.mode, ghost.valid);
       }
-      drawStop(ctx, x, y, stop.mode, game.selection?.id === stop.id);
+      const selected = game.selection?.id === stop.id;
+      const kerbs = stopKerbs(game, overlay, stop, x, y);
+      if (!kerbs) {
+        drawStop(ctx, x, y, stop.mode, selected);
+      } else {
+        // A double stop on a two-way road: two stops facing each other.
+        if (kerbs.across) drawDoubleStop(ctx, x, y, kerbs.across, stop.mode, selected);
+        // On a divided road: this side, linked to its twin across the divider.
+        for (const [tx, ty] of kerbs.twins) drawStopPair(ctx, x, y, tx, ty, stop.mode);
+        if (kerbs.twins.length && !kerbs.across) drawStop(ctx, x, y, stop.mode, selected);
+        // Single stops: on the kerb of the side each serves.
+        for (const [sx, sy] of kerbs.sides) drawStop(ctx, sx, sy, stop.mode, selected);
+      }
       drawWaiting(ctx, x, y, stop.waiting.length, radius);
     }
   };
@@ -406,21 +423,76 @@ export function flowsPainter(game) {
   };
 }
 
-/** Road nodes other than its own that any line calls at for this stop. */
-function servedFrom(game, stop) {
-  const nodes = new Set();
+/**
+ * How a bus or tram stop is drawn, from the lines calling at it: `across` is
+ * the unit normal to the road for a double stop (two stops facing each other
+ * at the same point), `twins` the screen points of linked stops across a
+ * divider, `sides` the single stops' kerbside points. Null for a stop no
+ * road line calls at, and for stations.
+ */
+function stopKerbs(game, overlay, stop, x, y) {
+  if (stop.mode === 'metro' || stop.mode === 'train') return null;
+  const result = { across: null, twins: [], sides: [] };
+  const offset = (RENDER.STOP_RADIUS_PX[stop.mode] ?? 4) + 3;
+  let any = false;
   for (const lineId of stop.lines) {
     const line = game.network.lines.get(lineId);
-    if (!line?.stopNodes) continue;
-    line.stops.forEach((id, index) => {
-      if (id !== stop.id) return;
-      for (const direction of [0, 1]) {
-        const node = line.stopNodes[direction]?.[index];
-        if (node !== undefined && node !== stop.node) nodes.add(node);
-      }
-    });
+    if (!line || line.segments.length === 0) continue;
+    const index = line.stops.indexOf(stop.id);
+    const tangent = travelAt(line, index, overlay);
+    if (!tangent) continue;
+    any = true;
+    const [tx, ty] = tangent;
+    // Right of travel on screen (y down): (−ty, tx).
+    const right = BUILD.RIGHT_HAND_TRAFFIC ? [-ty, tx] : [ty, -tx];
+    if (line.singleSided) {
+      result.sides.push([x + right[0] * offset, y + right[1] * offset]);
+      continue;
+    }
+    const back = game.network.stopNodeFor(line, index, 1);
+    if (back !== stop.node) {
+      const [lon, lat] = game.roadIndex.nodeLonLat(back);
+      result.twins.push(overlay.project(lon, lat));
+    } else {
+      result.across = right;
+    }
   }
-  return nodes;
+  return any ? result : null;
+}
+
+/** Which way a line travels at its stop `index`, as a unit vector on screen. */
+function travelAt(line, index, overlay) {
+  const count = line.stops.length;
+  const into = index > 0 ? line.segments[index - 1] : line.loop ? line.segments.at(-1) : null;
+  const out = line.segments[index] ?? null;
+  const pick = into?.points?.length >= 2 ? into.points.slice(-2)
+    : out?.points?.length >= 2 ? out.points.slice(0, 2) : null;
+  if (!pick || count < 2) return null;
+  const [a, b] = pick.map(([lon, lat]) => overlay.project(lon, lat));
+  const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  return length > 0 ? [(b[0] - a[0]) / length, (b[1] - a[1]) / length] : null;
+}
+
+/**
+ * Arrows on a line's one-way stretches, pointing the way traffic flows. A
+ * segment's `nodes` run in travel order (a way back's too), so each arrow
+ * points from one node to the next.
+ */
+function drawOnewayOnSegment(ctx, overlay, roadIndex, segment, zoomScale) {
+  const nodes = segment.nodes;
+  if (!nodes || nodes.length < 2) return;
+  if (!segment.onewayAt) {
+    segment.onewayAt = [];
+    for (let i = 0; i + 1 < nodes.length; i++) {
+      if (roadIndex.edgeBetween(nodes[i], nodes[i + 1])?.oneway) segment.onewayAt.push(i);
+    }
+  }
+  for (const i of segment.onewayAt) {
+    const [x1, y1] = overlay.project(...roadIndex.nodeLonLat(nodes[i]));
+    const [x2, y2] = overlay.project(...roadIndex.nodeLonLat(nodes[i + 1]));
+    if (Math.hypot(x2 - x1, y2 - y1) < RENDER.ONEWAY_ARROW_MIN_PX) continue;
+    drawOnewayArrow(ctx, (x1 + x2) / 2, (y1 + y2) / 2, Math.atan2(y2 - y1, x2 - x1), 4 * zoomScale);
+  }
 }
 
 /** A stop, as opposed to a line or a piece of track. */

@@ -560,47 +560,33 @@ export const BUILD = {
    */
   JUNCTION_SNAP_M: 30,
   /**
-   * A bus or tram stop is a small AREA, not a point (Alex, Oct 17 2026). Each
-   * direction of a line calls at whichever road node in the area gives it a
-   * sensible legal route — the far carriageway of a divided road, or the
-   * parallel street of a one-way pair a block away — as real stops for the
-   * two directions often stand apart. Chosen for the whole line at once, so
-   * every hop is considered with its neighbours.
-   *
-   *   STOP_AREA_M         how far from the stop a direction may be served
-   *   STOP_PAIR_M         the same at a line's END, kept tighter: the bus
-   *                       crosses from its arrival point to its departure
-   *                       point during the layover, standing in for a turn
-   *   STOP_AREA_CANDIDATES the nearest nodes considered, for speed
-   *   STOP_MOVE_WEIGHT    each metre a direction is served away from where the
-   *                       player put the stop costs this many metres of route,
-   *                       so a stop only moves to save a real detour. It must
-   *                       stay under 2: reaching a stop d metres off the
-   *                       route costs at least 2d (there and back), and at 3
-   *                       the way back on a one-way pair a block apart still
-   *                       zigzagged across to every stop
+   * A double-stop line's stop on one carriageway of a road with a central
+   * divider is paired with the opposite carriageway, if that runs exactly
+   * the other way and lies directly across within this distance — the two
+   * stops facing each other that real divided roads have. Kept tight on
+   * purpose: a parallel street a block away is not the other half of the
+   * road (Alex, Oct 17 2026, after an earlier 110 m "stop area" sent lines
+   * on tours of the blocks).
    */
-  STOP_AREA_M: 110,
-  STOP_PAIR_M: 45,
-  STOP_AREA_CANDIDATES: 12,
-  STOP_MOVE_WEIGHT: 1.5,
+  STOP_PAIR_M: 35,
   /**
-   * A bus arriving at a stop along a street and leaving back down it is
-   * charged this many metres per metre doubled back, when the planner looks
-   * for somewhere better in the stop's area to call.
+   * Single-stop lines draw each stop on the kerb of the side it serves:
+   * right-hand traffic, as in Greece and most of Europe.
    */
-  DOUBLING_BACK_WEIGHT: 4,
+  RIGHT_HAND_TRAFFIC: true,
 
   /**
    * Routing cost per metre by road class, as a multiple of its length. Real
    * buses keep to main roads; routing by length alone sent them threading
-   * through residential streets to save a few metres. Anything unlisted is 1.
+   * through residential streets to save a few metres. Kept mild: strong
+   * weights sent lines round blocks to avoid a short side street. Anything
+   * unlisted is 1.
    */
   ROAD_CLASS_COST: {
     motorway: 1, motorway_link: 1, trunk: 1, trunk_link: 1,
-    primary: 1, primary_link: 1, secondary: 1.05, secondary_link: 1.05,
-    tertiary: 1.15, tertiary_link: 1.15, unclassified: 1.35,
-    residential: 1.6, living_street: 3, pedestrian: 1.2,
+    primary: 1, primary_link: 1, secondary: 1, secondary_link: 1,
+    tertiary: 1.05, tertiary_link: 1.05, unclassified: 1.15,
+    residential: 1.25, living_street: 2, pedestrian: 1.1,
   },
   /**
    * A station placed on existing rail takes the name of a real OSM station or
@@ -879,6 +865,8 @@ export const COLORS = {
   stopFill: '#FFFFFF',
   stopStroke: '#2B2B2B',
   passenger: '#2B2B2B',
+  /** One-way arrows, on the map and on lines running along one-way streets. */
+  onewayArrow: '#2B2B2B',
   /** The halo under a selected line. */
   selectionHalo: 'rgba(43, 43, 43, 0.28)',
   /** Flows layer arcs: the ink, faded, so lines and stops stay on top. */
@@ -951,6 +939,14 @@ export const RENDER = {
   FLOW_MAX_ARCS: 300,
   FLOW_MAX_PX: 14,
   FLOW_MIN_PX: 1,
+  /**
+   * One-way arrows: shown from this zoom, on stretches at least this long,
+   * and on a line only where the stretch is this many pixels on screen.
+   */
+  ONEWAY_ARROW_MIN_ZOOM: 15,
+  ONEWAY_ARROW_MIN_EDGE_M: 25,
+  ONEWAY_ARROW_MIN_PX: 22,
+
   /** While a line is selected, every other line is drawn at this opacity. */
   UNSELECTED_LINE_ALPHA: 0.3,
 

@@ -184,8 +184,7 @@ function roundedRect(ctx, x, y, width, height, radius) {
 }
 
 /** A stop: white circle, dark outline. Rail stations are larger. */
-export function drawStop(ctx, x, y, mode, selected = false) {
-  const radius = RENDER.STOP_RADIUS_PX[mode] ?? 4;
+export function drawStop(ctx, x, y, mode, selected = false, radius = RENDER.STOP_RADIUS_PX[mode] ?? 4) {
   ctx.save();
   ctx.beginPath();
   ctx.arc(x, y, radius, 0, Math.PI * 2);
@@ -211,6 +210,43 @@ export function drawIntercityMark(ctx, x, y, mode) {
   ctx.strokeStyle = COLORS.stopStroke;
   ctx.stroke();
   ctx.restore();
+}
+
+/** A small black arrowhead, for one-way streets under a line. */
+export function drawOnewayArrow(ctx, x, y, angle, size) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  ctx.fillStyle = COLORS.onewayArrow;
+  ctx.beginPath();
+  ctx.moveTo(size, 0);
+  ctx.lineTo(-size * 0.8, -size * 0.75);
+  ctx.lineTo(-size * 0.35, 0);
+  ctx.lineTo(-size * 0.8, size * 0.75);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+/**
+ * A double stop on a two-way road: two stops facing each other across it, at
+ * the same point, joined by a short bar. `normal` is the road's normal on
+ * screen.
+ */
+export function drawDoubleStop(ctx, x, y, normal, mode, selected = false) {
+  const radius = Math.max(3, (RENDER.STOP_RADIUS_PX[mode] ?? 4) - 0.5);
+  const gap = radius + 1.5;
+  const [nx, ny] = normal;
+  ctx.save();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = COLORS.stopStroke;
+  ctx.beginPath();
+  ctx.moveTo(x - nx * gap, y - ny * gap);
+  ctx.lineTo(x + nx * gap, y + ny * gap);
+  ctx.stroke();
+  ctx.restore();
+  drawStop(ctx, x + nx * gap, y + ny * gap, mode, selected, radius);
+  drawStop(ctx, x - nx * gap, y - ny * gap, mode, selected, radius);
 }
 
 /**

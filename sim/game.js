@@ -48,6 +48,12 @@ export class Game {
     this.economy = new Economy(this.difficulty, baselineResidents(region.meta),
       this.passengersPerDot);
 
+    /**
+     * Whether new bus and tram lines use single stops — the last choice made
+     * in the drawing bar, so a player who prefers them does not have to pick
+     * it every time. Not saved.
+     */
+    this.singleStopsDefault = false;
     /** Whether the Flows layer is drawn. A view setting, never saved. */
     this.showFlows = false;
     /** Currently selected object (stop or line), for the right-hand panel. */
@@ -196,6 +202,7 @@ export class Game {
   /** Start a new line in a mode. */
   startLine(mode) {
     const line = this.network.createLine(mode);
+    if (mode === 'bus' || mode === 'tram') line.singleSided = this.singleStopsDefault;
     this.draft = { line, cursor: null, valid: true };
     return line;
   }
@@ -623,6 +630,16 @@ export class Game {
   }
 
   /**
+   * Double stops or single stops for a bus or tram line — see
+   * `Line.singleSided`. Re-routes the line and re-spaces its vehicles.
+   */
+  setSingleSided(line, on) {
+    this.network.setSingleSided(line, on);
+    respaceVehicles(line);
+    this.invalidate();
+  }
+
+  /**
    * Set how many people a dot stands for, everywhere that converts between
    * the two. Only ever called at the start of a game or when loading one: a
    * dot that changed meaning mid-game would make every count on screen lie.
@@ -814,6 +831,7 @@ export class Game {
         id: line.id, mode: line.mode, color: line.color, stops: line.stops,
         loop: line.loop,
         name: line.name,
+        ...(line.singleSided ? { singleSided: true, autoLoop: line.autoLoop } : {}),
         skipEmptyStops: line.skipEmptyStops,
         keepSpacing: line.keepSpacing,
         // Segments are derived and not stored, but the drags that shape them
@@ -877,6 +895,8 @@ export class Game {
       line.stops = saved.stops;
       line.loop = saved.loop;
       line.name = saved.name || null;
+      line.singleSided = Boolean(saved.singleSided);
+      line.autoLoop = Boolean(saved.autoLoop);
       // Saves from before these switches existed get the defaults.
       if (saved.skipEmptyStops !== undefined) line.skipEmptyStops = saved.skipEmptyStops;
       if (saved.keepSpacing !== undefined) line.keepSpacing = saved.keepSpacing;

@@ -115,6 +115,11 @@ export const STRINGS = {
     keepSpacingHint: 'A vehicle that catches up with the one ahead waits at its next '
       + 'stop until the gap evens out.',
     skipStops: 'Skip empty stops',
+    stopsKind: 'Stops',
+    stopsDouble: 'Double',
+    stopsSingle: 'Single',
+    stopsKindHint: 'Double: the line runs both ways and every stop serves both sides. '
+      + 'Single: each stop serves one side and the line runs one way round.',
     skipStopsHint: 'Drive past a stop where nobody is getting on or off.',
     on: 'On',
     off: 'Off',
@@ -334,6 +339,12 @@ export const STRINGS = {
     finishHint: 'Finish the line, or build the track (Enter).',
     cancel: '✕ Cancel',
     cancelHint: 'Throw away what is being drawn, refunded in full. (Esc instead keeps a line\'s stops so far.)',
+    doubleStops: '⇄ Double stops',
+    singleStops: '→ Single stops',
+    doubleStopsHint: 'The line runs both ways; every stop serves both sides of the road. '
+      + 'Click to use single stops instead.',
+    singleStopsHint: 'Each stop is on one side of the road and the line runs one way round, '
+      + 'as a loop — place the stops for each direction yourself. Click for double stops.',
     drawingLine: (mode, stops) => `${mode} line · ${stops} ${stops === 1 ? 'stop' : 'stops'}`,
     drawingTrack: (mode, points) => `${mode} track · ${points} ${points === 1 ? 'point' : 'points'}`,
   },

@@ -95,18 +95,51 @@ export class RoadIndex {
   }
 
   /**
-   * Nodes the mode may use within `maxM` of a node, nearest first, at most
-   * `limit` of them — the candidates for where a stop may be served from.
-   * @returns {Array<{node:number, distanceM:number}>}
+   * Which way traffic flows at a node on a one-way carriageway, as a unit
+   * vector in local metres — or null if any road at the node the mode may use
+   * runs both ways (it is not a carriageway, or it is a junction with one).
    */
-  nodesNear(node, mode, maxM, limit = Infinity) {
+  flowAt(node, mode) {
+    const allowed = ALLOWED_CLASSES[mode];
+    const { start, edges } = this.adjacency;
+    const [x, y] = this.nodePosition(node);
+    let fx = 0;
+    let fy = 0;
+    let count = 0;
+    for (let i = start[node]; i < start[node + 1]; i++) {
+      const edge = this.graph.edges[edges[i]];
+      if (!allowed.has(edge.cls)) continue;
+      if (!edge.oneway || edge.onewayExempt?.includes(mode)) return null;
+      const other = edge.a === node ? edge.b : edge.a;
+      const [ox, oy] = this.nodePosition(other);
+      const length = Math.hypot(ox - x, oy - y) || 1;
+      // Leaving along it, or arriving along it: either way, the flow.
+      const sign = mayTravel(edge, node, mode) ? 1 : -1;
+      fx += sign * (ox - x) / length;
+      fy += sign * (oy - y) / length;
+      count++;
+    }
+    const length = Math.hypot(fx, fy);
+    return count && length > 0 ? [fx / length, fy / length] : null;
+  }
+
+  /**
+   * The other half of a divided road: the nearest node within `maxM` on a
+   * one-way carriageway running the opposite way to this one. A stop on one
+   * side of a dual carriageway has a twin across the median, as real stops do.
+   * @returns {{node:number, flow:[number,number]}|null} `flow` is THIS node's
+   */
+  twinOf(node, mode, maxM) {
+    const flow = this.flowAt(node, mode);
+    if (!flow) return null;
     const allowed = ALLOWED_CLASSES[mode];
     const [x, y] = this.nodePosition(node);
     const { cellM, cols, rows, cellStart, cellNodes } = this.spatial;
     const radius = Math.ceil(maxM / cellM);
     const col0 = Math.floor(x / cellM);
     const row0 = Math.floor(y / cellM);
-    const found = [];
+    let best = null;
+    let bestDist = maxM;
     for (let row = row0 - radius; row <= row0 + radius; row++) {
       if (row < 0 || row >= rows) continue;
       for (let col = col0 - radius; col <= col0 + radius; col++) {
@@ -114,54 +147,34 @@ export class RoadIndex {
         const cell = row * cols + col;
         for (let i = cellStart[cell]; i < cellStart[cell + 1]; i++) {
           const other = cellNodes[i];
-          if (!this.nodeServes(other, allowed)) continue;
+          if (other === node || !this.nodeServes(other, allowed)) continue;
           const [ox, oy] = this.nodePosition(other);
-          const distanceM = Math.hypot(ox - x, oy - y);
-          if (distanceM <= maxM) found.push({ node: other, distanceM });
+          const distance = Math.hypot(ox - x, oy - y);
+          if (distance >= bestDist) continue;
+          // Across the road, not along it: a node further down the same
+          // carriageway, or round a corner, is not the other half.
+          const along = Math.abs((ox - x) * flow[0] + (oy - y) * flow[1]);
+          if (along > 0.5 * distance) continue;
+          // And running the other way, near enough exactly — not a one-way
+          // side street that happens to be close.
+          const otherFlow = this.flowAt(other, mode);
+          if (!otherFlow || otherFlow[0] * flow[0] + otherFlow[1] * flow[1] > -0.8) continue;
+          bestDist = distance;
+          best = other;
         }
       }
     }
-    found.sort((a, b) => a.distanceM - b.distanceM);
-    return found.slice(0, limit);
+    return best === null ? null : { node: best, flow };
   }
 
-  /**
-   * Routing cost from one node to each of a set of targets — the same
-   * weighted, one-way-obeying cost `shortestPath` minimises — searching no
-   * further than `maxCost`. Unreached targets are absent.
-   * @returns {Map<number, number>}
-   */
-  costsTo(fromNode, targets, mode, maxCost = Infinity) {
-    const result = new Map();
-    const remaining = new Set(targets);
-    if (remaining.delete(fromNode)) result.set(fromNode, 0);
-    if (remaining.size === 0) return result;
-    const allowed = ALLOWED_CLASSES[mode];
+  /** The edge joining two nodes, or null. */
+  edgeBetween(a, b) {
     const { start, edges } = this.adjacency;
-    const distance = new Map([[fromNode, 0]]);
-    const settled = new Set();
-    const heap = new MinHeap();
-    heap.push(fromNode, 0);
-    while (heap.size > 0 && remaining.size > 0) {
-      const node = heap.pop();
-      if (settled.has(node)) continue;
-      settled.add(node);
-      const here = distance.get(node);
-      if (here > maxCost) break;
-      if (remaining.delete(node)) result.set(node, here);
-      for (let i = start[node]; i < start[node + 1]; i++) {
-        const edge = this.graph.edges[edges[i]];
-        if (!allowed.has(edge.cls) || !mayTravel(edge, node, mode)) continue;
-        const next = edge.a === node ? edge.b : edge.a;
-        if (settled.has(next)) continue;
-        const candidate = here + edgeCost(edge);
-        if (candidate < (distance.get(next) ?? Infinity)) {
-          distance.set(next, candidate);
-          heap.push(next, candidate);
-        }
-      }
+    for (let i = start[a]; i < start[a + 1]; i++) {
+      const edge = this.graph.edges[edges[i]];
+      if ((edge.a === a && edge.b === b) || (edge.a === b && edge.b === a)) return edge;
     }
-    return result;
+    return null;
   }
 
   /** How many roads the mode may use meet at a node: 1 is a dead end. */
@@ -207,11 +220,14 @@ export class RoadIndex {
    * @param {number} fromNode
    * @param {number} toNode
    * @param {'bus'|'tram'} mode
-   * @param {{ignoreOneway?:boolean}} [options] the fallback when no legal path
-   *   exists, which happens where a one-way street runs out of the region
+   * @param {{ignoreOneway?:boolean, avoidFirst?:number}} [options]
+   *   `ignoreOneway`: the fallback when no legal path exists, which happens
+   *   where a one-way street runs out of the region. `avoidFirst`: a node the
+   *   path may not step to first — the one the vehicle has just come from,
+   *   so it never turns round in the middle of a road.
    * @returns {{nodes:number[], lengthM:number}|null} null when unreachable
    */
-  shortestPath(fromNode, toNode, mode, { ignoreOneway = false } = {}) {
+  shortestPath(fromNode, toNode, mode, { ignoreOneway = false, avoidFirst = null } = {}) {
     if (fromNode === toNode) return { nodes: [fromNode], lengthM: 0 };
     const allowed = ALLOWED_CLASSES[mode];
     const { start, edges } = this.adjacency;
@@ -239,6 +255,7 @@ export class RoadIndex {
         if (!ignoreOneway && !mayTravel(edge, node, mode)) continue;
         const next = edge.a === node ? edge.b : edge.a;
         if (settled[next]) continue;
+        if (node === fromNode && next === avoidFirst) continue;
         const candidate = distance[node] + edgeCost(edge);
         if (candidate < distance[next]) {
           distance[next] = candidate;
@@ -270,15 +287,18 @@ export class RoadIndex {
    * @param {'bus'|'tram'} mode
    * @returns {{nodes:number[], lengthM:number}|null}
    */
-  pathThrough(nodes, mode, options) {
+  pathThrough(nodes, mode, options = {}) {
     if (nodes.length < 2) return null;
     const all = [nodes[0]];
     let lengthM = 0;
+    let avoidFirst = options.avoidFirst ?? null;
     for (let i = 0; i < nodes.length - 1; i++) {
-      const leg = this.shortestPath(nodes[i], nodes[i + 1], mode, options);
+      const leg = this.shortestPath(nodes[i], nodes[i + 1], mode, { ...options, avoidFirst });
       if (!leg) return null;
       all.push(...leg.nodes.slice(1)); // Skip the duplicated junction node.
       lengthM += leg.lengthM;
+      // No turning round at a via either.
+      avoidFirst = leg.nodes.length > 1 ? leg.nodes.at(-2) : avoidFirst;
     }
     return { nodes: all, lengthM };
   }

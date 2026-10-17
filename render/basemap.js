@@ -324,7 +324,79 @@ export function createMap(container, region, frame) {
   });
   map.touchZoomRotate.disableRotation();
   map.keyboard.disable(); // 1–4, Space and Esc belong to the game.
+  // One-way arrows need an image, which a style can only reference once the
+  // map has it, so their layer is added after load.
+  map.on('load', () => addOnewayArrows(map, region, frame));
   return map;
+}
+
+/**
+ * Black arrows on one-way streets, pointing the way traffic may go (Alex,
+ * Oct 17 2026: hard to tell which streets are one-way, and the real map's own
+ * markings sit under the drawn lines). One arrow at the middle of each
+ * one-way stretch long enough to carry one; MapLibre drops those that would
+ * overlap. Shown from street zoom.
+ */
+export function addOnewayArrows(map, region, frame) {
+  if (map.getLayer('oneway-arrows')) return;
+  map.addImage('oneway-arrow', onewayArrowImage(), { pixelRatio: 2 });
+  map.addSource('oneway', { type: 'geojson', data: onewayToGeoJSON(region.roads, frame) });
+  map.addLayer({
+    id: 'oneway-arrows',
+    type: 'symbol',
+    source: 'oneway',
+    minzoom: RENDER.ONEWAY_ARROW_MIN_ZOOM,
+    layout: {
+      'icon-image': 'oneway-arrow',
+      'icon-rotate': ['get', 'bearing'],
+      'icon-rotation-alignment': 'map',
+      'icon-size': 0.7,
+    },
+  });
+}
+
+/** A point per one-way edge long enough to carry an arrow, with its heading. */
+export function onewayToGeoJSON(graph, frame) {
+  const features = [];
+  for (const edge of graph.edges) {
+    if (!edge.oneway || edge.lengthM < RENDER.ONEWAY_ARROW_MIN_EDGE_M) continue;
+    // The way traffic flows: a to b, or b to a for oneway = -1.
+    const [from, to] = edge.oneway === 1 ? [edge.a, edge.b] : [edge.b, edge.a];
+    const lonA = graph.nodes[2 * from];
+    const latA = graph.nodes[2 * from + 1];
+    const lonB = graph.nodes[2 * to];
+    const latB = graph.nodes[2 * to + 1];
+    const [xa, ya] = frame.toLocal(lonA, latA);
+    const [xb, yb] = frame.toLocal(lonB, latB);
+    features.push({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [(lonA + lonB) / 2, (latA + latB) / 2] },
+      // Clockwise from north, as MapLibre rotates icons.
+      properties: { bearing: (Math.atan2(xb - xa, yb - ya) * 180) / Math.PI },
+    });
+  }
+  return { type: 'FeatureCollection', features };
+}
+
+/** A small black arrow pointing up (north), drawn once. */
+function onewayArrowImage() {
+  const size = 28;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = COLORS.onewayArrow;
+  ctx.beginPath();
+  ctx.moveTo(size / 2, 3);
+  ctx.lineTo(size - 7, 14);
+  ctx.lineTo(size / 2 + 3, 12);
+  ctx.lineTo(size / 2 + 3, size - 3);
+  ctx.lineTo(size / 2 - 3, size - 3);
+  ctx.lineTo(size / 2 - 3, 12);
+  ctx.lineTo(7, 14);
+  ctx.closePath();
+  ctx.fill();
+  return ctx.getImageData(0, 0, size, size);
 }
 
 /** Toggle a style layer's visibility. */

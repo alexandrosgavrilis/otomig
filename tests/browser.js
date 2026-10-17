@@ -1208,6 +1208,22 @@ try {
     }
     const shown = await page.isVisible('#tb-draft');
     await page.screenshot({ path: join(SHOTS, '19-draft-bar.png') });
+    // Double or single stops, switched from the drawing bar.
+    await page.click('#tb-draft [data-draft="stops"]');
+    await page.waitForTimeout(100);
+    const switched = await page.evaluate(() => ({
+      single: window.otomig.game.draft?.line.singleSided,
+      loop: window.otomig.game.draft?.line.loop,
+      label: document.querySelector('#tb-draft [data-draft="stops"]').textContent,
+    }));
+    await page.click('#tb-draft [data-draft="stops"]');
+    await page.waitForTimeout(100);
+    const back = await page.evaluate(() => ({
+      single: window.otomig.game.draft?.line.singleSided, loop: window.otomig.game.draft?.line.loop,
+    }));
+    check('the drawing bar switches a bus line to single stops, one way round',
+      switched.single === true && switched.loop === true && /Single/.test(switched.label), JSON.stringify(switched));
+    check('…and back to double stops', back.single === false && back.loop === false, JSON.stringify(back));
     await page.click('#tb-draft [data-draft="undo"]');
     await page.click('#tb-draft [data-draft="finish"]');
     await page.waitForTimeout(100);
@@ -1342,6 +1358,8 @@ try {
     check('Bulldoze always wears a faint red outline and a warning sign',
       bulldoze.border === 'rgba(160, 59, 44, 0.42)' && bulldoze.text === 'Bulldoze /!\\', JSON.stringify(bulldoze));
     check('…and turns the logo\'s red when selected', bulldoze.on === 'rgb(160, 59, 44)', bulldoze.on);
+    check('one-way streets have an arrow layer on the map',
+      await page.evaluate(() => Boolean(window.otomig.map.getLayer('oneway-arrows'))));
     const font = await page.evaluate(async () => {
       await document.fonts.ready;
       return { family: getComputedStyle(document.body).fontFamily, loaded: document.fonts.check("14px 'Sansation'") };

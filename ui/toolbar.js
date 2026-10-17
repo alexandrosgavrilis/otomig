@@ -80,6 +80,7 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
   draftBar.hidden = true;
   draftBar.innerHTML = `
     <span class="draft-what" data-draft-what></span>
+    <button type="button" data-draft="stops" class="stops-toggle"></button>
     <button type="button" data-draft="undo" title="${STRINGS.draft.undoHint}">${STRINGS.draft.undo}</button>
     <button type="button" data-draft="finish" class="primary" title="${STRINGS.draft.finishHint}">${STRINGS.draft.finish}</button>
     <button type="button" data-draft="cancel" title="${STRINGS.draft.cancelHint}">${STRINGS.draft.cancel}</button>
@@ -92,6 +93,16 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
   draftBar.addEventListener('click', (event) => {
     const action = event.target.closest('button[data-draft]')?.dataset.draft;
     if (!action) return;
+    if (action === 'stops') {
+      if (game.draft) {
+        const single = !game.draft.line.singleSided;
+        game.setSingleSided(game.draft.line, single);
+        game.singleStopsDefault = single;
+      }
+      update();
+      onChange?.(state);
+      return;
+    }
     if (game.trackDraft) {
       if (action === 'undo') game.removeTrackPoint();
       else if (action === 'finish') {
@@ -119,6 +130,17 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
       : STRINGS.draft.drawingLine(STRINGS.toolbar[game.draft.line.mode], game.draft.line.stops.length);
     const label = draftBar.querySelector('[data-draft-what]');
     if (label.textContent !== what) label.textContent = what;
+    // Double or single stops, for a bus or tram line being drawn.
+    const toggle = draftBar.querySelector('[data-draft="stops"]');
+    const road = game.draft && (game.draft.line.mode === 'bus' || game.draft.line.mode === 'tram');
+    if (toggle.hidden === Boolean(road)) toggle.hidden = !road;
+    if (road) {
+      const single = game.draft.line.singleSided;
+      const text = single ? STRINGS.draft.singleStops : STRINGS.draft.doubleStops;
+      if (toggle.textContent !== text) toggle.textContent = text;
+      toggle.title = single ? STRINGS.draft.singleStopsHint : STRINGS.draft.doubleStopsHint;
+      toggle.classList.toggle('on', single);
+    }
   }
   let onFeedbackForDraft = null;
 

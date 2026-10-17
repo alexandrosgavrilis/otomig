@@ -88,8 +88,8 @@ Both would have reached Alex as a broken screen, and both were invisible to 272 
 ## 2. Testing
 
 ```bash
-npm test                            # 728 logic assertions, plain Node, no dependencies
-npm run test:browser                # 174 assertions in real Chromium via Playwright
+npm test                            # 733 logic assertions, plain Node, no dependencies
+npm run test:browser                # 177 assertions in real Chromium via Playwright
 npm run test:browser -- --headed    # ...and watch it
 npm run test:live                   # 24 assertions against a REAL import — hits live OSM services
 npm run test:live -- --km 5         # ...at a given size (default 5, the slider minimum)
@@ -323,7 +323,7 @@ An escape hatch, not a default. [extract.bbbike.org](https://extract.bbbike.org)
 
 ## 6. What works
 
-Verified by `npm test` (728) and `npm run test:browser` (174). Phases 3 to 6 have their own sections: §9, §10, §11 and §14.
+Verified by `npm test` (733) and `npm run test:browser` (177). Phases 3 to 6 have their own sections: §9, §10, §11 and §14.
 
 **Phase 1.** `LocalFrame` and the bbox/chunk maths; terrain height grid with bilinear interpolation (exact on a ramp); 200 m demand grid; 10 m occupancy bitset; Overpass parsing with road-class filtering, abandoned-rail rejection, chunk-overlap de-duplication and shared-node collapsing; Terrarium decode and tile resampling; marching-squares contours and sea polygons; the base-map GeoJSON. In the browser: the new-game screen, search firing no request while typing, MapLibre rendering real pixels, layer toggles, zoom revealing minor roads, `maxBounds`, IndexedDB round-trips, the module worker booting.
 
@@ -968,6 +968,8 @@ Asserted in the logic suite (a gzipped file round-trips with no storage at all: 
 
 ## 23. Stops are areas; routes keep to main roads; Done and Cancel — Oct 17 2026
 
+**The stop areas below were REVERTED the same day (§24): in play they made routes worse, sending lines to stop points a block away. The Done/Cancel bar and the road-class weighting (now milder) stay.**
+
 Alex, after playing central Athens: the divided highway was "handled beautifully", but bus and tram routes elsewhere zigzagged and looped round blocks near stops. Two causes, both fixed:
 
 1. **A stop was one node.** On Athens's one-way pairs — a street each way, a block apart — the direction that could not pass the stop's node legally drove round the block to reach it, and back. §21's twin only looked 45 m across a median. **A stop is now an area** (`BUILD.STOP_AREA_M`, 110 m; 45 m at a line's ends): for each direction, `Network.planStopNodes` chooses the node every stop is called at, for the whole line at once — a Viterbi pass over each stop's nearest usable nodes (`STOP_AREA_CANDIDATES`, 12; dead ends excluded unless the player put the stop there), each hop costing its weighted route and each metre away from the player's point costing `STOP_MOVE_WEIGHT` (1.5 — it must stay under 2, or the way back still zigzags across to every stop on a one-way pair). Consecutive stops are never served from one node. A repair pass (`repairDoublingBack`) then looks at any stop where the bus would arrive along a street and leave back down it, trying the stop's other nodes with the real routes in and out and charging doubling back at `DOUBLING_BACK_WEIGHT` per metre. This replaces §21's twin; the divided road is simply one case of it. Where a direction calls away from the stop's own point, the overlay draws the small connected circle there.
@@ -987,3 +989,19 @@ And along Patras's divided roads, the way back ÷ the way there: median **1.00**
 **Done and Cancel.** While a line or track is drawn, a bar floats at the top centre — "Bus line · 3 stops", **↶ Undo**, **✓ Done**, **✕ Cancel** — finger-sized, and off the toolbar. **Cancel now throws the line away**, every step undone and refunded in full; stops it shares with other lines stay. Esc and changing tool still keep what was drawn so far, as in Mini Metro.
 
 **Waiting on Alex's approval before starting** (his instruction): new track joining existing track it crosses (and OSM rail), and a gentle grade check for trams.
+
+---
+
+## 24. Double and single stops, no U-turns, one-way arrows — Oct 17 2026
+
+Alex, after trying §23's stop areas in Athens: "this made it worse" — stops served from points a block away, lines touring the blocks. His simpler rules, built as asked:
+
+- **No turning round in the middle of a road**, for buses and trams, anywhere: a route leaves each stop forwards (`shortestPath`'s `avoidFirst`, carried hop to hop in `rebuildSegments` and `refreshBackSegments`, and through a dragged via). The only exception is a dead end — or a street whose only way out is back the way it came — where no legal path exists; on Patras every remaining doubling back was one of those. A double-stop line still reverses at its two end stops, during the layover.
+- **Double stops** (`line.singleSided = false`, the default): the line runs both ways along the same streets, and a stop serves both sides of the road — drawn as two small stops facing each other across it, and passengers board whichever direction suits their trip. On a **one-way** road, a stop is paired with the opposite carriageway only if that runs exactly the other way and lies **directly across within `BUILD.STOP_PAIR_M` (35 m)** — a road with a divider; a parallel street a block away is not paired (`RoadIndex.twinOf`, restored from §21, tightened).
+- **Single stops** (`line.singleSided = true`): each stop is on one side, as in Cities: Skylines, and the line runs **one way round as a loop** — closed back to its first stop automatically (`line.autoLoop`), even with two stops, and still extendable while drawing; the player places the stops for each direction. Each stop is drawn on the kerb of the side it serves (`BUILD.RIGHT_HAND_TRAFFIC`). Switching back to double stops reopens a loop that single stops closed; one the player closed stays closed.
+- **The switch** is in the drawing bar ("⇄ Double stops" / "→ Single stops", remembered for the next line as `game.singleStopsDefault`) and on the line panel ("Stops: Double / Single"). `Network.setSingleSided` / `Game.setSingleSided`.
+- **One-way arrows**: black arrows on every one-way street from zoom 15 (a MapLibre symbol layer, `oneway-arrows`, one arrow per stretch of 25 m or more, decluttered by MapLibre), and drawn again **on top of** bus and tram lines wherever they run along a one-way street, since the lines hide the map beneath.
+
+Removed: §23's `planStopNodes`/Viterbi plan, the doubling-back repair, `STOP_AREA_*`, `STOP_MOVE_WEIGHT`, `DOUBLING_BACK_WEIGHT`. Road-class weighting stays, milder (residential 1.25, living street 2), because strong weights sent lines round blocks to avoid a short side street.
+
+**Known gaps:** a single stop's side follows the line's direction of travel, not where on the road the player clicked; stops are still shared between lines, so a stop used by a double and a single line is drawn both ways. Central Patras is so densely one-way that a double-stop line's way back often takes a different street, which is now visible thanks to the arrows — that is the rules working, not a fault.
