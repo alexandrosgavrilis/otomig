@@ -3,9 +3,11 @@
  *
  * Modes and tools are a small state machine: a mode plus a tool decides what a
  * click on the map does — including a click on an existing stop. Edit stops
- * selects whatever it is clicked on; New line starts from (or continues
- * through) the stop, so lines can share stops as real ones do; Extend line
- * picks the stop's line; Bulldoze removes it.
+ * selects whatever it is clicked on, and with a line selected a click beside
+ * it inserts a stop there, as in Cities: Skylines; New line starts from (or
+ * continues through) the stop, so lines can share stops as real ones do, and
+ * clicking the line's first stop again finishes it; Extend line picks the
+ * stop's line; Bulldoze removes it.
  *
  * All four modes are enabled. **Build track** is the one tool that belongs to
  * only some of them: metro and train are built in two steps — track first,
@@ -80,7 +82,6 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
   draftBar.hidden = true;
   draftBar.innerHTML = `
     <span class="draft-what" data-draft-what></span>
-    <button type="button" data-draft="stops" class="stops-toggle"></button>
     <button type="button" data-draft="undo" title="${STRINGS.draft.undoHint}">${STRINGS.draft.undo}</button>
     <button type="button" data-draft="finish" class="primary" title="${STRINGS.draft.finishHint}">${STRINGS.draft.finish}</button>
     <button type="button" data-draft="cancel" title="${STRINGS.draft.cancelHint}">${STRINGS.draft.cancel}</button>
@@ -93,14 +94,6 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
   draftBar.addEventListener('click', (event) => {
     const action = event.target.closest('button[data-draft]')?.dataset.draft;
     if (!action) return;
-    if (action === 'stops') {
-      // A tool, not a setting of the line: it decides the kind of the stops
-      // placed from now on, and leaves those already placed as they are.
-      game.singleStopsDefault = !game.singleStopsDefault;
-      update();
-      onChange?.(state);
-      return;
-    }
     if (game.trackDraft) {
       if (action === 'undo') game.removeTrackPoint();
       else if (action === 'finish') {
@@ -128,17 +121,6 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
       : STRINGS.draft.drawingLine(STRINGS.toolbar[game.draft.line.mode], game.draft.line.stops.length);
     const label = draftBar.querySelector('[data-draft-what]');
     if (label.textContent !== what) label.textContent = what;
-    // Double or single stops, for a bus or tram line being drawn.
-    const toggle = draftBar.querySelector('[data-draft="stops"]');
-    const road = game.draft && (game.draft.line.mode === 'bus' || game.draft.line.mode === 'tram');
-    if (toggle.hidden === Boolean(road)) toggle.hidden = !road;
-    if (road) {
-      const single = game.singleStopsDefault;
-      const text = single ? STRINGS.draft.singleStops : STRINGS.draft.doubleStops;
-      if (toggle.textContent !== text) toggle.textContent = text;
-      toggle.title = single ? STRINGS.draft.singleStopsHint : STRINGS.draft.doubleStopsHint;
-      toggle.classList.toggle('on', single);
-    }
   }
   let onFeedbackForDraft = null;
 
@@ -255,31 +237,31 @@ export function wireMapInteraction(map, game, toolbar, { onFeedback, onSelect })
     // unable to remove a stop, Extend line unable to pick its line, and New
     // line unable to start at a stop that already existed. Selecting is Edit
     // stops' job.
-    const hitStop = game.network.stopNear(lon, lat, pixelsToMetres(map, 12));
+    const stopReach = pixelsToMetres(map, 12);
+    const hitStop = game.network.stopNear(lon, lat, stopReach);
 
     if (state.tool === 'newLine') {
-      // Starting on an existing stop of the same mode shares it, as real
-      // lines share stops: aim the first click at the stop itself so it snaps
-      // back to the same node and is reused. A stop of another mode cannot be
-      // shared, so the new line gets its own stop beside it, which forms an
-      // interchange.
-      const starting = !game.draft;
-      if (starting) game.startLine(state.mode);
-      const target = starting && hitStop?.mode === state.mode ? [hitStop.lon, hitStop.lat] : [lon, lat];
-      const result = game.extendDraft(target[0], target[1]);
+      // A click on an existing stop of the same mode, on the same side of
+      // the road, shares it, as real lines share stops. A stop of another
+      // mode cannot be shared, so the new line gets its own stop beside it,
+      // which forms an interchange. Clicking the line's first stop again
+      // finishes it.
+      if (!game.draft) game.startLine(state.mode);
+      const result = game.extendDraft(lon, lat, stopReach);
       if (result.error) onFeedback?.(errorText(result.error), event.point);
     } else if (state.tool === 'extendLine') {
       if (!state.extendTarget) {
         const line = hitStop ? game.network.lines.get(hitStop.lines[0]) : null;
         if (!line) { onFeedback?.(STRINGS.errors.pickALine, event.point); return; }
         state.extendTarget = line;
-        game.draft = { line, cursor: null, valid: true };
+        game.draft = { line, cursor: null, spot: null };
         // This click only picked the line. Carrying on would try to add the
         // picked stop to its own line and refuse with "already on this line".
         return;
       }
-      const result = game.extendDraft(lon, lat);
+      const result = game.extendDraft(lon, lat, stopReach);
       if (result.error) onFeedback?.(errorText(result.error), event.point);
+      if (result.finished) state.extendTarget = null;
     } else if (state.tool === 'bulldoze') {
       // Section by section: a stop goes, and each line through it is joined
       // across the gap. A click on a line between stops takes the nearer of
@@ -304,15 +286,29 @@ export function wireMapInteraction(map, game, toolbar, { onFeedback, onSelect })
       if (result?.error) onFeedback?.(errorText(result.error), event.point);
     } else if (state.tool === 'editStops') {
       // Select whatever is under the cursor: a stop first, then a line, then
-      // bare track. This is the one place a line or a track can be clicked
-      // without building something.
+      // bare track. With a line selected, a click beside it inserts a stop
+      // into it there instead.
       const reach = pixelsToMetres(map, 10);
+      const line = selectedLine();
+      if (!hitStop && line && game.insertionAt(line, lon, lat, reach)) {
+        const result = game.insertStopAt(line, lon, lat, reach);
+        if (result.error) onFeedback?.(errorText(result.error), event.point);
+        game.insertHover = null;
+        return;
+      }
       const target = hitStop || nearestLine(game, lon, lat, reach)
         || game.network.trackNear(lon, lat, reach);
       game.selection = target || null;
       onSelect?.(target);
     }
   });
+
+  /** The line selected with Edit stops, which a click beside inserts a stop into. */
+  function selectedLine() {
+    const selection = game.selection;
+    return state.tool === 'editStops' && selection?.segments !== undefined
+      && game.network.lines.has(selection.id) ? selection : null;
+  }
 
   function reportTrack(result, point) {
     if (result.error) onFeedback?.(errorText(result.error), point);
@@ -327,9 +323,15 @@ export function wireMapInteraction(map, game, toolbar, { onFeedback, onSelect })
     // Track being drawn re-plans on every move, so the structures, the cost
     // and anything blocking it are live before a waypoint is placed.
     if (game.trackDraft) game.previewTrack(lon, lat, junctionSnapM(map));
+    // A ghost of the stop a click would insert into the selected line.
+    const line = selectedLine();
+    game.insertHover = line && !game.drag && !game.stopDrag
+      && !game.network.stopNear(lon, lat, pixelsToMetres(map, 12))
+      ? game.insertionAt(line, lon, lat, pixelsToMetres(map, 10)) : null;
     if (!game.draft) return;
     game.draft.cursor = [lon, lat];
-    game.draft.valid = game.canPlaceStop(lon, lat, game.draft.line.mode);
+    // Where the next stop would stand, and on which side of the road.
+    game.draft.spot = game.network.snapStop(lon, lat, game.draft.line.mode);
   });
 
   // Double-click or Enter finishes a line, Esc cancels — as in Mini Metro.
@@ -486,16 +488,14 @@ export function segmentAt(game, lon, lat, maxDistM, { includeRail = false } = {}
   for (const line of game.network.lines.values()) {
     // A metro or train line follows its track; there is nothing to drag it to.
     if (!includeRail && RAIL_MODES.includes(line.mode)) continue;
-    line.segments.forEach((segment, index) => {
-      // On a loop the final segment closes back to the first stop.
-      const fromId = line.stops[index];
-      const toId = line.stops[(index + 1) % line.stops.length];
-      if (!fromId || !toId || fromId === toId) return;
-      for (const [pLon, pLat] of segment.points) {
-        const distance = game.frame.distance(lon, lat, pLon, pLat);
-        if (distance < bestDist) { bestDist = distance; best = { line, fromId, toId }; }
-      }
-    });
+    const near = game.network.segmentNear(line, lon, lat, bestDist);
+    if (!near) continue;
+    // On a loop the final segment closes back to the first stop.
+    const fromId = line.stops[near.index];
+    const toId = line.stops[(near.index + 1) % line.stops.length];
+    if (!fromId || !toId || fromId === toId) continue;
+    bestDist = near.distance;
+    best = { line, fromId, toId };
   }
   return best;
 }
@@ -518,19 +518,9 @@ export function pixelsToMetres(map, pixels) {
   return centre.distanceTo(b);
 }
 
-/** Nearest line to a point, by distance to any of its segment vertices. */
+/** Nearest line to a point within `maxDistM`, or null. */
 function nearestLine(game, lon, lat, maxDistM) {
-  let best = null;
-  let bestDist = maxDistM;
-  for (const line of game.network.lines.values()) {
-    for (const segment of line.segments) {
-      for (const [pLon, pLat] of segment.points) {
-        const distance = game.frame.distance(lon, lat, pLon, pLat);
-        if (distance < bestDist) { bestDist = distance; best = line; }
-      }
-    }
-  }
-  return best;
+  return segmentAt(game, lon, lat, maxDistM, { includeRail: true })?.line ?? null;
 }
 
 function errorText(code) {

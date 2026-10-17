@@ -48,18 +48,11 @@ export class Game {
     this.economy = new Economy(this.difficulty, baselineResidents(region.meta),
       this.passengersPerDot);
 
-    /**
-     * Whether the next bus or tram stop drawn is a single stop: the drawing
-     * bar's switch, a tool that can change between one stop and the next
-     * (`Line.singleStops`). It stays as last set, so a player who prefers
-     * single stops does not have to pick it every time. Not saved.
-     */
-    this.singleStopsDefault = false;
     /** Whether the Flows layer is drawn. A view setting, never saved. */
     this.showFlows = false;
     /** Currently selected object (stop or line), for the right-hand panel. */
     this.selection = null;
-    /** In-progress line drawing: { line, cursor, valid }. */
+    /** In-progress line drawing: { line, cursor, spot } — `spot` where the next stop would go. */
     this.draft = null;
     /**
      * In-progress segment drag: { line, fromId, toId, via, preview }.
@@ -70,6 +63,11 @@ export class Game {
     this.drag = null;
     /** A stop being dragged with Edit stops: { stop, cursor, preview }. */
     this.stopDrag = null;
+    /**
+     * Where a click would insert a stop into the selected line:
+     * { line, lon, lat, heading, afterIndex }, or null. See `insertionAt`.
+     */
+    this.insertHover = null;
     /**
      * In-progress track: { mode, control, start, end, cursor, preview }.
      * `preview` is the track as it would be built with the cursor as the next
@@ -183,11 +181,12 @@ export class Game {
   // ─── Player actions ───────────────────────────────────────────────────────
 
   /**
-   * Place a stop for a mode, charging for it.
+   * Place a stop for a mode, charging for it. A click within `reuseM` of a
+   * stop on the same side of the road reuses that stop.
    * @returns {{stop:object, reused:boolean}|{error:string}}
    */
-  placeStop(lon, lat, mode) {
-    const result = this.network.addStop(lon, lat, mode);
+  placeStop(lon, lat, mode, reuseM) {
+    const result = this.network.addStop(lon, lat, mode, reuseM);
     if (result.error) return result;
     if (result.reused) return result;
 
@@ -201,38 +200,72 @@ export class Game {
     return result;
   }
 
-  /** Could a stop of this mode go here? Drives the rubber band's colour. */
-  canPlaceStop(lon, lat, mode) {
-    if (mode === 'metro' || mode === 'train') {
-      return Boolean(this.network.trackGraph.snap(lon, lat, mode, BUILD.STATION_SNAP_M));
-    }
-    return Boolean(this.roadIndex.snapToRoad(lon, lat, mode));
-  }
-
   /** Start a new line in a mode. */
   startLine(mode) {
     const line = this.network.createLine(mode);
-    this.draft = { line, cursor: null, valid: true };
+    this.draft = { line, cursor: null, spot: null };
     return line;
   }
 
-  /** Add a stop to the line being drawn. */
-  extendDraft(lon, lat) {
+  /**
+   * Add a stop to the end of the line being drawn. Clicking the line's first
+   * stop again finishes it, as in Cities: Skylines — a bus or tram line
+   * heads back there anyway, and a metro or train line is closed into a loop.
+   * @returns {{ok:true, stop?:object, finished?:boolean}|{error:string}}
+   */
+  extendDraft(lon, lat, reuseM) {
     if (!this.draft) return { error: 'noDraft' };
     const line = this.draft.line;
-    const placed = this.placeStop(lon, lat, line.mode);
+    const placed = this.placeStop(lon, lat, line.mode, reuseM);
     if (placed.error) return placed;
 
+    if (placed.stop.id === line.stops[0] && line.stops.length >= 2) {
+      if (line.mode === 'metro' || line.mode === 'train') {
+        const closed = this.network.extendLine(line, placed.stop);
+        if (closed.error) return closed;
+      }
+      this.finishDraft();
+      return { ok: true, finished: true };
+    }
+    return this.addStopToLine(line, placed, line.stops.length - 1);
+  }
+
+  /**
+   * Where a click beside a line would insert a stop into it — Line / Stops,
+   * with the line selected, as in Cities: Skylines: the stop a click here
+   * would place, and which stretch of the line it would go into. Null when
+   * the point is not within `reachM` of the line or of a road.
+   * @returns {{line:object, lon:number, lat:number, heading?:number[], afterIndex:number}|null}
+   */
+  insertionAt(line, lon, lat, reachM) {
+    const spot = this.network.snapStop(lon, lat, line.mode);
+    if (!spot) return null;
+    const near = this.network.segmentNear(line, lon, lat, reachM, spot.heading);
+    if (!near) return null;
+    return { line, lon: spot.lon, lat: spot.lat, heading: spot.heading, afterIndex: near.index };
+  }
+
+  /** Insert a stop into a line where it was clicked beside it. See `insertionAt`. */
+  insertStopAt(line, lon, lat, reachM) {
+    const where = this.insertionAt(line, lon, lat, reachM);
+    if (!where) return { error: 'notNearLine' };
+    const placed = this.placeStop(lon, lat, line.mode);
+    if (placed.error) return placed;
+    return this.addStopToLine(line, placed, where.afterIndex);
+  }
+
+  /**
+   * Put a placed stop into a line after stop `afterIndex`, paying for any
+   * tram track the new route needs. A bus rides on roads that already exist
+   * and pays nothing here. Anything refused gives the stop back.
+   */
+  addStopToLine(line, placed, afterIndex) {
     const before = this.network.trackCostOf(line);
-    const result = this.network.extendLine(line, placed.stop,
-      { single: this.singleStopsDefault && (line.mode === 'bus' || line.mode === 'tram') });
+    const result = this.network.insertStop(line, placed.stop, afterIndex);
     if (result.error) {
       this.refundStop(placed);
       return result;
     }
-
-    // Tram track is bought with the segment. A bus rides on roads that already
-    // exist and pays nothing here.
     const owed = this.network.trackCostOf(line) - before;
     if (owed > 0 && !this.economy.spend(owed, 'construction')) {
       this.network.removeStopFromLine(line, placed.stop.id);
@@ -240,7 +273,7 @@ export class Game {
       return { error: 'cannotAfford' };
     }
     line.trackCost += Math.max(0, owed);
-
+    if (line.vehicles.length > 0) respaceVehicles(line);
     this.invalidate();
     return { ok: true, stop: placed.stop };
   }
@@ -318,25 +351,13 @@ export class Game {
     const from = this.network.stops.get(fromStopId);
     const to = this.network.stops.get(toStopId);
     if (!from || !to) return null;
-
-    if (line.mode === 'tram' && via) {
-      return buildTrack(
-        [this.roadIndex.nodeLonLat(from.node), via, this.roadIndex.nodeLonLat(to.node)],
-        this.region, this.frame, line.mode);
-    }
-    if (via) {
-      const snapped = this.roadIndex.snap(via[0], via[1], line.mode);
-      if (snapped) {
-        const path = this.roadIndex.pathThrough([from.node, snapped.node, to.node], line.mode);
-        if (path) {
-          return { points: this.roadIndex.polyline(path.nodes), lengthM: path.lengthM };
-        }
-      }
-    }
-    const path = this.roadIndex.shortestPath(from.node, to.node, line.mode);
-    return path
-      ? { points: this.roadIndex.polyline(path.nodes), lengthM: path.lengthM }
-      : null;
+    // Routed exactly as it would be, with the via in place for a moment.
+    const key = Network.viaKey(fromStopId, toStopId);
+    const previous = line.vias.get(key);
+    if (via) line.vias.set(key, via); else line.vias.delete(key);
+    const segment = this.network.routeBetween(line, from, to);
+    if (previous) line.vias.set(key, previous); else line.vias.delete(key);
+    return segment;
   }
 
   /**
@@ -375,8 +396,12 @@ export class Game {
   previewStopMove(stop, lon, lat) {
     const snapped = this.network.snapStop(lon, lat, stop.mode);
     if (!snapped) return null;
-    const taken = (snapped.node !== null && this.network.stopAtNode(snapped.node, stop.mode))
+    // Taken: a station already there, or a stop already on that side of the road.
+    const sameSide = (other) => !snapped.heading
+      || other.heading[0] * snapped.heading[0] + other.heading[1] * snapped.heading[1] > 0.7;
+    const taken = (snapped.heading ? null : this.network.stopAtNode(snapped.node, stop.mode))
       || [...this.network.stops.values()].find((other) => other !== stop && other.mode === stop.mode
+        && sameSide(other)
         && this.frame.distance(other.lon, other.lat, snapped.lon, snapped.lat) < BUILD.STOP_REUSE_M);
     return { ...snapped, valid: !taken || taken === stop };
   }
@@ -396,7 +421,8 @@ export class Game {
     const target = this.previewStopMove(stop, lon, lat);
     if (!target) return { error: stop.mode === 'metro' || stop.mode === 'train' ? 'tooFarFromTrack' : 'tooFarFromRoad' };
     if (!target.valid) return { error: 'stopThere' };
-    if (target.node === stop.node) return { ok: true, cost: 0 };
+    const turned = target.heading && target.heading[0] * stop.heading[0] + target.heading[1] * stop.heading[1] < 0;
+    if (target.node === stop.node && !turned) return { ok: true, cost: 0 };
     // Dropped part-way along a road: the road gets a node there.
     if (target.node === null) {
       target.node = this.roadIndex.nodeAt(target.snapped);
@@ -404,7 +430,7 @@ export class Game {
     }
 
     const lines = stop.lines.map((id) => this.network.lines.get(id)).filter(Boolean);
-    const old = { lon: stop.lon, lat: stop.lat, node: stop.node, structure: stop.structure };
+    const old = { lon: stop.lon, lat: stop.lat, node: stop.node, structure: stop.structure, heading: stop.heading };
     const oldCost = stop.cost;
     const trackBefore = lines.map((line) => this.network.trackCostOf(line));
 
@@ -419,7 +445,8 @@ export class Game {
       return { error };
     };
 
-    Object.assign(stop, { lon: target.lon, lat: target.lat, node: target.node, structure: target.structure });
+    Object.assign(stop, { lon: target.lon, lat: target.lat, node: target.node, structure: target.structure,
+      heading: target.heading ?? null });
     for (const line of lines) {
       if (!this.network.rebuildSegments(line)) {
         return restore(stop.mode === 'metro' || stop.mode === 'train' ? 'noTrackPath' : 'noRoadPath');
@@ -446,8 +473,8 @@ export class Game {
   }
 
   /**
-   * Take back the last step of the line being drawn: the last stop added, or
-   * the click that closed it into a loop. Backspace and the Undo button.
+   * Take back the last stop added to the line being drawn. Backspace and
+   * the Undo button.
    * Track is settled and a stop nothing else uses is refunded, so undoing a
    * mistake costs nothing.
    * @returns {{ok:true}|{error:string}}
@@ -457,16 +484,8 @@ export class Game {
     if (!line || line.stops.length === 0) return { error: 'nothingToUndo' };
     const before = this.network.trackCostOf(line);
 
-    let stopId = null;
-    if (line.loop) {
-      line.loop = false;
-      // Re-planned and re-routed as the open line it now is.
-      this.network.rebuildSegments(line);
-      this.network.touch();
-    } else {
-      stopId = line.stops.at(-1);
-      this.network.removeStopFromLine(line, stopId);
-    }
+    const stopId = line.stops.at(-1);
+    this.network.removeStopFromLine(line, stopId);
 
     // Undo gives back what that step cost in full, track and stop alike:
     // taking back a mis-click should be free, unlike bulldozing.
@@ -474,7 +493,7 @@ export class Game {
     if (owed < 0) this.economy.credit('construction', -owed);
     line.trackCost = Math.max(0, line.trackCost + Math.min(0, owed));
 
-    const stop = stopId ? this.network.stops.get(stopId) : null;
+    const stop = this.network.stops.get(stopId);
     if (stop && stop.lines.length === 0) {
       // Bought for this line a moment ago, so it is given back in full.
       this.economy.credit('construction', stop.cost);
@@ -492,7 +511,7 @@ export class Game {
    */
   discardDraft() {
     if (!this.draft) return;
-    while (this.draft.line.stops.length > 0 || this.draft.line.loop) {
+    while (this.draft.line.stops.length > 0) {
       if (this.undoDraftStop().error) break;
     }
     const line = this.draft.line;
@@ -647,17 +666,6 @@ export class Game {
   }
 
   /**
-   * Make a bus or tram line's stops single or double — all of them, or the
-   * ones given. See `Line.singleStops`. Re-routes the line and re-spaces its
-   * vehicles.
-   */
-  setSingleStops(line, single, stopIds) {
-    this.network.setSingleStops(line, single, stopIds);
-    respaceVehicles(line);
-    this.invalidate();
-  }
-
-  /**
    * Set how many people a dot stands for, everywhere that converts between
    * the two. Only ever called at the start of a game or when loading one: a
    * dot that changed meaning mid-game would make every count on screen lie.
@@ -675,8 +683,8 @@ export class Game {
   addVehicle(line, direction = 0) {
     if (line.vehicles.length >= line.maxVehicles) return false;
     if (!this.economy.spend(COSTS.VEHICLE[line.mode], 'construction')) return false;
-    // Round a loop either way — unless backwards would call at nothing.
-    const vehicle = new Vehicle(line, line.loop && this.network.runsBothWays(line) ? direction : 0);
+    // Round a metro or train loop either way; a bus or tram goes the way its stops face.
+    const vehicle = new Vehicle(line, line.closed ? direction : 0);
     vehicle.dotSize = this.passengersPerDot;
     line.vehicles.push(vehicle);
     respaceVehicles(line);
@@ -755,7 +763,7 @@ export class Game {
   removeStopFromLine(line, stopId) {
     const index = line.stops.indexOf(stopId);
     if (index === -1) return { error: 'nothingThere' };
-    const wasLoop = line.loop;
+    const wasClosed = line.closed;
     const before = this.network.trackCostOf(line);
     this.network.removeStopFromLine(line, stopId);
 
@@ -773,9 +781,8 @@ export class Game {
       const owed = this.network.trackCostOf(line) - before;
       if (owed > 0 && !this.economy.spend(owed, 'construction')) {
         // The join around the stop needs track the player cannot pay for.
+        line.closed = wasClosed;
         this.network.insertStop(line, this.network.stops.get(stopId), index - 1);
-        line.loop = wasLoop;
-        this.network.rebuildSegments(line);
         return { error: 'cannotAfford' };
       }
       if (owed < 0) this.economy.refund(-owed);
@@ -840,6 +847,7 @@ export class Game {
       stops: [...this.network.stops.values()].map((stop) => ({
         id: stop.id, mode: stop.mode, lon: stop.lon, lat: stop.lat,
         node: stop.node, name: stop.name, lines: stop.lines, structure: stop.structure,
+        ...(stop.heading ? { heading: stop.heading } : {}),
         ...(stop.customName ? { customName: stop.customName } : {}),
         ...(stop.intercity || stop.intercityCalls ? {
           intercity: stop.intercity, intercityTimer: stop.intercityTimer,
@@ -848,9 +856,8 @@ export class Game {
       })),
       lines: [...this.network.lines.values()].map((line) => ({
         id: line.id, mode: line.mode, color: line.color, stops: line.stops,
-        loop: line.loop,
+        loop: line.closed,
         name: line.name,
-        ...(line.singleStops.size ? { singleStops: [...line.singleStops] } : {}),
         skipEmptyStops: line.skipEmptyStops,
         keepSpacing: line.keepSpacing,
         // Segments are derived and not stored, but the drags that shape them
@@ -899,13 +906,19 @@ export class Game {
       // A bus or tram stop may stand where the player split a road; the
       // region in the cache does not have that node, so find it again — or
       // make it again — from where the stop stands.
+      // Saves from before stops had sides face the way the road was drawn.
       let node = saved.node;
+      let heading = saved.heading ?? null;
       if (saved.mode === 'bus' || saved.mode === 'tram') {
         const snapped = game.roadIndex.snapToRoad(saved.lon, saved.lat, saved.mode, 5);
-        if (snapped) node = game.roadIndex.nodeAt(snapped);
+        if (snapped) {
+          heading ??= game.roadIndex.headingAt(snapped, saved.lon, saved.lat, saved.mode);
+          node = game.roadIndex.nodeAt(snapped);
+        }
+        heading ??= [1, 0];
       }
       const stop = new Stop(saved.mode, saved.lon, saved.lat, node, saved.name,
-        saved.structure);
+        saved.structure, heading);
       stop.id = saved.id;
       stop.lines = saved.lines;
       stop.customName = saved.customName || null;
@@ -920,12 +933,10 @@ export class Game {
       const line = new Line(saved.mode, saved.color);
       line.id = saved.id;
       line.stops = saved.stops;
-      line.loop = saved.loop;
+      // Only a metro or train line is closed by the player; a bus or tram
+      // line is always a loop, whatever an older save says.
+      line.closed = Boolean(saved.loop) && (saved.mode === 'metro' || saved.mode === 'train');
       line.name = saved.name || null;
-      // Saves from when a whole line was single or double: `singleSided`,
-      // and a loop it closed itself, which is now an open line coming back.
-      line.singleStops = new Set(saved.singleStops ?? (saved.singleSided ? saved.stops : []));
-      if (saved.autoLoop) line.loop = false;
       // Saves from before these switches existed get the defaults.
       if (saved.skipEmptyStops !== undefined) line.skipEmptyStops = saved.skipEmptyStops;
       if (saved.keepSpacing !== undefined) line.keepSpacing = saved.keepSpacing;
@@ -946,10 +957,10 @@ export class Game {
         vehicle.dotSize = game.passengersPerDot;
         line.vehicles.push(vehicle);
       }
-      // A vehicle on a hop the line no longer has — an old save's loop that
-      // is now an open line — starts again from its first stop.
-      if (!game.network.runsBothWays(line)) for (const v of line.vehicles) v.direction = 0;
+      // A vehicle on a hop or a way round the line no longer has — from a
+      // save older than bus and tram loops — starts again from its first stop.
       for (const vehicle of line.vehicles) {
+        if (!line.closed && line.loop) vehicle.direction = 0;
         if (vehicle.hop < stopOrder(line, vehicle.direction).length - 1) continue;
         Object.assign(vehicle, { hop: 0, progress: 0, dwellRemaining: 0 });
       }

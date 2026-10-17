@@ -17,7 +17,7 @@ npm start          # node tools/serve.js 8000 — a no-cache server, so updates 
 
 Click **Use the test region** for a synthetic region that needs no network at all, or search a real place and import it. Regions default to 6 × 6 km; the slider reaches 15 km. A dense 5 km import takes about 20 seconds and two Overpass requests, a 10 km one about two minutes; rural areas are much faster. Overpass's own query time dominates and is variable, so an occasional retry in the progress text is normal.
 
-**On screen:** a dot is one person in a town; in a big city it grows so that no more than about 200 are drawn, and the legend in the bottom-left corner says what a dot is worth. The **Flows** toggle draws where people on your network want to go, one arc per pair of stops. Buses running less often than every 10 minutes keep a timetable, and their passengers wait for them. Buses and trams obey one-way streets (marked with black arrows), never turn round in the middle of a road, and skip stops nobody needs. A line can use double stops — both ways, every stop serving both sides — or single stops, running one way round as a loop.
+**On screen:** a dot is one person in a town; in a big city it grows so that no more than about 200 are drawn, and the legend in the bottom-left corner says what a dot is worth. The **Flows** toggle draws where people on your network want to go, one arc per pair of stops. Buses running less often than every 10 minutes keep a timetable, and their passengers wait for them. Bus and tram lines work as in Cities: Skylines: a stop stands on the side of the road you click and serves traffic going that way, and every line heads back to its first stop — so a line up a road and back down it is its stops up one side, then down the other. Clicking the first stop again finishes the line; select a line with *Line / Stops* and click beside it to insert a stop. Buses and trams obey one-way streets (marked with black arrows), never turn round in the middle of a road, and skip stops nobody needs.
 
 **Saving:** *Save* keeps a save for each region in the browser, with an autosave every in-game month, and the start screen offers them under *Continue*. *Save to file* writes one compressed file holding the whole game — network, money and the map itself — which opens on any browser or device with *Open save file*, nothing to import.
 
@@ -26,8 +26,8 @@ Click **Use the test region** for a synthetic region that needs no network at al
 Serve it over `http://` — don't open `index.html` as a `file://` URL. ES modules, the import worker and the OSM services all need a real origin.
 
 ```bash
-npm test               # 766 logic assertions, plain Node, no framework, no dependencies
-npm run test:browser   # 179 assertions driving real Chromium (needs: npm install)
+npm test               # 753 logic assertions, plain Node, no framework, no dependencies
+npm run test:browser   # 178 assertions driving real Chromium (needs: npm install)
 npm run test:live      # 25 assertions against a REAL import — hits live OSM services
 npm run fixture        # regenerate fixtures/test-region.json
 ```

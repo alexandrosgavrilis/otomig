@@ -45,15 +45,6 @@ const STATION_PRICE = {
 
 const isRail = (mode) => mode === 'metro' || mode === 'train';
 
-const lonLatOf = (roadIndex, node) => {
-  const [lon, lat] = roadIndex.nodeLonLat(node);
-  return { lon, lat };
-};
-
-/** Stops a loop needs: three, or two when every one is single, going one way round. */
-const minLoopStops = (line) =>
-  (line.stops.length > 0 && line.stops.every((id) => line.singleStops.has(id)) ? 2 : 3);
-
 /** One key for a road edge, whichever way it is walked. */
 const edgeKey = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
 
@@ -70,8 +61,10 @@ export class Stop {
    * @param {string} name
    * @param {string} [structure] for a station, the structure of the track
    *   under it — which decides its price
+   * @param {[number,number]|null} [heading] for a bus or tram stop, which way
+   *   the traffic it serves travels — see `heading` below
    */
-  constructor(mode, lon, lat, node, name, structure = 'atGrade') {
+  constructor(mode, lon, lat, node, name, structure = 'atGrade', heading = null) {
     this.id = newId('s');
     this.mode = mode;
     this.lon = lon;
@@ -82,6 +75,14 @@ export class Stop {
     /** A name the player gave it, or null to use the street's (numbered). */
     this.customName = null;
     this.structure = structure;
+    /**
+     * A bus or tram stop stands on one side of the road, as in Cities:
+     * Skylines, and vehicles call at it going that side's way: this is that
+     * way, a unit vector in local metres. A stop for the other direction is
+     * another stop, across the road. Null for stations, whose track runs
+     * both ways.
+     */
+    this.heading = heading;
     /** Line ids calling here. */
     this.lines = [];
     /** Interchange id, or null when this stop stands alone. */
@@ -180,8 +181,11 @@ export class Line {
     this.color = color;
     /** Stop ids in order. On a loop the first is not repeated at the end. */
     this.stops = [];
-    /** True when the line closes back on its first stop. */
-    this.loop = false;
+    /**
+     * A metro or train line the player closed into a loop. Read `loop`
+     * rather than this: a bus or tram line is always a loop.
+     */
+    this.closed = false;
     /**
      * One entry per segment between consecutive stops: the lon/lat polyline the
      * vehicle follows and its length. On a loop there is one more segment than
@@ -189,42 +193,6 @@ export class Line {
      * @type {Array<{points:number[][], lengthM:number}>}
      */
     this.segments = [];
-    /**
-     * The way back, hop by hop: `backSegments[j]` is the route from
-     * `stops[downCalls[j + 1]]` back to `stops[downCalls[j]]` — on a loop, the
-     * last one closes the ring backwards — or null where that is simply
-     * segment `downCalls[j]` reversed. With only double stops, j is the
-     * segment index. Null altogether when no hop differs, which is every rail
-     * line and many bus lines.
-     *
-     * Its points are stored from the hop's lower stop to its upper — the
-     * order a segment's are — so the vehicle, which walks a segment
-     * backwards in direction 1, follows it the way it really goes: the right
-     * way down the one-way street.
-     * @type {Array<Object|null>|null}
-     */
-    this.backSegments = null;
-    /**
-     * The line's single stops, by id: each stands on one side of the road, as
-     * in Cities: Skylines, and is called at one way only — on the trip out,
-     * where it was placed. Every other stop is double: called at on the way
-     * out and again on the way back, from the far side of the road. Chosen
-     * stop by stop while drawing, so a line can cover a main road quickly
-     * with double stops and an old town carefully with single ones (Alex,
-     * Oct 17 2026). Buses and trams only.
-     *
-     * The way back calls at the double stops, in reverse, and at both ends
-     * of the line, where the vehicle turns round. A line of single stops
-     * only therefore runs out calling everywhere and comes straight back.
-     * @type {Set<string>}
-     */
-    this.singleStops = new Set();
-    /**
-     * Derived: indices into `stops`, ascending, of the stops the way back
-     * calls at (direction 1). Set with the segments.
-     * @type {number[]|null}
-     */
-    this.downCalls = null;
     /** A name the player gave the line, or null for the automatic one. */
     this.name = null;
     /** Skip stops nobody needs — buses and trams only (VEHICLES.SKIP_EMPTY_STOPS). */
@@ -242,7 +210,7 @@ export class Line {
      * segment reverts to its default route, which is predictable and visible.
      *
      * What a via means depends on the mode. For a bus it forces a different
-     * road route (`RoadIndex.pathThrough`). For a tram it pulls the segment
+     * road route (`RoadIndex.stopPath`'s vias). For a tram it pulls the segment
      * off the road entirely into dedicated track, priced by structure and
      * subject to the grade rule.
      * @type {Map<string, [number, number]>}
@@ -255,6 +223,17 @@ export class Line {
     /** Cumulative counters, for the line panel. */
     this.ridersToday = 0;
     this.ridersPerDay = 0;
+  }
+
+  /**
+   * True when the line closes back on its first stop. A bus or tram line
+   * always does, as in Cities: Skylines: from its last stop it heads back to
+   * its first, so a line up a road and back down it is its stops up one side
+   * and then down the other. A metro or train line runs out and back on its
+   * two-way track unless the player closes it.
+   */
+  get loop() {
+    return isRail(this.mode) ? this.closed : this.stops.length >= 2;
   }
 
   get capacity() { return MODES[this.mode].capacity; }
@@ -275,16 +254,8 @@ export class Line {
    */
   get cycleSeconds() {
     const travel = (this.lengthM / 1000) / this.cruiseKmh * 3600;
-    const dwells = this.stops.length * this.dwellS;
-    if (this.loop) return travel + dwells;
-    // Out, then back: the way back may be another road and skip single stops.
-    const calls = this.downCalls ?? this.stops.map((_, i) => i);
-    let backM = 0;
-    for (let j = 0; j + 1 < calls.length; j++) {
-      backM += (this.backSegments?.[j] ?? this.segments[calls[j]])?.lengthM ?? 0;
-    }
-    const back = (backM / 1000) / this.cruiseKmh * 3600 + calls.length * this.dwellS;
-    return travel + dwells + back;
+    const once = travel + this.stops.length * this.dwellS;
+    return this.loop ? once : 2 * once;
   }
 
   /** Sim seconds between vehicles. Infinite with no vehicles. */
@@ -380,26 +351,33 @@ export class Network {
   // ─── Stops ────────────────────────────────────────────────────────────────
 
   /**
-   * Place a stop, snapped to the nearest usable road.
+   * Place a bus or tram stop on the road where it was clicked, on the side
+   * that was clicked (see `RoadIndex.headingAt`).
+   *
+   * Clicking an existing stop on the same side reuses it, as in Mini Metro;
+   * `reuseM` is how near counts. A stop across the road from an existing
+   * one snaps to its node, so the two face each other.
    *
    * @returns {{stop: Stop, reused: boolean}|{error: string}}
    */
-  addStop(lon, lat, mode) {
+  addStop(lon, lat, mode, reuseM = BUILD.STOP_REUSE_M) {
     if (isRail(mode)) return this.addStation(lon, lat, mode);
 
     // On the road where it was clicked, not at the nearest node — which on a
     // main road can be a side street's (see RoadIndex.snapToRoad).
     const snapped = this.roadIndex.snapToRoad(lon, lat, mode);
     if (!snapped) return { error: 'tooFarFromRoad' };
-
-    // Clicking an existing stop of the same mode reuses it, as in Mini Metro.
-    const existing = (snapped.node !== null && this.stopAtNode(snapped.node, mode))
-      || this.stopNear(snapped.lon, snapped.lat, BUILD.STOP_REUSE_M, mode);
-    if (existing) return { stop: existing, reused: true };
+    const heading = this.roadIndex.headingAt(snapped, lon, lat, mode);
+    // Near the click, or near where it snapped to — a click by a junction
+    // snaps a little way from it.
+    const facing = (stop) => stop.heading[0] * heading[0] + stop.heading[1] * heading[1] > 0.7;
+    const sameSide = this.stopNear(lon, lat, Math.max(reuseM, BUILD.STOP_REUSE_M), mode, facing)
+      || this.stopNear(snapped.lon, snapped.lat, BUILD.STOP_REUSE_M, mode, facing);
+    if (sameSide) return { stop: sameSide, reused: true };
 
     const node = this.roadIndex.nodeAt(snapped);
     const [stopLon, stopLat] = this.roadIndex.nodeLonLat(node);
-    const stop = new Stop(mode, stopLon, stopLat, node, snapped.name || 'Stop');
+    const stop = new Stop(mode, stopLon, stopLat, node, snapped.name || 'Stop', 'atGrade', heading);
     this.stops.set(stop.id, stop);
     this.recomputeInterchanges();
     this.touch();
@@ -455,8 +433,9 @@ export class Network {
 
   /**
    * A line's name: the player's own, or "first stop to last stop" by their
-   * street names (unnumbered). When both ends share a name — a loop, or a
-   * line up and down one long road — it is that name and the mode instead.
+   * street names (unnumbered). When both ends share a name — a closed
+   * loop, or a line up and down one long road — it is that name and the
+   * mode instead.
    *
    * @param {Object} line
    * @param {{to:string, mode:Object<string,string>}} words the UI's strings
@@ -471,56 +450,8 @@ export class Network {
     const last = place(line.stops.at(-1));
     const mode = words.mode[line.mode] ?? line.mode;
     if (!first) return mode;
-    if (line.loop || !last || first === last) return `${first} – ${mode}`;
+    if (line.closed || !last || first === last) return `${first} – ${mode}`;
     return `${first} ${words.to} ${last}`;
-  }
-
-  // ─── Where each direction calls at a stop ─────────────────────────────────
-
-  /**
-   * The stop's twin across a divided road, if it stands on a one-way
-   * carriageway with the opposite one directly across and within
-   * BUILD.STOP_PAIR_M — a road with a central divider, never a parallel
-   * street a block away (Alex, Oct 17 2026). Cached per stop and node.
-   * @returns {{node:number, lon:number, lat:number, flow:[number,number]}|null}
-   */
-  twinOf(stop) {
-    if (isRail(stop.mode)) return null;
-    const cached = this._twins?.get(stop.id);
-    if (cached && cached.node === stop.node) return cached.twin;
-    const found = this.roadIndex.twinOf(stop.node, stop.mode, BUILD.STOP_PAIR_M);
-    // Across from the stop on the other carriageway, made a node if need be.
-    const twinNode = found ? this.roadIndex.nodeAt(found) : null;
-    const twin = found && { node: twinNode, flow: found.flow, ...lonLatOf(this.roadIndex, twinNode) };
-    (this._twins ??= new Map()).set(stop.id, { node: stop.node, twin });
-    return twin;
-  }
-
-  /**
-   * The road node a line calls at for stop `index`, travelling in
-   * `direction`. A double-stop line on a divided road calls at the
-   * carriageway running its way — the twin — for the direction the stop's
-   * own carriageway does not serve, at the line's ends too, where the bus
-   * crosses the divider during its layover. Everywhere else, and for
-   * single-stop lines, it is the stop's own node.
-   */
-  stopNodeFor(line, index, direction) {
-    const stop = this.stops.get(line.stops[index]);
-    if (!stop || isRail(line.mode) || line.singleStops.has(stop.id)) return stop?.node;
-    const count = line.stops.length;
-    if (count < 2) return stop.node;
-    const twin = this.twinOf(stop);
-    if (!twin) return stop.node;
-    // Which way direction 0 travels at this stop: from the stop before to
-    // the stop after, or, at an end, along the line's one segment there.
-    const atStart = !line.loop && index === 0;
-    const atEnd = !line.loop && index === count - 1;
-    const previous = this.stops.get(line.stops[atStart ? 0 : (index - 1 + count) % count]);
-    const next = this.stops.get(line.stops[atEnd ? index : (index + 1) % count]);
-    const [px, py] = this.frame.toLocal(previous.lon, previous.lat);
-    const [nx, ny] = this.frame.toLocal(next.lon, next.lat);
-    const ownSideForward = twin.flow[0] * (nx - px) + twin.flow[1] * (ny - py) >= 0;
-    return ownSideForward === (direction === 0) ? stop.node : twin.node;
   }
 
   /** Is this a station on an existing railway, where intercity trains may call? */
@@ -544,8 +475,10 @@ export class Network {
 
   /**
    * Where a stop of this mode would stand if dropped here: a road node for a
-   * bus or tram, a track sample for a station. Null when nothing is in reach.
-   * @returns {{node:number|string, lon:number, lat:number, structure:string}|null}
+   * bus or tram, and which way it would face; a track sample for a station.
+   * Null when nothing is in reach.
+   * @returns {{node:number|string|null, lon:number, lat:number, structure:string,
+   *            heading?:[number,number], snapped?:Object}|null}
    */
   snapStop(lon, lat, mode) {
     if (isRail(mode)) {
@@ -554,7 +487,8 @@ export class Network {
     }
     // `node` is null where the stop would split a road; `snapped` makes it.
     const snapped = this.roadIndex.snapToRoad(lon, lat, mode);
-    return snapped && { node: snapped.node, lon: snapped.lon, lat: snapped.lat, structure: 'atGrade', snapped };
+    return snapped && { node: snapped.node, lon: snapped.lon, lat: snapped.lat, structure: 'atGrade',
+      heading: this.roadIndex.headingAt(snapped, lon, lat, mode), snapped };
   }
 
   stopAtNode(node, mode) {
@@ -564,14 +498,28 @@ export class Network {
     return null;
   }
 
-  /** Nearest stop of any mode within `maxDistM`, for click selection. */
-  stopNear(lon, lat, maxDistM = 30, mode = null) {
+  /**
+   * Nearest stop within `maxDistM`, of one mode or any, for click selection.
+   * Two stops facing each other across a road stand at the same point, so
+   * between those the side of the road the click is on decides.
+   * @param {(stop: Stop) => boolean} [accept] only stops this accepts
+   */
+  stopNear(lon, lat, maxDistM = 30, mode = null, accept = null) {
+    const [x, y] = this.frame.toLocal(lon, lat);
     let best = null;
-    let bestDist = maxDistM;
+    let bestScore = Infinity;
     for (const stop of this.stops.values()) {
-      if (mode && stop.mode !== mode) continue;
+      if ((mode && stop.mode !== mode) || (accept && !accept(stop))) continue;
       const distance = this.frame.distance(lon, lat, stop.lon, stop.lat);
-      if (distance < bestDist) { bestDist = distance; best = stop; }
+      if (distance >= maxDistM) continue;
+      let score = distance;
+      if (stop.heading) {
+        // The stop's side of the road: right of its heading for right-hand traffic.
+        const [sx, sy] = this.frame.toLocal(stop.lon, stop.lat);
+        const right = (x - sx) * stop.heading[1] - (y - sy) * stop.heading[0];
+        if ((right >= 0) !== BUILD.RIGHT_HAND_TRAFFIC) score += 1;
+      }
+      if (score < bestScore) { bestScore = score; best = stop; }
     }
     return best;
   }
@@ -603,48 +551,21 @@ export class Network {
   }
 
   /**
-   * Append a stop to a line's end, routing the new segment along the roads.
+   * Append a stop to a line's end. A bus or tram line re-routes its way back
+   * to the first stop from the new end; for a metro or train line, clicking
+   * its own first stop closes it into a loop instead.
    *
-   * Clicking the line's own first stop closes it into a loop instead.
-   *
-   * @param {{single?: boolean}} [options] `single`: a single stop on this
-   *   line rather than a double one (buses and trams; see `Line.singleStops`)
    * @returns {{ok: true}|{error: string}}
    */
-  extendLine(line, stop, { single = false } = {}) {
-    if (line.loop) return { error: 'lineIsLoop' };
-
-    const noPath = isRail(line.mode) ? 'noTrackPath' : 'noRoadPath';
-
-    // Closing the loop.
-    if (line.stops.length >= minLoopStops(line) && stop.id === line.stops[0]) {
-      const closing = this.routeBetween(line, this.stops.get(line.stops.at(-1)), stop);
-      if (!closing) return { error: noPath };
-      line.segments.push(closing);
-      line.loop = true;
-      this.settleLine(line);
+  extendLine(line, stop) {
+    if (line.closed) return { error: 'lineIsLoop' };
+    if (isRail(line.mode) && line.stops.length >= 3 && stop.id === line.stops[0]) {
+      line.closed = true;
+      if (!this.rebuildSegments(line)) { line.closed = false; this.rebuildSegments(line); return { error: 'noTrackPath' }; }
       this.touch();
       return { ok: true };
     }
-
-    if (line.stops.includes(stop.id)) return { error: 'alreadyOnLine' };
-
-    // Its kind first: it decides which side of the road the line calls at.
-    if (single && !isRail(line.mode)) line.singleStops.add(stop.id);
-    else line.singleStops.delete(stop.id);
-
-    if (line.stops.length > 0) {
-      const previous = this.stops.get(line.stops.at(-1));
-      const segment = this.routeBetween(line, previous, stop);
-      if (!segment) { line.singleStops.delete(stop.id); return { error: noPath }; }
-      line.segments.push(segment);
-    }
-
-    line.stops.push(stop.id);
-    if (!stop.lines.includes(line.id)) stop.lines.push(line.id);
-    this.settleLine(line);
-    this.touch();
-    return { ok: true };
+    return this.insertStop(line, stop, line.stops.length - 1);
   }
 
   /** Drop a stop out of one line, reconnecting its neighbours. */
@@ -653,34 +574,27 @@ export class Network {
     if (index === -1) return;
 
     line.stops.splice(index, 1);
-    line.singleStops.delete(stopId);
     const stop = this.stops.get(stopId);
     if (stop) stop.lines = stop.lines.filter((id) => id !== line.id);
 
-    // A line needs two stops to mean anything, and a loop needs three — or
-    // two, going one way round with single stops.
-    if (line.stops.length < minLoopStops(line)) line.loop = false;
-    if (line.stops.length < 2) {
-      line.segments = [];
-      line.backSegments = null;
-      line.downCalls = null;
-    } else {
-      this.rebuildSegments(line);
-    }
+    // A closed metro or train loop needs three stops.
+    if (line.stops.length < 3) line.closed = false;
+    this.rebuildSegments(line);
     this.touch();
   }
 
-  /** Insert a stop into the middle of a line, at a segment boundary. */
+  /**
+   * Put a stop into a line after stop `afterIndex` (-1 for the very start),
+   * and re-route the line. Refused, and the line left as it was, when the
+   * roads or track cannot serve the new order.
+   * @returns {{ok: true}|{error: string}}
+   */
   insertStop(line, stop, afterIndex) {
     if (line.stops.includes(stop.id)) return { error: 'alreadyOnLine' };
-    // The same kind as the stop it follows.
-    if (line.singleStops.has(line.stops[afterIndex])) line.singleStops.add(stop.id);
     line.stops.splice(afterIndex + 1, 0, stop.id);
     if (!stop.lines.includes(line.id)) stop.lines.push(line.id);
     if (!this.rebuildSegments(line)) {
-      // Undo: the road network can't actually serve this order.
       line.stops.splice(afterIndex + 1, 1);
-      line.singleStops.delete(stop.id);
       stop.lines = stop.lines.filter((id) => id !== line.id);
       this.rebuildSegments(line);
       return { error: isRail(line.mode) ? 'noTrackPath' : 'noRoadPath' };
@@ -713,7 +627,9 @@ export class Network {
    *
    * Three outcomes, in order of preference:
    *
-   *   - **No via** — the shortest path along roads the mode may use. This is
+   *   - **No via** — the best legal way along roads the mode may use, from
+   *     the side of the road one stop stands on to the side the next stands
+   *     on, never turning round in the road (`RoadIndex.stopPath`). This is
    *     every bus segment and every undragged tram segment, and it is free:
    *     the road already exists. Tram track laid along it is charged per km as
    *     on-street track, which is the cheap rate.
@@ -727,7 +643,7 @@ export class Network {
    *            kinds?:string[], runs?:Object[], blocked?:boolean,
    *            height?:number[], terrain?:number[], cost?:number}|null}
    */
-  routeBetween(line, from, to, fromNode = from.node, toNode = to.node, avoidFirst = null) {
+  routeBetween(line, from, to) {
     // Metro and train never touch the roads: their stations sit on track, and
     // the path between them is the shortest on track their vehicles may use.
     if (isRail(line.mode)) {
@@ -738,41 +654,34 @@ export class Network {
     const via = this.viaFor(line, from, to);
 
     if (via && line.mode === 'tram' && this.region) {
-      const track = buildTrack(
-        [this.roadIndex.nodeLonLat(fromNode), via, this.roadIndex.nodeLonLat(toNode)],
-        this.region, this.frame, line.mode);
       // A segment that cannot be built is not silently replaced by a road
       // route — the player dragged it there deliberately and needs to see it
       // refused. `blocked` carries the reason to the preview and the panel.
-      return track;
+      return buildTrack(
+        [this.roadIndex.nodeLonLat(from.node), via, this.roadIndex.nodeLonLat(to.node)],
+        this.region, this.frame, line.mode);
     }
 
+    // A drag that landed somewhere unroutable is simply ignored.
+    const viaNode = via ? this.roadIndex.snap(via[0], via[1], line.mode)?.node : undefined;
+    const vias = viaNode === undefined ? [] : [viaNode];
     const asSegment = (path) => ({
-      points: this.roadIndex.polyline(path.nodes),
-      nodes: path.nodes,
-      lengthM: path.lengthM,
-      ...(path.ignoresOneway ? { ignoresOneway: true } : {}),
+      points: this.roadIndex.polyline(path.nodes), nodes: path.nodes, lengthM: path.lengthM,
     });
-
-    if (via) {
-      const viaNode = this.roadIndex.snap(via[0], via[1], line.mode);
-      if (viaNode) {
-        const path = this.roadPath([fromNode, viaNode.node, toNode], line.mode, avoidFirst);
-        if (path) return asSegment(path);
-      }
-      // The drag landed somewhere unroutable; fall through to the plain route
-      // rather than breaking the line.
-    }
-
-    const path = this.roadPath([fromNode, toNode], line.mode, avoidFirst);
-    return path ? asSegment(path) : null;
+    const path = this.roadIndex.stopPath(from.node, from.heading, to.node, to.heading, line.mode, vias);
+    if (path) return asSegment(path);
+    // No legal way at all — a one-way street leading out of the region, say.
+    // Breaking the rule beats refusing the line.
+    const any = this.roadIndex.pathThrough([from.node, ...vias, to.node], line.mode, { ignoreOneway: true });
+    return any ? { ...asSegment(any), ignoresOneway: true } : null;
   }
 
   /**
    * What a line's track costs to build.
    *
    * A bus pays nothing: it drives on roads that already exist. A tram pays the
-   * cheap on-street rate along its road-following segments and the structure
+   * cheap on-street rate along its road-following segments — once per
+   * street, however many times the line runs along it — and the structure
    * rate for any segment the player dragged off the road.
    */
   trackCostOf(line) {
@@ -780,30 +689,48 @@ export class Network {
     // it, so drawing a line on it costs nothing more.
     if (isRail(line.mode) || !COSTS.TRACK_PER_KM[line.mode]) return 0;
     let total = 0;
-    for (const segment of line.segments) {
-      total += segment.offRoad
-        ? (segment.cost || 0)
-        : onStreetCost(segment.lengthM, line.mode);
-    }
-    // Where one-way streets send the way back down another street, a tram
-    // needs track there too — but only there: a way back that skips single
-    // stops along the same street runs on the track already laid.
+    let onStreetM = 0;
     const laid = new Set();
     for (const segment of line.segments) {
-      for (let i = 1; i < (segment.nodes?.length ?? 0); i++) laid.add(edgeKey(segment.nodes[i - 1], segment.nodes[i]));
-    }
-    for (const back of line.backSegments || []) {
-      if (!back?.nodes) continue;
-      let newM = 0;
-      for (let i = 1; i < back.nodes.length; i++) {
-        const key = edgeKey(back.nodes[i - 1], back.nodes[i]);
+      if (segment.offRoad) { total += segment.cost || 0; continue; }
+      if (!segment.nodes) { onStreetM += segment.lengthM; continue; }
+      for (let i = 1; i < segment.nodes.length; i++) {
+        const key = edgeKey(segment.nodes[i - 1], segment.nodes[i]);
         if (laid.has(key)) continue;
         laid.add(key);
-        newM += this.roadIndex.edgeBetween(back.nodes[i - 1], back.nodes[i])?.lengthM ?? 0;
+        onStreetM += this.roadIndex.edgeBetween(segment.nodes[i - 1], segment.nodes[i])?.lengthM ?? 0;
       }
-      total += onStreetCost(newM, line.mode);
     }
-    return Math.round(total);
+    return Math.round(total + onStreetCost(onStreetM, line.mode));
+  }
+
+  /**
+   * The segment of a line nearest a point, within `maxDistM`, and how far:
+   * what a click there picks, and where a stop clicked there is inserted.
+   * Where the line runs both ways along a street, the stretch going the way
+   * such a stop would face (`heading`) wins.
+   * @returns {{index:number, distance:number}|null}
+   */
+  segmentNear(line, lon, lat, maxDistM, heading = null) {
+    const [x, y] = this.frame.toLocal(lon, lat);
+    let best = null;
+    let bestScore = Infinity;
+    line.segments.forEach((segment, index) => {
+      const points = segment.points.map(([pLon, pLat]) => this.frame.toLocal(pLon, pLat));
+      for (let i = 1; i < points.length; i++) {
+        const [ax, ay] = points[i - 1];
+        const dx = points[i][0] - ax;
+        const dy = points[i][1] - ay;
+        const lengthSq = dx * dx + dy * dy;
+        const t = lengthSq > 0 ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / lengthSq)) : 0;
+        const distance = Math.hypot(x - (ax + t * dx), y - (ay + t * dy));
+        if (distance >= maxDistM) continue;
+        const against = heading && dx * heading[0] + dy * heading[1] < 0;
+        const score = distance + (against ? maxDistM : 0);
+        if (score < bestScore) { bestScore = score; best = { index, distance }; }
+      }
+    });
+    return best;
   }
 
   /** True when any segment is blocked — by a building, or too steep to build. */
@@ -811,292 +738,22 @@ export class Network {
     return line.segments.some((segment) => segment.blocked);
   }
 
-  /** Recompute every segment of a line after its stop list changed. */
+  /**
+   * Route every segment of a line from its stops: each stop to the next,
+   * and on a loop the last back to the first.
+   * @returns {boolean} false when some segment has no route
+   */
   rebuildSegments(line) {
-    const segments = [];
     const count = line.stops.length;
-    const pairs = [];
-    for (let i = 0; i < count - 1; i++) pairs.push([i, i + 1]);
-    if (line.loop && count >= minLoopStops(line)) pairs.push([count - 1, 0]);
-    // Hop by hop, each leaving its stop forwards: no turning round in the
-    // middle of a road, at a stop or anywhere else (Alex, Oct 17 2026).
-    let arrivedFrom = null;
-    for (const [i, j] of pairs) {
+    const segments = [];
+    for (let i = 0; i < (line.loop ? count : count - 1); i++) {
       const segment = this.routeBetween(line,
-        this.stops.get(line.stops[i]), this.stops.get(line.stops[j]),
-        this.stopNodeFor(line, i, 0), this.stopNodeFor(line, j, 0), arrivedFrom);
+        this.stops.get(line.stops[i]), this.stops.get(line.stops[(i + 1) % count]));
       if (!segment) return false;
       segments.push(segment);
-      arrivedFrom = segment.nodes?.length > 1 ? segment.nodes.at(-2) : null;
-    }
-    // A loop comes back round to its first stop; it must leave that forwards too.
-    if (line.loop && segments.length > 1 && arrivedFrom !== null
-        && segments[0].nodes?.[1] === arrivedFrom) {
-      const again = this.routeBetween(line, this.stops.get(line.stops[0]),
-        this.stops.get(line.stops[1]), this.stopNodeFor(line, 0, 0),
-        this.stopNodeFor(line, 1, 0), arrivedFrom);
-      if (again) segments[0] = again;
     }
     line.segments = segments;
-    this.refreshBackSegments(line);
-    // A double-stop line turns round at each end like a real bus: the trip
-    // down starts by turning round beyond the last stop (in
-    // refreshBackSegments), and the trip up by turning round from where the
-    // trip down ended. Re-planned whole whenever a stop is added, so an old
-    // end stop that is now in the middle loses its turn (Alex, Oct 17 2026).
-    // The two ends depend on each other, so the trips are routed twice.
-    if (this.turnsAtEnds(line)) {
-      for (let pass = 0; pass < 2; pass++) {
-        const down = this.arrivalAtStart(line);
-        const turn = this.turnSegment(line, this.stopNodeFor(line, 0, 1), down,
-          this.stopNodeFor(line, 0, 0), this.stopNodeFor(line, 1, 0), this.viaNodeOf(line, 0));
-        if (!turn) break;
-        line.segments[0] = turn;
-        let arrivedFrom = turn.nodes.length > 1 ? turn.nodes.at(-2) : null;
-        for (let k = 1; k < line.segments.length; k++) {
-          const segment = this.routeBetween(line, this.stops.get(line.stops[k]),
-            this.stops.get(line.stops[k + 1]), this.stopNodeFor(line, k, 0),
-            this.stopNodeFor(line, k + 1, 0), arrivedFrom);
-          if (!segment) break;
-          line.segments[k] = segment;
-          arrivedFrom = segment.nodes?.length > 1 ? segment.nodes.at(-2) : null;
-        }
-        this.refreshBackSegments(line);
-      }
-    }
     return true;
-  }
-
-  /**
-   * Does this line turn round at its ends by road: an open double-stop BUS
-   * line. Trams are double-ended, as most modern European fleets are, and
-   * simply reverse at the end of the line — a turning loop would need track
-   * round a block at each end.
-   */
-  turnsAtEnds(line) {
-    return line.mode === 'bus' && !line.loop && line.stops.length >= 2
-      && line.segments.every((segment) => segment.nodes && !segment.offRoad);
-  }
-
-  /** Where the trip down arrives at the first stop from, or null. */
-  arrivalAtStart(line) {
-    const last = line.backSegments?.[0]?.nodes ?? [...(line.segments[0]?.nodes ?? [])].reverse();
-    return last.length > 1 ? last.at(-2) : null;
-  }
-
-  /**
-   * A turn at the end of a line: from `fromNode` (not back the way it came),
-   * round to `through` — the stop's other side, when it has one — then on to
-   * `toNode`, the next stop. See `RoadIndex.turnaround`.
-   * @returns {{points:number[][], nodes:number[], lengthM:number}|null}
-   */
-  turnSegment(line, fromNode, avoidFirst, through, toNode, viaNode = null) {
-    // After turning round: the stop's other side (if it has one), the
-    // segment's dragged via (if any), then the next stop.
-    const after = [...(through !== fromNode && through !== toNode ? [through] : []),
-      ...(viaNode !== null ? [viaNode] : []), toNode];
-    const first = this.roadIndex.turnaround(fromNode, avoidFirst, after[0], line.mode)
-      ?? this.crossover(fromNode, after[0] === through ? through : null);
-    if (!first) return null;
-    let nodes = first.nodes;
-    let lengthM = first.lengthM;
-    if (after.length > 1) {
-      const rest = this.roadPath(after, line.mode, nodes.length > 1 ? nodes.at(-2) : null);
-      if (!rest) return null;
-      nodes = [...nodes, ...rest.nodes.slice(1)];
-      lengthM += rest.lengthM;
-    }
-    return { points: this.roadIndex.polyline(nodes), nodes, lengthM };
-  }
-
-  /**
-   * Straight across to a stop's other side, when there is no legal way round
-   * inside the region — a motorway whose next exit lies beyond its edge, say.
-   * Without it the bus vanished from one carriageway and reappeared on the
-   * other (Alex, Oct 17 2026); a U-turn across the median at least shows
-   * what it does.
-   */
-  crossover(fromNode, otherSide) {
-    if (otherSide === null || otherSide === fromNode) return null;
-    const [ax, ay] = this.roadIndex.nodePosition(fromNode);
-    const [bx, by] = this.roadIndex.nodePosition(otherSide);
-    return { nodes: [fromNode, otherSide], lengthM: Math.hypot(bx - ax, by - ay), crossover: true };
-  }
-
-  /** The road node of a segment's dragged via, or null. */
-  viaNodeOf(line, k) {
-    const count = line.stops.length;
-    const via = line.vias?.get(Network.viaKey(line.stops[k], line.stops[(k + 1) % count]));
-    return via ? this.roadIndex.snap(via[0], via[1], line.mode)?.node ?? null : null;
-  }
-
-  /**
-   * Make stops of a bus or tram line single or double (`Line.singleStops`):
-   * the ones given, or all of them. A loop whose way round the other way
-   * no longer calls anywhere keeps its vehicles going the one way.
-   * @param {Line} line
-   * @param {boolean} single
-   * @param {string[]} [stopIds] every stop of the line when left out
-   */
-  setSingleStops(line, single, stopIds = line.stops) {
-    if (isRail(line.mode)) return;
-    for (const id of stopIds) {
-      if (!line.stops.includes(id)) continue;
-      if (single) line.singleStops.add(id); else line.singleStops.delete(id);
-    }
-    if (line.stops.length < minLoopStops(line)) line.loop = false;
-    this.rebuildSegments(line);
-    if (!this.runsBothWays(line)) for (const vehicle of line.vehicles) vehicle.direction = 0;
-    this.touch();
-  }
-
-  /** Every stop of the line single, some, or none: for its panel. */
-  stopsKind(line) {
-    const singles = line.stops.filter((id) => line.singleStops.has(id)).length;
-    return singles === 0 ? 'double' : singles === line.stops.length ? 'single' : 'mixed';
-  }
-
-  /**
-   * The stops the way back calls at, as ascending indices into `stops`: the
-   * double ones, and on an open line both ends, where it turns round.
-   */
-  downCallsOf(line) {
-    const count = line.stops.length;
-    const calls = [];
-    for (let i = 0; i < count; i++) {
-      const end = !line.loop && (i === 0 || i === count - 1);
-      if (end || isRail(line.mode) || !line.singleStops.has(line.stops[i])) calls.push(i);
-    }
-    return calls;
-  }
-
-  /**
-   * Can a vehicle go round this line the other way? An open line always
-   * comes back; a loop only if the way round backwards calls at two stops.
-   */
-  runsBothWays(line) {
-    return !line.loop || (line.downCalls ?? this.downCallsOf(line)).length >= 2;
-  }
-
-  /**
-   * After a stop is added: re-route a road line throughout, because the stop
-   * that was its end is now in the middle, and on a divided road that can
-   * change which side each direction calls at. Rail only needs its way back.
-   */
-  settleLine(line) {
-    if (!isRail(line.mode) && this.rebuildSegments(line)) return;
-    this.refreshBackSegments(line);
-  }
-
-  /**
-   * Work out the way back of a line, hop by hop — see `Line.backSegments` —
-   * honouring one-way streets, calling only at its double stops.
-   */
-  refreshBackSegments(line) {
-    const count = line.stops.length;
-    const calls = this.downCallsOf(line);
-    line.downCalls = calls;
-    const m = calls.length;
-    // Rail runs on two-way track and calls everywhere both ways.
-    if (isRail(line.mode) || m < 2 || line.segments.length === 0) { line.backSegments = null; return; }
-    // In the order travelled: from the far end down, then round a loop's ring.
-    const order = [];
-    for (let j = m - 2; j >= 0; j--) order.push(j);
-    if (line.loop) order.push(m - 1);
-    const back = new Array(order.length).fill(null);
-    let arrivedFrom = null;
-    for (const j of order) {
-      const wrap = j === m - 1;
-      const from = wrap ? calls[0] : calls[j + 1];
-      const to = wrap ? calls[m - 1] : calls[j];
-      // The segment this hop is, reversed, when it is one: otherwise -1.
-      const same = wrap ? (calls[0] === 0 && calls[m - 1] === count - 1 ? count - 1 : -1)
-        : (from === to + 1 ? to : -1);
-      // The trip down begins by turning round beyond the last stop.
-      if (j === m - 2 && this.turnsAtEnds(line)) {
-        const up = line.segments.at(-1).nodes;
-        const turn = this.turnSegment(line, this.stopNodeFor(line, count - 1, 0),
-          up.length > 1 ? up.at(-2) : null, this.stopNodeFor(line, count - 1, 1),
-          this.stopNodeFor(line, to, 1), same === -1 ? null : this.viaNodeOf(line, same));
-        if (turn) {
-          back[j] = { ...turn, points: turn.points.slice().reverse(), back: true };
-          arrivedFrom = turn.nodes.length > 1 ? turn.nodes.at(-2) : null;
-          continue;
-        }
-      }
-      back[j] = this.backHop(line, from, to, same, arrivedFrom);
-      const travelled = back[j]?.nodes ?? [...(line.segments[same]?.nodes ?? [])].reverse();
-      arrivedFrom = travelled.length > 1 ? travelled.at(-2) : null;
-    }
-    line.backSegments = back.some(Boolean) ? back : null;
-  }
-
-  /**
-   * The way back from stop index `from` to stop index `to`, or null when it
-   * is simply segment `same` reversed.
-   */
-  backHop(line, from, to, same, avoidFirst) {
-    const count = line.stops.length;
-    const between = same !== -1 ? [same] : [];
-    if (same === -1) for (let k = to; k < from; k++) between.push(k);
-    // Dedicated tram track runs both ways; so does a segment with no road path.
-    if (between.some((k) => line.segments[k]?.offRoad || !line.segments[k]?.nodes)) {
-      if (same !== -1) return null;
-      const parts = between.map((k) => line.segments[k]);
-      return {
-        points: parts.flatMap((part, i) => (i === 0 ? part.points : part.points.slice(1))),
-        nodes: null,
-        lengthM: parts.reduce((sum, part) => sum + part.lengthM, 0),
-        back: true,
-      };
-    }
-    const start = this.stops.get(line.stops[to]);
-    const end = this.stops.get(line.stops[from]);
-    if (!start || !end) return null;
-    const via = same !== -1 && same !== count - 1 ? this.viaFor(line, start, end) : null;
-    const viaNode = via ? this.roadIndex.snap(via[0], via[1], line.mode)?.node : undefined;
-    // The way back calls at each stop from the side running its way.
-    const fromNode = this.stopNodeFor(line, from, 1);
-    const toNode = this.stopNodeFor(line, to, 1);
-    const path = this.roadPath(
-      [fromNode, ...(viaNode !== undefined ? [viaNode] : []), toNode], line.mode, avoidFirst);
-    if (!path) {
-      if (same !== -1) return null;
-      // Nowhere to drive: straight there, rather than nowhere at all.
-      const [ax, ay] = this.roadIndex.nodePosition(fromNode);
-      const [bx, by] = this.roadIndex.nodePosition(toNode);
-      return { nodes: [fromNode, toNode], points: this.roadIndex.polyline([toNode, fromNode]),
-        lengthM: Math.hypot(bx - ax, by - ay), back: true };
-    }
-    if (same !== -1) {
-      const reversed = [...line.segments[same].nodes].reverse();
-      if (path.nodes.length === reversed.length && path.nodes.every((n, i) => n === reversed[i])) {
-        return null;
-      }
-    }
-    return {
-      points: this.roadIndex.polyline(path.nodes).reverse(),
-      nodes: path.nodes,
-      lengthM: path.lengthM,
-      back: true,
-      ...(path.ignoresOneway ? { ignoresOneway: true } : {}),
-    };
-  }
-
-  /**
-   * A road path through these nodes that obeys one-way streets — or, where
-   * none exists, one that ignores them and says so. That happens where a
-   * one-way street leads out of the region and the way round is outside it;
-   * refusing the line there would be worse than a bus breaking the rule.
-   * @returns {{nodes:number[], lengthM:number, ignoresOneway?:boolean}|null}
-   */
-  roadPath(nodes, mode, avoidFirst = null) {
-    const legal = this.roadIndex.pathThrough(nodes, mode, { avoidFirst })
-      // A stop at a dead end can only be left the way the bus came in.
-      ?? (avoidFirst !== null ? this.roadIndex.pathThrough(nodes, mode) : null);
-    if (legal) return legal;
-    const any = this.roadIndex.pathThrough(nodes, mode, { ignoreOneway: true });
-    return any && { ...any, ignoresOneway: true };
   }
 
   // ─── Track ────────────────────────────────────────────────────────────────

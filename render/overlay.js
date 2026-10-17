@@ -23,8 +23,7 @@ import { patienceFor } from '../sim/passengers.js';
 import {
   strokePath, drawLinePattern, drawVehicle, drawStop, drawInterchange,
   drawTrackStructure, drawDragPreview, drawBareTrack, drawLevelCrossing,
-  drawTrackPreview, drawWaypoint, drawIntercityMark, drawStopGhost, drawStopPair, drawDoubleStop,
-  drawOnewayArrow,
+  drawTrackPreview, drawWaypoint, drawIntercityMark, drawStopGhost, drawDirectionArrows,
   drawWaiting, drawWaitRing, offsetPolyline, shade,
 } from './shapes.js';
 
@@ -119,9 +118,20 @@ export function regionBoundaryPainter(bbox) {
  * and finally vehicles on top.
  */
 
+/** Which side of the road traffic keeps to: +1 right, as `offsetPolyline` counts it. */
+const SIDE = BUILD.RIGHT_HAND_TRAFFIC ? 1 : -1;
+const isRoadMode = (mode) => mode === 'bus' || mode === 'tram';
+const zoomScaleOf = (overlay) => Math.min(2, Math.max(0.6, overlay.map.getZoom() / 14));
+
 /**
  * Lines, with their mode pattern inside and side-by-side offsets where several
  * share the same stretch of road.
+ *
+ * A bus or tram line is drawn on its own side of the road — the right, for
+ * right-hand traffic — so where it runs both ways along a street its two
+ * directions sit side by side, two one-way streets as in Cities: Skylines,
+ * with chevrons pointing the way each runs. Metro and train are drawn on
+ * the track.
  *
  * Segments between the same pair of stops come out of the router as the same
  * node path, so a signature built from the path's endpoints and length is
@@ -130,17 +140,16 @@ export function regionBoundaryPainter(bbox) {
 export function linesPainter(game) {
   return (ctx, overlay) => {
     const { network } = game;
-    const zoomScale = Math.min(2, Math.max(0.6, overlay.map.getZoom() / 14));
+    const zoomScale = zoomScaleOf(overlay);
     const width = RENDER.LINE_WIDTH_PX * zoomScale;
+    const step = RENDER.LINE_OFFSET_PX * zoomScale;
 
     // Group shared segments so each line in a bundle gets its own offset.
     /** @type {Map<string, Array<{line:object, segment:object}>>} */
     const bundles = new Map();
     for (const line of network.lines.values()) {
-      // A way back that one-way streets send down another street is drawn
-      // too, or the bus would be seen on a street its line does not show.
-      for (const segment of [...line.segments, ...(line.backSegments || []).filter(Boolean)]) {
-        const key = segmentSignature(segment);
+      for (const segment of line.segments) {
+        const key = segmentSignature(segment, isRoadMode(line.mode));
         if (!bundles.has(key)) bundles.set(key, []);
         bundles.get(key).push({ line, segment });
       }
@@ -154,23 +163,24 @@ export function linesPainter(game) {
       bundle.forEach(({ line, segment }, index) => {
         const points = segment.points.map(([lon, lat]) => overlay.project(lon, lat));
         if (points.length < 2) return;
-        // Centre the bundle on the road: one line sits on it, two straddle it.
-        const spread = (index - (bundle.length - 1) / 2) * RENDER.LINE_OFFSET_PX * zoomScale;
-        pieces.push({ line, segment, drawn: offsetPolyline(points, spread) });
+        // A road line keeps to its side; track lines straddle the track.
+        const offset = isRoadMode(line.mode) ? SIDE * (step / 2 + index * step)
+          : (index - (bundle.length - 1) / 2) * step;
+        pieces.push({ line, segment, drawn: offsetPolyline(points, offset) });
       });
     }
 
+    const arrows = overlay.map.getZoom() >= RENDER.LINE_ARROW_MIN_ZOOM;
     const drawPiece = ({ line, segment, drawn }) => {
-      // One direction only: a little thinner than a street served both ways.
-      const own = segment.back ? width * 0.7 : width;
       if (segment.offRoad || segment.onTrack) {
         // Dedicated track: draw it by structure so the tunnels and bridges
         // the terrain forced on the player are visible without a legend.
         drawTrackStructure(ctx, drawn, segment.kinds, line.color, width, line.mode);
       } else {
-        strokePath(ctx, drawn, line.color, own);
+        strokePath(ctx, drawn, line.color, width);
       }
-      drawLinePattern(ctx, drawn, line.mode, line.color, own);
+      drawLinePattern(ctx, drawn, line.mode, line.color, width);
+      if (arrows && isRoadMode(line.mode)) drawDirectionArrows(ctx, drawn, width, RENDER.LINE_ARROW_SPACING_PX);
     };
 
     ctx.save();
@@ -184,17 +194,6 @@ export function linesPainter(game) {
       for (const piece of pieces) if (piece.line === selected) drawPiece(piece);
     }
 
-    // One-way arrows on top of the lines that run along one-way streets: the
-    // map's own arrows are hidden underneath them.
-    if (overlay.map.getZoom() >= RENDER.ONEWAY_ARROW_MIN_ZOOM) {
-      for (const line of network.lines.values()) {
-        if (line.mode !== 'bus' && line.mode !== 'tram') continue;
-        for (const segment of [...line.segments, ...(line.backSegments || []).filter(Boolean)]) {
-          drawOnewayOnSegment(ctx, overlay, game.roadIndex, segment, zoomScale);
-        }
-      }
-    }
-
     // The segment currently being dragged, on top of everything, dashed.
     const drag = game.drag;
     if (drag?.preview?.points?.length >= 2) {
@@ -203,6 +202,28 @@ export function linesPainter(game) {
       drawDragLabel(ctx, points.at(-1), drag);
     }
   };
+}
+
+/**
+ * Where a stop is drawn on screen. A bus or tram stop sits on its own side
+ * of the road, on the lines calling there, so two stops facing each other
+ * across a street are told apart; a station sits on its track.
+ */
+function stopPoint(overlay, lon, lat, heading, mode) {
+  if (!heading) return overlay.project(lon, lat);
+  return sidePoint(overlay, lon, lat, Math.atan2(heading[1], heading[0]),
+    Math.max(RENDER.LINE_OFFSET_PX / 2 * zoomScaleOf(overlay), (RENDER.STOP_RADIUS_PX[mode] ?? 4) + 1));
+}
+
+/**
+ * A point on screen `offsetPx` to the traffic side of `lon, lat`, for
+ * something travelling `bearing` (local metres, the maths convention).
+ */
+function sidePoint(overlay, lon, lat, bearing, offsetPx) {
+  const [x, y] = overlay.project(lon, lat);
+  const angle = screenAngleOf(overlay, lon, lat, bearing);
+  // Right of travel on screen (y down) is (−sin, cos).
+  return [x - SIDE * Math.sin(angle) * offsetPx, y + SIDE * Math.cos(angle) * offsetPx];
 }
 
 /**
@@ -340,7 +361,7 @@ export function stopsPainter(game) {
     const simNow = game.clock.simSeconds;
 
     for (const stop of game.network.stops.values()) {
-      const [x, y] = overlay.project(stop.lon, stop.lat);
+      const [x, y] = stopPoint(overlay, stop.lon, stop.lat, stop.heading, stop.mode);
       const radius = RENDER.STOP_RADIUS_PX[stop.mode] ?? 4;
 
       // The ring tracks the passenger nearest to giving up. Patience differs
@@ -358,22 +379,10 @@ export function stopsPainter(game) {
       // A stop being dragged: a ghost where it would land, red where it can't.
       if (game.stopDrag?.stop === stop && game.stopDrag.preview) {
         const ghost = game.stopDrag.preview;
-        const [gx, gy] = overlay.project(ghost.lon, ghost.lat);
+        const [gx, gy] = stopPoint(overlay, ghost.lon, ghost.lat, ghost.heading, stop.mode);
         drawStopGhost(ctx, x, y, gx, gy, stop.mode, ghost.valid);
       }
-      const selected = game.selection?.id === stop.id;
-      const kerbs = stopKerbs(game, overlay, stop, x, y);
-      if (!kerbs) {
-        drawStop(ctx, x, y, stop.mode, selected);
-      } else {
-        // A double stop on a two-way road: two stops facing each other.
-        if (kerbs.across) drawDoubleStop(ctx, x, y, kerbs.across, stop.mode, selected);
-        // On a divided road: this side, linked to its twin across the divider.
-        for (const [tx, ty] of kerbs.twins) drawStopPair(ctx, x, y, tx, ty, stop.mode);
-        if (kerbs.twins.length && !kerbs.across) drawStop(ctx, x, y, stop.mode, selected);
-        // Single stops: on the kerb of the side each serves.
-        for (const [sx, sy] of kerbs.sides) drawStop(ctx, sx, sy, stop.mode, selected);
-      }
+      drawStop(ctx, x, y, stop.mode, game.selection?.id === stop.id);
       drawWaiting(ctx, x, y, stop.waiting.length, radius);
     }
   };
@@ -423,78 +432,6 @@ export function flowsPainter(game) {
   };
 }
 
-/**
- * How a bus or tram stop is drawn, from the lines calling at it: `across` is
- * the unit normal to the road for a double stop (two stops facing each other
- * at the same point), `twins` the screen points of linked stops across a
- * divider, `sides` the single stops' kerbside points. Null for a stop no
- * road line calls at, and for stations.
- */
-function stopKerbs(game, overlay, stop, x, y) {
-  if (stop.mode === 'metro' || stop.mode === 'train') return null;
-  const result = { across: null, twins: [], sides: [] };
-  const offset = (RENDER.STOP_RADIUS_PX[stop.mode] ?? 4) + 3;
-  let any = false;
-  for (const lineId of stop.lines) {
-    const line = game.network.lines.get(lineId);
-    if (!line || line.segments.length === 0) continue;
-    const index = line.stops.indexOf(stop.id);
-    const tangent = travelAt(line, index, overlay);
-    if (!tangent) continue;
-    any = true;
-    const [tx, ty] = tangent;
-    // Right of travel on screen (y down): (−ty, tx).
-    const right = BUILD.RIGHT_HAND_TRAFFIC ? [-ty, tx] : [ty, -tx];
-    if (line.singleStops.has(stop.id)) {
-      result.sides.push([x + right[0] * offset, y + right[1] * offset]);
-      continue;
-    }
-    const back = game.network.stopNodeFor(line, index, 1);
-    if (back !== stop.node) {
-      const [lon, lat] = game.roadIndex.nodeLonLat(back);
-      result.twins.push(overlay.project(lon, lat));
-    } else {
-      result.across = right;
-    }
-  }
-  return any ? result : null;
-}
-
-/** Which way a line travels at its stop `index`, as a unit vector on screen. */
-function travelAt(line, index, overlay) {
-  const count = line.stops.length;
-  const into = index > 0 ? line.segments[index - 1] : line.loop ? line.segments.at(-1) : null;
-  const out = line.segments[index] ?? null;
-  const pick = into?.points?.length >= 2 ? into.points.slice(-2)
-    : out?.points?.length >= 2 ? out.points.slice(0, 2) : null;
-  if (!pick || count < 2) return null;
-  const [a, b] = pick.map(([lon, lat]) => overlay.project(lon, lat));
-  const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
-  return length > 0 ? [(b[0] - a[0]) / length, (b[1] - a[1]) / length] : null;
-}
-
-/**
- * Arrows on a line's one-way stretches, pointing the way traffic flows. A
- * segment's `nodes` run in travel order (a way back's too), so each arrow
- * points from one node to the next.
- */
-function drawOnewayOnSegment(ctx, overlay, roadIndex, segment, zoomScale) {
-  const nodes = segment.nodes;
-  if (!nodes || nodes.length < 2) return;
-  if (!segment.onewayAt) {
-    segment.onewayAt = [];
-    for (let i = 0; i + 1 < nodes.length; i++) {
-      if (roadIndex.edgeBetween(nodes[i], nodes[i + 1])?.oneway) segment.onewayAt.push(i);
-    }
-  }
-  for (const i of segment.onewayAt) {
-    const [x1, y1] = overlay.project(...roadIndex.nodeLonLat(nodes[i]));
-    const [x2, y2] = overlay.project(...roadIndex.nodeLonLat(nodes[i + 1]));
-    if (Math.hypot(x2 - x1, y2 - y1) < RENDER.ONEWAY_ARROW_MIN_PX) continue;
-    drawOnewayArrow(ctx, (x1 + x2) / 2, (y1 + y2) / 2, Math.atan2(y2 - y1, x2 - x1), 4 * zoomScale);
-  }
-}
-
 /** A stop, as opposed to a line or a piece of track. */
 const isStop = (object) => Boolean(object && object.waiting !== undefined && object.mode);
 
@@ -505,7 +442,11 @@ export function vehiclesPainter(game) {
     for (const line of game.network.lines.values()) {
       for (const vehicle of line.vehicles) {
         if (!vehicle.lon && !vehicle.lat) continue;
-        const [x, y] = overlay.project(vehicle.lon, vehicle.lat);
+        // A bus or tram drives on its line, on its side of the road.
+        const [x, y] = isRoadMode(line.mode)
+          ? sidePoint(overlay, vehicle.lon, vehicle.lat, vehicle.bearing,
+            RENDER.LINE_OFFSET_PX / 2 * zoomScaleOf(overlay))
+          : overlay.project(vehicle.lon, vehicle.lat);
         if (x < -40 || y < -40 || x > overlay.width + 40 || y > overlay.height + 40) continue;
         drawVehicle(ctx, x, y, screenAngleOf(overlay, vehicle.lon, vehicle.lat, vehicle.bearing),
           line.mode, line.color,
@@ -516,27 +457,32 @@ export function vehiclesPainter(game) {
 }
 
 /**
- * The line currently being drawn: the confirmed part solid, plus a dashed
- * rubber band from the last stop to the cursor, so the player can see what a
- * click would add before committing to it.
+ * What a click would add: while a line is drawn, a dashed rubber band from
+ * its last stop to a ghost of the next stop, on the side of the road it
+ * would stand; with a line selected, a ghost where a click beside it would
+ * insert a stop.
  */
 export function draftPainter(game) {
   return (ctx, overlay) => {
+    const zoomScale = zoomScaleOf(overlay);
+    const hover = game.insertHover;
+    if (hover && !game.draft) {
+      const at = stopPoint(overlay, hover.lon, hover.lat, hover.heading, hover.line.mode);
+      drawGhostStop(ctx, at, hover.line.mode, hover.line.color);
+      drawTag(ctx, at, STRINGS.build.insertStop, false);
+    }
+
     const draft = game.draft;
-    if (!draft || !draft.line) return;
-    const zoomScale = Math.min(2, Math.max(0.6, overlay.map.getZoom() / 14));
-
-    if (draft.cursor && draft.line.stops.length > 0) {
-      const lastStop = game.network.stops.get(draft.line.stops.at(-1));
-      if (!lastStop) return;
-      const from = overlay.project(lastStop.lon, lastStop.lat);
-      const to = overlay.project(draft.cursor[0], draft.cursor[1]);
-
+    if (!draft?.line || !draft.cursor) return;
+    const spot = draft.spot;
+    const to = spot ? stopPoint(overlay, spot.lon, spot.lat, spot.heading, draft.line.mode)
+      : overlay.project(draft.cursor[0], draft.cursor[1]);
+    const lastStop = game.network.stops.get(draft.line.stops.at(-1));
+    if (lastStop) {
+      const from = stopPoint(overlay, lastStop.lon, lastStop.lat, lastStop.heading, lastStop.mode);
       ctx.save();
       ctx.setLineDash([6, 5]);
-      ctx.strokeStyle = draft.valid === false
-        ? '#E4463C'
-        : shade(draft.line.color, 0.25);
+      ctx.strokeStyle = spot ? shade(draft.line.color, 0.25) : COLORS.blocked;
       ctx.lineWidth = RENDER.LINE_WIDTH_PX * zoomScale * 0.8;
       ctx.lineCap = 'round';
       ctx.beginPath();
@@ -545,11 +491,28 @@ export function draftPainter(game) {
       ctx.stroke();
       ctx.restore();
     }
+    if (spot) drawGhostStop(ctx, to, draft.line.mode, draft.line.color);
   };
 }
 
-/** Cheap identity for a routed segment, used to spot shared road stretches. */
-function segmentSignature(segment) {
+/** A stop that a click would place: hollow, ringed in the line's colour. */
+function drawGhostStop(ctx, [x, y], mode, color) {
+  ctx.save();
+  ctx.globalAlpha = 0.85;
+  drawStop(ctx, x, y, mode, false);
+  ctx.beginPath();
+  ctx.arc(x, y, (RENDER.STOP_RADIUS_PX[mode] ?? 4) + 2.5, 0, Math.PI * 2);
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = color;
+  ctx.stroke();
+  ctx.restore();
+}
+
+/**
+ * Cheap identity for a routed segment, used to spot shared road stretches:
+ * one way only for a road line, which runs on its side of the road.
+ */
+function segmentSignature(segment, directed) {
   const points = segment.points;
   if (points.length === 0) return 'empty';
   const [aLon, aLat] = points[0];
@@ -557,7 +520,7 @@ function segmentSignature(segment) {
   // Order-independent, so A→B and B→A bundle together.
   const forward = `${aLon.toFixed(6)},${aLat.toFixed(6)}|${bLon.toFixed(6)},${bLat.toFixed(6)}`;
   const backward = `${bLon.toFixed(6)},${bLat.toFixed(6)}|${aLon.toFixed(6)},${aLat.toFixed(6)}`;
-  const ends = forward < backward ? forward : backward;
+  const ends = directed || forward < backward ? forward : backward;
   return `${ends}@${Math.round(segment.lengthM)}`;
 }
 

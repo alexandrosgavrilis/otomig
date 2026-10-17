@@ -121,26 +121,21 @@ export class Router {
       }
     }
 
-    // Staying aboard while an open line's vehicle turns round at an end: the
-    // way out and the way back are one ride, not a change of vehicle. It is
-    // what makes a stop the way back passes by (a single stop) reachable
-    // from the far side without a transfer penalty.
-    for (const line of network.activeLines) {
-      if (line.loop || line.stops.length < 2) continue;
-      const first = line.stops[0];
-      const last = line.stops.at(-1);
-      const layover = line.dwellS;
-      this.edge(platformNode(last, line.id, 0), platformNode(last, line.id, 1), layover, 'turn');
-      this.edge(platformNode(first, line.id, 1), platformNode(first, line.id, 0), layover, 'turn');
-    }
-
     // Walking inside an interchange, after getting off. No penalty here: it
     // is charged when the passenger boards again, so walking on to the final
     // destination costs only the walk.
+    //
+    // And before getting on: a trip may start by walking to another stop of
+    // its interchange — across the road to the stop facing its own, to go
+    // the other way round a bus line. Still a first boarding, so no penalty.
+    // Without it, everyone counted at one of two facing stops (demand gives
+    // each place to one of them) rode the long way round the loop to go
+    // back the way the other one runs.
     for (const stop of network.stops.values()) {
       for (const { stop: other, walkSeconds } of network.walkableFrom(stop)) {
         if (other.id === stop.id) continue;
         this.edge(arrivedNode(stop.id), arrivedNode(other.id), walkSeconds, 'walk');
+        this.edge(startNode(stop.id), startNode(other.id), walkSeconds, 'walk');
       }
     }
   }
@@ -244,32 +239,20 @@ function reconstructLegs(target, previous, viaEdge) {
  *
  * An open line shuttles, so both directions are always served by every
  * vehicle. A loop keeps each vehicle's direction forever, so only the
- * directions its vehicles were given are available — which is exactly the
- * Mini Metro rule the spec asks for, and the reason the player is asked
- * clockwise or anticlockwise when adding a vehicle to a loop.
+ * directions its vehicles were given are available. A bus or tram loop's
+ * vehicles all go the way its stops face, direction 0.
  */
 export function directionsServed(line) {
   if (!line.loop) return [0, 1];
-  const directions = new Set(line.vehicles.map((vehicle) => vehicle.direction));
-  // The way round backwards calls only at double stops; with fewer than two
-  // it goes nowhere.
-  if ((line.downCalls?.length ?? line.stops.length) < 2) directions.delete(1);
-  return [...directions];
+  return [...new Set(line.vehicles.map((vehicle) => vehicle.direction))];
 }
 
 /**
- * The line's stops in travel order for a direction.
- * Direction 0 is the stop list as drawn. Direction 1 is the way back: the
- * stops in `line.downCalls` — every double stop, and an open line's two
- * ends — reversed. A loop repeats its first stop at the end so the ring
- * closes.
+ * The line's stops in travel order for a direction: as drawn, or reversed.
+ * A loop repeats its first stop at the end so the ring closes.
  */
 export function stopOrder(line, direction) {
-  let stops = line.stops;
-  if (direction === 1) {
-    const calls = line.downCalls ?? line.stops.map((_, i) => i);
-    stops = calls.filter((i) => i < line.stops.length).map((i) => line.stops[i]).reverse();
-  }
+  const stops = direction === 1 ? [...line.stops].reverse() : line.stops;
   return line.loop && stops.length ? [...stops, stops[0]] : stops;
 }
 
@@ -284,27 +267,15 @@ export function hopSeconds(line, direction, i) {
 }
 
 /**
- * The segment a hop uses. Segment `k` of the line always joins stops[k] and
- * stops[k+1] as drawn, so travelling backwards walks the same segments in
- * reverse order — unless the way back differs (a one-way street, a turn at
- * the end, single stops it passes by), in which case it walks that hop of
- * `backSegments` instead.
- *
- * On a loop running backwards this used to take the closing segment for the
- * first hop, off by one; a vehicle going round the other way drove each hop
- * along its neighbour's road.
+ * The segment a hop uses. Segment `k` always joins stops[k] and stops[k+1]
+ * (on a loop the last joins the last stop to the first), so travelling
+ * backwards — on metro and train only — walks the same segments in reverse.
  */
 export function segmentFor(line, direction, i) {
-  const segmentCount = line.segments.length;
-  if (segmentCount === 0) return null;
+  const n = line.segments.length;
+  if (n === 0) return null;
   if (direction === 0) return line.segments[i] || null;
-  // Hop i of the way back, as `Line.backSegments` numbers it: down from the
-  // far end, then (on a loop) the hop that closes the ring backwards.
-  const calls = line.downCalls ?? line.segments.map((_, k) => k);
-  const m = calls.length;
-  const j = i <= m - 2 ? m - 2 - i : m - 1;
-  if (line.backSegments?.[j]) return line.backSegments[j];
-  return line.segments[j === m - 1 ? segmentCount - 1 : calls[j]] || null;
+  return line.segments[line.loop ? (2 * n - 2 - i) % n : n - 1 - i] || null;
 }
 
 const startNode = (stopId) => `S:${stopId}`;

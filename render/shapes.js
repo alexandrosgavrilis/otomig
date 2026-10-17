@@ -212,63 +212,40 @@ export function drawIntercityMark(ctx, x, y, mode) {
   ctx.restore();
 }
 
-/** A small black arrowhead, for one-way streets under a line. */
-export function drawOnewayArrow(ctx, x, y, angle, size) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(angle);
-  ctx.fillStyle = COLORS.onewayArrow;
-  ctx.beginPath();
-  ctx.moveTo(size, 0);
-  ctx.lineTo(-size * 0.8, -size * 0.75);
-  ctx.lineTo(-size * 0.35, 0);
-  ctx.lineTo(-size * 0.8, size * 0.75);
-  ctx.closePath();
-  ctx.fill();
-  ctx.restore();
-}
-
 /**
- * A double stop on a two-way road: two stops facing each other across it, at
- * the same point, joined by a short bar. `normal` is the road's normal on
- * screen.
+ * Small white chevrons along a bus or tram line, pointing the way it runs,
+ * as Cities: Skylines draws its lines: the two directions of a line along
+ * one street then read apart at a glance, and on a one-way street they
+ * point the way it flows.
  */
-export function drawDoubleStop(ctx, x, y, normal, mode, selected = false) {
-  const radius = Math.max(3, (RENDER.STOP_RADIUS_PX[mode] ?? 4) - 0.5);
-  const gap = radius + 1.5;
-  const [nx, ny] = normal;
+export function drawDirectionArrows(ctx, points, width, spacing) {
+  const size = width * 0.32;
   ctx.save();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = COLORS.stopStroke;
-  ctx.beginPath();
-  ctx.moveTo(x - nx * gap, y - ny * gap);
-  ctx.lineTo(x + nx * gap, y + ny * gap);
-  ctx.stroke();
-  ctx.restore();
-  drawStop(ctx, x + nx * gap, y + ny * gap, mode, selected, radius);
-  drawStop(ctx, x - nx * gap, y - ny * gap, mode, selected, radius);
-}
-
-/**
- * A stop on a divided road, called at from both carriageways: a short bar
- * across the median to a smaller circle on the far side, the pair of stops
- * facing each other that real dual carriageways have.
- */
-export function drawStopPair(ctx, x, y, tx, ty, mode) {
-  const radius = RENDER.STOP_RADIUS_PX[mode] ?? 4;
-  ctx.save();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = COLORS.stopStroke;
-  ctx.beginPath();
-  ctx.moveTo(x, y);
-  ctx.lineTo(tx, ty);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.arc(tx, ty, Math.max(2.5, radius - 1), 0, Math.PI * 2);
-  ctx.fillStyle = COLORS.stopFill;
-  ctx.fill();
-  ctx.lineWidth = 1.4;
-  ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+  ctx.lineWidth = Math.max(1.2, width * 0.22);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  let carry = spacing / 2;
+  for (let i = 1; i < points.length; i++) {
+    const [x1, y1] = points[i - 1];
+    const dx = points[i][0] - x1;
+    const dy = points[i][1] - y1;
+    const length = Math.hypot(dx, dy);
+    if (length === 0) continue;
+    const ux = dx / length;
+    const uy = dy / length;
+    for (let d = carry; d < length; d += spacing) {
+      const x = x1 + ux * d;
+      const y = y1 + uy * d;
+      ctx.beginPath();
+      ctx.moveTo(x - ux * size - uy * size, y - uy * size + ux * size);
+      ctx.lineTo(x, y);
+      ctx.lineTo(x - ux * size + uy * size, y - uy * size - ux * size);
+      ctx.stroke();
+    }
+    carry = (carry - length) % spacing;
+    if (carry < 0) carry += spacing;
+  }
   ctx.restore();
 }
 

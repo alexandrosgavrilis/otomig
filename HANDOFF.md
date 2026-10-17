@@ -3,6 +3,7 @@
 Read this first in every session. Update it last.
 
 **State:** Phases 0–4, R, Q, **5 and 6** complete — every phase of the build plan is in. Phase 5: loans, the fare slider and a full finance panel (§11). Phase 6: existing OSM railways are free, ready-made train track, and stations on them can switch on intercity service (§14). There is also a **play-testing panel on the ` key** that tunes passenger behaviour and money live (§15). Every acceptance criterion is asserted in code; the economic half of "Hard on a small island" is measured on a real island, and holds since timetables (§15, §16).
+**Latest:** Oct 17, 2026 (evening) — bus and tram lines rebuilt to work exactly as in Cities: Skylines, and the double/single stop machinery removed (§30); then two passenger fixes: trips may start across the road, and big dots no longer throttle a new network (§31).
 **Last session:** Oct 16, 2026 (evening and night) — Phase 5, Phase 6 with intercity, the tuning panel, a fix for panel buttons that could lose clicks (§11), a balance measurement on Poros (§15), then Alex's decisions on what a dot means: capacity in people, a dot sized to cap what is drawn, a legend, timetables, a Flows layer, and groundwork for ferries (§16, §17).
 **Before that:** Oct 15–16, 2026 — Phase 4 (rail), a real-data trial at Kiato (§10), lines sharing stops (§12), buildings filled in from Overture, population set by the seasonal profile, and a transfer penalty on every change of vehicle (§13).
 **Earlier still:** Oct 10, 2026 — Phase 0 (research), Phase 1 (region and map), Phase 2 (buses and passengers), Phase R (data architecture), first live import, Phase Q (query restructure), Phase 3 (trams).
@@ -88,8 +89,8 @@ Both would have reached Alex as a broken screen, and both were invisible to 272 
 ## 2. Testing
 
 ```bash
-npm test                            # 766 logic assertions, plain Node, no dependencies
-npm run test:browser                # 179 assertions in real Chromium via Playwright
+npm test                            # 760 logic assertions, plain Node, no dependencies
+npm run test:browser                # 178 assertions in real Chromium via Playwright
 npm run test:browser -- --headed    # ...and watch it
 npm run test:live                   # 24 assertions against a REAL import — hits live OSM services
 npm run test:live -- --km 5         # ...at a given size (default 5, the slider minimum)
@@ -947,6 +948,8 @@ Asserted in the logic suite (a gzipped file round-trips with no storage at all: 
 
 ## 21. Selected lines, red tools, and stops on divided roads — Oct 17 2026
 
+**The stop pairs below are superseded by §30.** The selected-line and red-tool changes stand.
+
 - **A selected line stands out**: every other line fades to `RENDER.UNSELECTED_LINE_ALPHA` (0.3) and the selected one is drawn last, over a dark halo (`COLORS.selectionHalo`).
 - **The tools group selects in red** (New line, Extend line, Line / Stops, Build track, Bulldoze), so the toolbar's three groups — modes, tools, layers — read apart. Modes and layers stay ink.
 - **Stops on divided roads are pairs.** Alex: stops and pathfinding went odd where a road splits into two one-way carriageways, and building a line along one meant drawing a ring. The cause: a stop snapped to ONE node, on one carriageway, so the line going the other way could only reach it by driving on to a turning and coming back down the same carriageway. Real stops on such roads face each other across the median, so now a bus or tram stop on a one-way carriageway gets a **twin** — the nearest node within `BUILD.STOP_PAIR_M` (45 m) on a carriageway running exactly the other way, *across* the road rather than along it — and each direction calls at the side running its way (`Network.stopNodeFor`, `RoadIndex.twinOf`). At a line's end the two directions use opposite sides too: the bus arrives on one carriageway and leaves from the other, jumping the 20–40 m across the median during its layover in place of the U-turn. The pair is drawn as a small second circle joined across the road.
@@ -993,6 +996,8 @@ And along Patras's divided roads, the way back ÷ the way there: median **1.00**
 ---
 
 ## 24. Double and single stops, no U-turns, one-way arrows — Oct 17 2026
+
+**§24 to §29 describe line rules that §30 replaced** — kept as the record of what was tried and why. Still current from them: no turning round in the road (now done properly, §30), stops on the road that was clicked (§26), the version bump that made new lines wanted (§28), the one-way arrows on the map.
 
 Alex, after trying §23's stop areas in Athens: "this made it worse" — stops served from points a block away, lines touring the blocks. His simpler rules, built as asked:
 
@@ -1072,3 +1077,50 @@ Alex: "single stop vs double stop should be more like a tool while drawing the r
 **Found on the way:** a vehicle going round a loop *backwards* walked each hop along the neighbouring segment — `segmentFor` took the closing segment for the first hop — so it announced each stop a whole hop away from it (1,000 m on the fixture). Fixed by the new hop numbering; a test now checks that every vehicle reaching a stop is at it, on double, single and mixed lines and round loops both ways.
 
 Trams follow the same rule but still reverse at their ends rather than turning round a block, and a tram's way back only pays for track the way out has not laid.
+
+## 30. Bus and tram lines as in Cities: Skylines — Oct 17 2026 (evening)
+
+Alex: the last sessions overcomplicated line paths (double vs single stops, twins across dividers, turnarounds, crossovers), partly from asking for simpler rules in several ways at once. The instruction: mirror Cities: Skylines exactly, simplify as far as possible, idiot-proof, the most efficient route without backtracking, two-way streets treated as two one-way streets side by side.
+
+**The rules — the whole of them:**
+
+- **A bus or tram stop stands on one side of the road** and serves the traffic going that way (`Stop.heading`, a unit vector). On a two-way street the side clicked decides, traffic keeping right (`RoadIndex.headingAt`, `BUILD.RIGHT_HAND_TRAFFIC`); on a one-way street the flow decides. A stop for the other direction is a second stop across the road; it snaps to the first one's node, so the two face each other. Clicking a stop on the same side reuses it.
+- **Every bus or tram line is a loop**: from its last stop it heads back to its first (`Line.loop` is a getter — true for road modes with two or more stops). A line up a boulevard and back is its stops up one side, then down the other. Clicking the first stop again finishes the line (`Game.extendDraft` → `finished`). Vehicles all run the one way, direction 0.
+- **Routing is one search** (`RoadIndex.stopPath`): Dijkstra over road edges *in a direction* rather than over nodes, leaving each stop along its heading and arriving at the next along its heading, obeying one-way streets. Having arrived at a node along a road, a vehicle may leave along any other — so **it never turns round in the road**; a U-turn happens only where there is no other way on (a dead end). Where nothing legal exists (a one-way street leading out of the region), it falls back to ignoring the rules rather than refusing the line. Road-class weighting is unchanged.
+- **A stop is never on a junction**: a click within `STOP_NODE_SNAP_M` of one goes that far short of it, on the road clicked, because at a junction it would stand on no one road and so on no side of one.
+- **Inserting a stop**: with *Line / Stops*, select a line; hovering beside it shows a ghost stop and "Insert a stop here"; a click inserts it into that stretch (`Game.insertionAt` / `insertStopAt`, `Network.segmentNear`). Where the line runs both ways along a street, the stretch going the way the new stop would face wins.
+- **Drawing**: road lines are drawn on their side of the road, so a line served both ways along a street shows as two parallel lines; white chevrons along every bus and tram line point the way it runs (from zoom 14, `RENDER.LINE_ARROW_*`). Stops sit on their kerb, on their line; vehicles drive on their side. While drawing, a ghost shows where — and on which side — the next stop would go.
+- **Trams** follow the same rules. Track is charged once per street, however many times the line runs along it. **Metro and train are unchanged**: they run out and back on two-way track, and the player can still close one into a loop.
+
+**Removed:** `singleStops`, `downCalls`, `backSegments`, `stopNodeFor`, `twinOf` (both), `flowAt`, `turnaround`, `searchFrom`, `turnSegment`, `crossover`, `setSingleStops`, `stopsKind`, `runsBothWays`, the router's `turn` edges and riding on round the end, the drawing bar's Double/Single switch and the panels' stop-kind rows, `BUILD.STOP_PAIR_M`. `model/network.js` went from 1,288 lines to 945. Old saves load: stops get a heading from where they stand, and bus and tram lines become loops.
+
+**Measured on Patras** (the snapshot from §25–27), 25 lines drawn up one side of a real two-way named road and back down the other, eight stops each: every hop between consecutive stops a **median 1.03×** the distance along the road; **0 U-turns, 0 wrong-way stretches**; about **48 ms to draw a whole line** (~6 ms a click). The five hops over 1.5× (worst 2.42) were all a click 4 m off the centreline beside a junction, which snapped to the cross street — the snap doing what the ghost shows, not the routing.
+
+**Worth knowing:**
+- A click exactly on a road's centreline picks a side arbitrarily (the road's drawing direction). Real clicks are never exact, and the ghost shows the side before clicking; tests click a few metres to the side.
+- A click right beside a junction can land on the side street, as above. A preference for the bigger road on a near-tie would fix it invisibly; not done, to keep the snap simple. Say if it bites.
+- Turning round at the end of a line goes round the block beyond the last stop, as Cities: Skylines buses do. On a road with no block to go round (a motorway whose exits are outside the region) the fallback ignores one-way rules for that stretch.
+
+Asserted in [tests/phase7.js](tests/phase7.js) (`runStopPairs`: avenue up one side and down the other, divided boulevard, sides and reuse, junctions, insertion, Undo/Cancel/closing, tram track once per street, riders on the loop, saves old and new, no U-turns on the fixture) and in [tests/browser.js](tests/browser.js) (insert a stop by hover and click). 753 logic and 178 browser assertions passed at the time (758 after §31).
+
+## 31. Passengers: starting across the road, and dots that no longer throttle demand — Oct 17 2026 (evening)
+
+**Starting across the road.** Two stops facing each other stand at the same point, and demand gives each 200 m cell to the nearest stop, so the first one placed got every resident and its partner none. The passenger router let a trip start only at its own stop, so anyone going back the way the line came rode all the way round the loop. A trip may now start by walking to another stop of its interchange (`Router.build`, start → start walk edges), still a first boarding with no transfer penalty; `placeDot` already stood the dot where its first leg boards.
+
+**Dots no longer throttle demand.** Alex asked whether people waiting "10 at a time" throttles the network. It did, badly. The game shows a 1-in-324 sample of the day, so a whole network wants only a handful of sample-people a calendar day, spread over hundreds of stop pairs, and each pair banked people until it had a whole dot of its own. Measured on Patras, three bus lines, share of wanted trips actually started:
+
+| dot | before: day 5 / day 30 | now: day 1 / day 5 / day 30 |
+| --- | --- | --- |
+| 1 | 29% / 86% | 97% / 99% / 100% |
+| 4 | 0% / 37% | 83% / 99% / 99% |
+| 10 | 0% / **7%** | 69% / 97% / 99% |
+| 30 | 0% / 0% | 0% / 83% / 97% |
+
+Now people are banked for the whole network (`DemandModel.carry`), and each time a dot's worth has built up a dot is born on a trip picked at random, weighted by each pair's rate (`spawn`, a cumulative table and a binary search). Every pair gets its share on average and nothing waits to fill. The random stream is seeded and saved (`DemandModel.random`, mulberry32), so a game and a test play out the same every time and a reload carries on. Old saves' per-pair accumulators are dropped. What remains at day 1 for big dots is honest sparsity: that network wants ~14 sample-people a calendar day in all.
+
+**Two more dot effects — both changed on Alex's decision the same evening:**
+- **Seats round down**: a vehicle holds `floor(capacity / dotSize)` dots. A 50-person bus is exact at 10-person dots, but holds 45 people at 9, 39 at 13, 34 at 17, and 26–49 at 26–49 (one seat). Rounding to the nearest instead would remove the bias. It only bites on regions big enough for dots over ~10, and only once vehicles are full.
+- **Giving up costs satisfaction per dot, not per person**: ten 1-person dots giving up cost ten `GIVE_UP_PENALTY`s, one 10-person dot costs one. Small towns are punished hardest.
+
+**Decided, Oct 17 2026:** seats now round to the nearest whole dot (`Vehicle.seats`, every mode — the same bias in all, and one rule), and a dot giving up costs `GIVE_UP_PENALTY` × the people it stands for (`DemandModel.penalise`). Consequence worth knowing: with 0.15 a person, one 10-person dot giving up drops its pair from 1 to the 0.2 floor at once, and at 0.02 a day it takes 40 days to recover — exactly what ten one-person give-ups always cost a small town. If big cities feel too unforgiving, `PATIENCE.GIVE_UP_PENALTY` is on the tuning panel.
+

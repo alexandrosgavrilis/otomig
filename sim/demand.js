@@ -55,8 +55,14 @@ export class DemandModel {
      * @type {Map<string, number>}
      */
     this.pairRate = new Map();
-    /** Same keys → accumulated fractional passengers awaiting a dot. */
-    this.pairAccumulator = new Map();
+    /**
+     * People banked toward the next dot, for the whole network at once. See
+     * `spawn`. Rebuilt with the pair table: its cumulative rates and keys.
+     */
+    this.carry = 0;
+    this.spawnTable = null;
+    /** State of the random stream that picks each new dot's trip, saved with the game. */
+    this.randomState = 1;
     /**
      * Same keys → satisfaction, 0.2..1. Survives network rebuilds, because a
      * route the player neglected should stay unpopular even if they redraw it.
@@ -205,6 +211,7 @@ export class DemandModel {
    */
   buildPairTable(month, fareMultiplier) {
     this.pairRate.clear();
+    this.spawnTable = null;
     this.connected = new Set();
     this.sortedFlows = null;
     const stops = [...this.network.stops.values()];
@@ -347,7 +354,17 @@ export class DemandModel {
   }
 
   /**
-   * Advance the spawn accumulators and return the dots to create.
+   * The dots to create after `simSeconds`.
+   *
+   * People are banked for the whole network at once, and each time a dot's
+   * worth has built up, one dot is born on a trip picked at random, weighted
+   * by how many people want each pair. Every pair gets its share on average.
+   *
+   * Banking pair by pair instead, as before, throttled the network hard: the
+   * game shows a 1-in-324 sample of the day, so a network wants only a few
+   * dots a day, spread over hundreds of pairs — and each pair waited for a
+   * whole dot of its own. A new network on 10-person dots had started 7% of
+   * its trips by day 30 (Alex, Oct 17 2026).
    *
    * @param {number} simSeconds elapsed sim seconds
    * @returns {Array<{fromId:string, toId:string}>}
@@ -355,20 +372,43 @@ export class DemandModel {
   spawn(simSeconds) {
     const born = [];
     if (simSeconds <= 0) return born;
+    if (!this.spawnTable) {
+      const keys = [...this.pairRate.keys()];
+      const cumulative = new Float64Array(keys.length);
+      let total = 0;
+      keys.forEach((key, i) => { total += Math.max(0, this.pairRate.get(key)); cumulative[i] = total; });
+      this.spawnTable = { keys, cumulative, total };
+    }
+    const { keys, cumulative, total } = this.spawnTable;
+    if (total <= 0) return born;
 
-    for (const [key, rate] of this.pairRate) {
-      if (rate <= 0) continue;
-      const accumulated = (this.pairAccumulator.get(key) ?? 0) + rate * simSeconds;
-      if (accumulated < this.passengersPerDot) {
-        this.pairAccumulator.set(key, accumulated);
-        continue;
+    this.carry += total * simSeconds;
+    while (this.carry >= this.passengersPerDot) {
+      this.carry -= this.passengersPerDot;
+      // The first pair whose running total passes a random point.
+      const target = this.random() * total;
+      let lo = 0;
+      let hi = keys.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (cumulative[mid] > target) hi = mid; else lo = mid + 1;
       }
-      const dots = Math.floor(accumulated / this.passengersPerDot);
-      this.pairAccumulator.set(key, accumulated - dots * this.passengersPerDot);
-      const [fromId, toId] = key.split('|');
-      for (let i = 0; i < dots; i++) born.push({ fromId, toId });
+      const [fromId, toId] = keys[lo].split('|');
+      born.push({ fromId, toId });
     }
     return born;
+  }
+
+  /**
+   * A number in [0, 1) from a seeded stream (mulberry32), so a game — and a
+   * test — plays out the same way every time, and a save carries on as it was.
+   */
+  random() {
+    this.randomState = (this.randomState + 0x6D2B79F5) | 0;
+    let t = this.randomState;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   }
 
   /**
@@ -434,12 +474,17 @@ export class DemandModel {
     return [...merged.values()].sort((x, y) => y.perDay - x.perDay);
   }
 
-  /** A passenger gave up: knock this pair's satisfaction down. */
+  /**
+   * A dot gave up: knock this pair's satisfaction down by the penalty for
+   * every person it stands for — what that many people giving up one by one
+   * would cost. Charged per dot, as before, a big city's 10-person dot cost
+   * a tenth of what ten people cost a small town (Alex, Oct 17 2026).
+   */
   penalise(fromId, toId) {
     const key = pairKey(fromId, toId);
     const current = this.satisfaction.get(key) ?? 1;
-    this.satisfaction.set(key,
-      Math.max(PATIENCE.SATISFACTION_FLOOR, current - PATIENCE.GIVE_UP_PENALTY));
+    this.satisfaction.set(key, Math.max(PATIENCE.SATISFACTION_FLOOR,
+      current - PATIENCE.GIVE_UP_PENALTY * this.passengersPerDot));
     // Force a rebuild so the lower satisfaction shows up in spawn rates.
     this.builtForVersion = -1;
   }
@@ -468,12 +513,13 @@ export class DemandModel {
   }
 
   toJSON() {
-    return { satisfaction: [...this.satisfaction], accumulator: [...this.pairAccumulator] };
+    return { satisfaction: [...this.satisfaction], carry: this.carry, random: this.randomState };
   }
 
   loadJSON(data) {
     this.satisfaction = new Map(data?.satisfaction || []);
-    this.pairAccumulator = new Map(data?.accumulator || []);
+    this.carry = data?.carry ?? 0;
+    this.randomState = data?.random ?? 1;
     this.builtForVersion = -1;
   }
 }

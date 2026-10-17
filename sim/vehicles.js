@@ -53,8 +53,13 @@ export class Vehicle {
   /**
    * Capacity in dots. Until Phase 6 a vehicle took one dot per seat, so a
    * 50-person bus in a city of 10-person dots carried 500 people.
+   *
+   * Rounded to the nearest whole dot, not down: rounding down always lost
+   * seats — a 50-person bus carried 39 people in 13-person dots, and 26 to
+   * 49 people in dots of 26 to 49 (Alex, Oct 17 2026). To the nearest, it is
+   * as often a little over as under.
    */
-  get seats() { return Math.max(1, Math.floor(this.capacity / this.dotSize)); }
+  get seats() { return Math.max(1, Math.round(this.capacity / this.dotSize)); }
   get hasRoom() { return this.passengers.length < this.seats; }
   get load() { return this.passengers.length / this.seats; }
   static price(mode) { return COSTS.VEHICLE[mode]; }

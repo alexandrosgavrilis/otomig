@@ -115,14 +115,6 @@ export const STRINGS = {
     keepSpacingHint: 'A vehicle that catches up with the one ahead waits at its next '
       + 'stop until the gap evens out.',
     skipStops: 'Skip empty stops',
-    stopsKind: 'Stops',
-    stopsDouble: 'Double',
-    stopsSingle: 'Single',
-    stopsMixed: 'Mixed',
-    stopsKindHint: 'Double: called at both ways, from either side of the road. '
-      + 'Single: on one side, called at one way only, where it was placed. '
-      + 'Click to make every stop of the line one kind; a single stop can be changed from its own panel.',
-    stopKindHint: 'Double: this line calls here both ways. Single: one way only, where it was placed.',
     skipStopsHint: 'Drive past a stop where nobody is getting on or off.',
     on: 'On',
     off: 'Off',
@@ -264,6 +256,7 @@ export const STRINGS = {
     intercityNeedsRail: 'Intercity trains only call at stations on existing rail.',
     nothingToUndo: 'Nothing to undo.',
     stopThere: 'There is already a stop there.',
+    notNearLine: 'Click beside the selected line to insert a stop into it.',
     noLoans: 'No loans in this mode.',
     loanTaken: 'That loan is already taken.',
     noLoan: 'There is no loan to repay.',
@@ -339,20 +332,15 @@ export const STRINGS = {
     undo: '↶ Undo',
     undoHint: 'Take back the last stop or waypoint (Backspace).',
     finish: '✓ Done',
-    finishHint: 'Finish the line, or build the track (Enter).',
+    finishHint: 'Finish the line (Enter, or click its first stop), or build the track.',
     cancel: '✕ Cancel',
     cancelHint: 'Throw away what is being drawn, refunded in full. (Esc instead keeps a line\'s stops so far.)',
-    doubleStops: '⇄ Double stops',
-    singleStops: '→ Single stops',
-    doubleStopsHint: 'The next stops are double: called at on the way out and again on the way back, '
-      + 'from the other side of the road. Click to place single stops.',
-    singleStopsHint: 'The next stops are single: on one side of the road, called at one way only — '
-      + 'the way back passes by. Place the stops for each direction yourself. Click for double stops.',
     drawingLine: (mode, stops) => `${mode} line · ${stops} ${stops === 1 ? 'stop' : 'stops'}`,
     drawingTrack: (mode, points) => `${mode} track · ${points} ${points === 1 ? 'point' : 'points'}`,
   },
 
   build: {
+    insertStop: 'Insert a stop here',
     trackBuilt: 'Track built —',
     onStreet: 'on street',
     atGrade: 'at grade',

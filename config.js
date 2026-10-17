@@ -479,9 +479,10 @@ export const BUILD = {
   STOP_SNAP_M: 50,
   /**
    * A stop goes exactly where it was clicked on the road (Alex, Oct 17
-   * 2026) — unless an existing junction is this close, which it then uses
-   * rather than splitting the road a few metres from it; and a click this
-   * close to an existing stop of the mode reuses that stop.
+   * 2026) — unless an existing node is this close, which it then uses
+   * rather than splitting the road a few metres from it (a junction is
+   * kept this far away: a stop stands on one road, on one side of it); and
+   * a click this close to an existing stop on the same side reuses it.
    */
   STOP_NODE_SNAP_M: 15,
   STOP_REUSE_M: 15,
@@ -568,18 +569,9 @@ export const BUILD = {
    */
   JUNCTION_SNAP_M: 30,
   /**
-   * A double-stop line's stop on one carriageway of a road with a central
-   * divider is paired with the opposite carriageway, if that runs exactly
-   * the other way and lies directly across within this distance — the two
-   * stops facing each other that real divided roads have. Kept tight on
-   * purpose: a parallel street a block away is not the other half of the
-   * road (Alex, Oct 17 2026, after an earlier 110 m "stop area" sent lines
-   * on tours of the blocks).
-   */
-  STOP_PAIR_M: 35,
-  /**
-   * Single-stop lines draw each stop on the kerb of the side it serves:
-   * right-hand traffic, as in Greece and most of Europe.
+   * Traffic keeps to the right, as in Greece and most of Europe: a bus or
+   * tram stop clicked on the right of a two-way street serves the traffic
+   * going that way, and lines are drawn on the right of the road.
    */
   RIGHT_HAND_TRAFFIC: true,
 
@@ -947,13 +939,12 @@ export const RENDER = {
   FLOW_MAX_ARCS: 300,
   FLOW_MAX_PX: 14,
   FLOW_MIN_PX: 1,
-  /**
-   * One-way arrows: shown from this zoom, on stretches at least this long,
-   * and on a line only where the stretch is this many pixels on screen.
-   */
+  /** One-way arrows on the map: shown from this zoom, on stretches at least this long. */
   ONEWAY_ARROW_MIN_ZOOM: 15,
   ONEWAY_ARROW_MIN_EDGE_M: 25,
-  ONEWAY_ARROW_MIN_PX: 22,
+  /** Chevrons along bus and tram lines showing which way they run: from this zoom, this far apart. */
+  LINE_ARROW_MIN_ZOOM: 14,
+  LINE_ARROW_SPACING_PX: 60,
 
   /** While a line is selected, every other line is drawn at this opacity. */
   UNSELECTED_LINE_ALPHA: 0.3,

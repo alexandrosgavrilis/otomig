@@ -196,15 +196,16 @@ export function runPhase2Tests(check, near) {
       at(game, 1600, 2800), at(game, 2400, 2800), at(game, 3200, 2800),
     ]);
     check('a three-stop line is built', line.stops.length === 3);
-    check('a line has one fewer segment than stops', line.segments.length === 2);
+    check('a bus line has as many segments as stops: it heads back to its first',
+      line.loop && line.segments.length === 3);
     check('segments carry a routed polyline',
       line.segments.every((s) => s.points.length >= 2 && s.lengthM > 0));
     check('a new line gets a vehicle so it actually runs', line.vehicles.length === 1);
     check('a line picks a palette colour', line.color.startsWith('#'));
 
     const cycle = line.cycleSeconds;
-    check('an open line cycles out and back',
-      cycle > (line.lengthM / 1000 / line.cruiseKmh) * 3600 * 2);
+    near('a bus line cycles once round its loop', cycle,
+      (line.lengthM / 1000 / line.cruiseKmh) * 3600 + 3 * line.dwellS, 1e-6);
     check('headway is the cycle divided by the vehicles',
       Math.abs(line.headwayS - cycle / 1) < 1e-6);
 
@@ -227,29 +228,26 @@ export function runPhase2Tests(check, near) {
 
   // ─── Loops ──────────────────────────────────────────────────────────────
   {
+    // Every bus line is a loop, as in Cities: Skylines; clicking its first
+    // stop again simply finishes it.
     const looped = newGame();
-    const line = buildLine(looped, [
-      at(looped, 2400, 2400), at(looped, 3200, 2400),
-      at(looped, 3200, 3200), at(looped, 2400, 3200),
-    ]);
-    // Clicking the first stop again closes the loop, as in Mini Metro.
-    looped.draft = { line, cursor: null, valid: true };
+    looped.startLine('bus');
+    for (const [x, y] of [[2400, 2400], [3200, 2400], [3200, 3200], [2400, 3200]]) {
+      looped.extendDraft(...at(looped, x, y));
+    }
+    const line = looped.draft.line;
     const first = looped.network.stops.get(line.stops[0]);
-    const result = looped.network.extendLine(line, first);
-    check('clicking the first stop closes a loop', result.ok === true && line.loop);
+    const result = looped.extendDraft(first.lon, first.lat);
+    check('clicking the first stop finishes the line', result.finished === true && !looped.draft
+      && line.stops.length === 4);
     check('a loop has as many segments as stops',
-      line.segments.length === line.stops.length);
+      line.loop && line.segments.length === line.stops.length);
     check('a loop cycles once round, not out and back',
       line.cycleSeconds < 2 * (line.lengthM / 1000 / line.cruiseKmh) * 3600);
 
     const order = stopOrder(line, 0);
     check('a loop\'s stop order returns to its start',
       order[0] === order[order.length - 1]);
-    check('an open line\'s order does not repeat', (() => {
-      const open = buildLine(newGame(), [at(looped, 2400, 2400), at(looped, 3200, 2400)]);
-      const o = stopOrder(open, 0);
-      return o[0] !== o[o.length - 1];
-    })());
   }
 
   // ─── Interchanges ───────────────────────────────────────────────────────
@@ -409,10 +407,18 @@ export function runPhase2Tests(check, near) {
     check('the position is inside the region',
       vehicle.lon > moving.region.meta.bbox[0] && vehicle.lon < moving.region.meta.bbox[2]);
 
-    // Shuttling: run long enough to reach a terminal and come back.
+    // Round the loop: run long enough to come back to the first stop.
     const directionsSeen = new Set();
-    for (let i = 0; i < 400; i++) { run(moving, 1); directionsSeen.add(vehicle.direction); }
-    check('an open line\'s vehicle shuttles both ways', directionsSeen.size === 2);
+    let wrapped = false;
+    let lastHop = vehicle.hop;
+    for (let i = 0; i < 400; i++) {
+      run(moving, 1);
+      directionsSeen.add(vehicle.direction);
+      if (vehicle.hop < lastHop) wrapped = true;
+      lastHop = vehicle.hop;
+    }
+    check('a bus goes round its loop the one way, and comes back to the start',
+      directionsSeen.size === 1 && directionsSeen.has(0) && wrapped);
 
     // Even spacing, in time rather than distance.
     const spaced = newGame();
@@ -425,14 +431,13 @@ export function runPhase2Tests(check, near) {
     const cycle = cycleOf(spacedLine);
     const phases = spacedLine.vehicles.map((v) => phaseOf(v, spacedLine, cycle)).sort((a, b) => a - b);
     const target = cycle.total / phases.length;
-    check('added vehicles are spread evenly round the whole out-and-back cycle',
+    check('added vehicles are spread evenly round the whole loop',
       phases.every((p, i) => Math.abs(p - i * target) < 1),
       `phases ${phases.map((p) => p.toFixed(0)).join(', ')} of ${cycle.total.toFixed(0)}`);
-    check('…so half of them start on the way back',
-      spacedLine.vehicles.filter((v) => v.direction === 1).length === phases.length / 2);
-
-    check('directionsServed gives both ways on an open line',
-      directionsServed(spacedLine).length === 2);
+    check('…all of them going the same way round',
+      spacedLine.vehicles.every((v) => v.direction === 0));
+    check('directionsServed gives the one way round on a bus loop',
+      directionsServed(spacedLine).join() === '0');
   }
 
   // ─── Passenger routing ──────────────────────────────────────────────────
@@ -557,6 +562,12 @@ export function runPhase2Tests(check, near) {
     const key = `${stops[0]}|${stops[1]}`;
     near('ACCEPTANCE: giving up drops satisfaction',
       neglected.demand.satisfaction.get(key), 1 - PATIENCE.GIVE_UP_PENALTY, 1e-9);
+    // A dot of several people costs what they would giving up one by one.
+    neglected.setDotSize(2);
+    neglected.demand.penalise(stops[1], stops[0]);
+    near('…and a dot of two people costs what two people giving up would',
+      neglected.demand.satisfaction.get(`${stops[1]}|${stops[0]}`), 1 - 2 * PATIENCE.GIVE_UP_PENALTY, 1e-9);
+    neglected.setDotSize(1);
 
     for (let i = 0; i < 20; i++) neglected.demand.penalise(stops[0], stops[1]);
     near('satisfaction cannot fall below its floor',

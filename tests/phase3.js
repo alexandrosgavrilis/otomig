@@ -239,11 +239,19 @@ export function runPhase3Tests(check, near) {
       return true;
     })());
 
-    const onStreetLength = line.lengthM;
+    // There and back round the loop, but each street is laid once.
+    const laid = new Map();
+    for (const segment of line.segments) {
+      for (let i = 1; i < segment.nodes.length; i++) {
+        const [p, q] = [segment.nodes[i - 1], segment.nodes[i]].sort((x, y) => x - y);
+        laid.set(`${p}-${q}`, game.roadIndex.edgeBetween(p, q).lengthM);
+      }
+    }
+    const onStreetLength = [...laid.values()].reduce((sum, m) => sum + m, 0);
     const onStreetPrice = game.network.trackCostOf(line);
     check('ACCEPTANCE: on-street tram track is charged, and cheaply',
       onStreetPrice > 0, `${onStreetPrice}`);
-    near('…at the on-street rate',
+    near('…at the on-street rate, once per street',
       onStreetPrice, onStreetCost(onStreetLength, 'tram'), 1);
 
     // Now drag the segment off the road, over the ridge.

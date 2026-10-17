@@ -371,10 +371,11 @@ try {
     await page.evaluate(() =>
       document.querySelector('#tb-tools button[data-tool="buildTrack"]')?.disabled) === true);
 
-  // Three stops along a street, clear of the fixture's bay.
-  await clickAt(1600, 2800);
-  await clickAt(2600, 2800);
-  await clickAt(3400, 2800);
+  // Three stops along a street, clear of the fixture's bay: mid-block, on
+  // the south side of the road, so eastbound (traffic keeps right).
+  await clickAt(1700, 2796);
+  await clickAt(2500, 2796);
+  await clickAt(3300, 2796);
   await page.keyboard.press('Enter');
   await page.waitForTimeout(150);
 
@@ -388,8 +389,8 @@ try {
   });
   check('clicking the map builds a line', built !== null);
   check('the line has the three stops clicked', built?.stops === 3, `${built?.stops} stops`);
-  check('the line routed segments along real roads',
-    built?.segments === 2 && built.lengthKm > 1.5, `${built?.lengthKm?.toFixed(2)} km`);
+  check('the line routed segments along real roads, back round to its first stop',
+    built?.segments === 3 && built.lengthKm > 3, `${built?.lengthKm?.toFixed(2)} km`);
   check('the finished line was given a vehicle', built?.vehicles === 1);
   // The game ticked all the while the line was drawn; its demand must still
   // be rebuilt once the bus makes its stops served (Alex, Oct 17 2026).
@@ -438,14 +439,14 @@ try {
 
   // Selecting a stop opens its panel — with Edit stops, whose job selecting is.
   await page.click('#tb-tools button[data-tool="editStops"]');
-  await clickAt(2600, 2800);
+  await clickAt(2500, 2796);
   const panelOpen = await page.evaluate(() =>
     !document.querySelector('.panel')?.hidden);
   check('clicking a stop opens its panel', panelOpen === true);
 
   // New line started ON an existing stop shares it: one stop, two lines.
   await page.click('#tb-tools button[data-tool="newLine"]');
-  await clickAt(2600, 2800);
+  await clickAt(2500, 2796);
   await clickAt(2600, 3800);
   await page.keyboard.press('Enter');
   await page.waitForTimeout(150);
@@ -1213,47 +1214,46 @@ try {
     }
     const shown = await page.isVisible('#tb-draft');
     await page.screenshot({ path: join(SHOTS, '19-draft-bar.png') });
-    // Double or single stops, switched from the drawing bar: a tool for the
-    // stops placed next, not a setting of the whole line.
-    await page.click('#tb-draft [data-draft="stops"]');
-    await page.waitForTimeout(100);
-    const switched = await page.evaluate(() => ({
-      single: window.otomig.game.singleStopsDefault,
-      loop: window.otomig.game.draft?.line.loop,
-      singles: window.otomig.game.draft?.line.singleStops.size,
-      label: document.querySelector('#tb-draft [data-draft="stops"]').textContent,
-    }));
-    const extra = await pointOf(3400, 3600);
-    await page.mouse.click(extra.x, extra.y);
-    await page.waitForTimeout(100);
-    const placedSingle = await page.evaluate(() => {
-      const line = window.otomig.game.draft?.line;
-      return line ? line.singleStops.has(line.stops.at(-1)) && line.singleStops.size === 1 : false;
-    });
-    await page.click('#tb-draft [data-draft="stops"]');
-    await page.waitForTimeout(100);
-    const back = await page.evaluate(() => ({
-      single: window.otomig.game.singleStopsDefault, loop: window.otomig.game.draft?.line.loop,
-    }));
-    check('the drawing bar switches the next stops to single, leaving those placed double',
-      switched.single === true && switched.loop === false && switched.singles === 0
-      && /Single/.test(switched.label), JSON.stringify(switched));
-    check('…the next stop placed is single', placedSingle);
-    check('…and it switches back to double stops', back.single === false && back.loop === false,
-      JSON.stringify(back));
-    // Undo takes back the single stop too (it did nothing in single-stop mode).
-    await page.click('#tb-draft [data-draft="undo"]');
     await page.click('#tb-draft [data-draft="undo"]');
     await page.click('#tb-draft [data-draft="finish"]');
     await page.waitForTimeout(100);
     const drawn = await page.evaluate(() => {
       const lines = [...window.otomig.game.network.lines.values()].filter((l) => l.mode === 'bus');
-      return { stops: lines.at(-1)?.stops.length, draft: Boolean(window.otomig.game.draft),
-        barHidden: document.getElementById('tb-draft').hidden };
+      return { stops: lines.at(-1)?.stops.length, loop: lines.at(-1)?.loop,
+        draft: Boolean(window.otomig.game.draft), barHidden: document.getElementById('tb-draft').hidden };
     });
     check('Undo and Finish line buttons appear while drawing', shown);
     check('…Undo takes back the last stop and Done completes the line, without a keyboard',
-      drawn.stops === 2 && !drawn.draft && drawn.barHidden, JSON.stringify(drawn));
+      drawn.stops === 2 && drawn.loop && !drawn.draft && drawn.barHidden, JSON.stringify(drawn));
+
+    // Insert a stop, as in Cities: Skylines: select the line, hover beside
+    // it, click. Points along its first segment, projected to the screen.
+    const along = (t) => page.evaluate((f) => {
+      const line = [...window.otomig.game.network.lines.values()].filter((l) => l.mode === 'bus').at(-1);
+      const points = line.segments[0].points;
+      const [lon, lat] = points[Math.min(points.length - 1, Math.floor(f * (points.length - 1)))];
+      const p = window.otomig.map.project([lon, lat]);
+      return { x: p.x, y: p.y };
+    }, t);
+    await page.click('#tb-tools button[data-tool="editStops"]');
+    const pick = await along(0.5);
+    await page.mouse.click(pick.x, pick.y);
+    await page.waitForTimeout(100);
+    const insertAt = await along(0.25);
+    await page.mouse.move(insertAt.x, insertAt.y);
+    await page.waitForTimeout(100);
+    const hovering = await page.evaluate(() => Boolean(window.otomig.game.insertHover));
+    await page.screenshot({ path: join(SHOTS, '19b-insert-stop.png') });
+    await page.mouse.click(insertAt.x, insertAt.y);
+    await page.waitForTimeout(100);
+    const inserted = await page.evaluate(() => {
+      const line = [...window.otomig.game.network.lines.values()].filter((l) => l.mode === 'bus').at(-1);
+      return { stops: line.stops.length, selected: window.otomig.game.selection === line };
+    });
+    check('with a line selected, hovering beside it shows where a stop would go', hovering);
+    check('…and a click there inserts the stop into the line', inserted.stops === 3 && inserted.selected,
+      JSON.stringify(inserted));
+    await page.click('#tb-tools button[data-tool="newLine"]');
 
     // Cancel throws a new line away.
     const linesBefore = await page.evaluate(() => window.otomig.game.network.lines.size);
