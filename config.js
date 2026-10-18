@@ -878,6 +878,8 @@ export const COLORS = {
 
   stopFill: '#FFFFFF',
   stopStroke: '#2B2B2B',
+  /** The thin line joining two stops of an interchange: black, 30% opaque. */
+  interchangeLink: 'rgba(0, 0, 0, 0.3)',
   passenger: '#2B2B2B',
   /** One-way arrows, on the map and on lines running along one-way streets. */
   onewayArrow: '#2B2B2B',

@@ -923,6 +923,26 @@ export class Network {
   }
 
   /**
+   * Is walking between these two stops a change of line: both on a line,
+   * and on no line in common? Two sides of one stop on the same line count
+   * as an interchange, but changing there is no change, so they are not
+   * shown as one — on the map or in the stop's panel (Alex, Oct 18 2026).
+   */
+  static isChange(a, b) {
+    return a !== b && a.lines.length > 0 && b.lines.length > 0
+      && !a.lines.some((id) => b.lines.includes(id));
+  }
+
+  /** Can a passenger change lines here, to a stop of its interchange? */
+  changesAt(stop) {
+    const interchange = stop.interchange && this.interchanges.get(stop.interchange);
+    return Boolean(interchange?.stops.some((id) => {
+      const other = this.stops.get(id);
+      return other && Network.isChange(stop, other);
+    }));
+  }
+
+  /**
    * Stops a passenger can walk to from here, with the walk time in sim seconds.
    * Includes the stop itself at zero cost.
    * @returns {Array<{stop: Stop, walkSeconds: number}>}

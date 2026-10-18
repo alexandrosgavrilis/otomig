@@ -773,6 +773,16 @@ function runStopPairs(check, near) {
       Math.abs(jx - (500 + BUILD.STOP_NODE_SNAP_M)) < 0.5 && game.roadIndex.degree(byJunction.stop.node, 'bus') === 2,
       `${jx}`);
 
+    // The two sides of one stop on the same line are an interchange, but
+    // not a change of line: no link drawn, and the panel says no.
+    check('two facing stops of the same line are not shown as an interchange',
+      stops[2].interchange && !game.network.changesAt(stops[2]));
+    const cross = lineAlong(game, [[1100, 2005], [2600, 1995]]);
+    const crossStop = game.network.stops.get(cross.stops[0]);
+    check('…while a stop of another line beside them is',
+      crossStop && game.network.changesAt(crossStop) && game.network.changesAt(stops[0]),
+      JSON.stringify({ cross: Boolean(crossStop) }));
+
     // Clicking the same side again reuses the stop; the other side is a new one.
     const again = game.placeStop(...game.frame.toLonLat(...east(2004)), 'bus');
     const other = game.placeStop(...game.frame.toLonLat(...west(1500)), 'bus');

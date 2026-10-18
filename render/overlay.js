@@ -16,12 +16,13 @@
  * projection and the device-pixel scaling are right. Phase 2 fills it in.
  */
 
-import { COLORS, RENDER, BUILD } from '../config.js';
+import { COLORS, RENDER, BUILD, DEMAND } from '../config.js';
 import { STRINGS } from '../ui/strings.js';
 import { formatMoney } from '../sim/economy.js';
 import { patienceFor } from '../sim/passengers.js';
+import { Network } from '../model/network.js';
 import {
-  strokePath, drawLinePattern, drawVehicle, drawStop, drawInterchange,
+  strokePath, drawLinePattern, drawVehicle, drawStop, drawInterchangeLink,
   drawTrackStructure, drawDragPreview, drawBareTrack, drawLevelCrossing,
   drawTrackPreview, drawWaypoint, drawIntercityMark, drawStopGhost, drawDirectionArrows,
   drawWaiting, drawWaitRing, offsetPolyline, shade,
@@ -114,7 +115,7 @@ export function regionBoundaryPainter(bbox) {
 /* ─── Game painters ────────────────────────────────────────────────────────
  *
  * Each returns a painter closure for Overlay.painters. They are pushed in
- * draw order: lines first, then interchange rings, stops, waiting passengers,
+ * draw order: lines first, then interchange links, stops, waiting passengers,
  * and finally vehicles on top.
  */
 
@@ -347,15 +348,27 @@ export function trackLabel(preview) {
   return parts.join(' · ');
 }
 
-/** Interchange rings, under the stops they join. */
+/**
+ * Interchanges: a thin line between each two stops of one that are within
+ * walking distance of each other, under the stops (Alex, Oct 18 2026; it
+ * was a ring round them all). Only where walking between them is a change
+ * of line (`Network.isChange`): not between two stops of the same line —
+ * the two sides of one stop, say — nor to a stop no line calls at.
+ */
 export function interchangesPainter(game) {
   return (ctx, overlay) => {
-    for (const interchange of game.network.interchanges.values()) {
-      const points = interchange.stops
-        .map((id) => game.network.stops.get(id))
-        .filter(Boolean)
-        .map((stop) => overlay.project(stop.lon, stop.lat));
-      drawInterchange(ctx, points);
+    const { network } = game;
+    for (const interchange of network.interchanges.values()) {
+      const stops = interchange.stops.map((id) => network.stops.get(id)).filter(Boolean);
+      for (let i = 0; i < stops.length; i++) {
+        for (let j = i + 1; j < stops.length; j++) {
+          const [a, b] = [stops[i], stops[j]];
+          if (!Network.isChange(a, b)) continue;
+          if (game.frame.distance(a.lon, a.lat, b.lon, b.lat) > DEMAND.INTERCHANGE_M) continue;
+          drawInterchangeLink(ctx, stopPoint(overlay, a.lon, a.lat, a.heading, a.mode),
+            stopPoint(overlay, b.lon, b.lat, b.heading, b.mode));
+        }
+      }
     }
   };
 }

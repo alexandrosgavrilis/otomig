@@ -272,23 +272,15 @@ export function drawStopGhost(ctx, x, y, gx, gy, mode, valid) {
   ctx.restore();
 }
 
-/** One outlined ring around the stops an interchange joins. */
-export function drawInterchange(ctx, points) {
-  if (points.length < 2) return;
-  let cx = 0;
-  let cy = 0;
-  for (const [x, y] of points) { cx += x; cy += y; }
-  cx /= points.length;
-  cy /= points.length;
-
-  let radius = 0;
-  for (const [x, y] of points) radius = Math.max(radius, Math.hypot(x - cx, y - cy));
-
+/** A thin line joining two stops a passenger can walk between. */
+export function drawInterchangeLink(ctx, [ax, ay], [bx, by]) {
   ctx.save();
+  ctx.strokeStyle = COLORS.interchangeLink;
+  ctx.lineWidth = 1.5;
+  ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.arc(cx, cy, radius + 7, 0, Math.PI * 2);
-  ctx.strokeStyle = COLORS.stopStroke;
-  ctx.lineWidth = 1.4;
+  ctx.moveTo(ax, ay);
+  ctx.lineTo(bx, by);
   ctx.stroke();
   ctx.restore();
 }

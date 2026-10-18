@@ -393,7 +393,7 @@ function stopHtml(game, stop) {
         <span>${Math.round(totals.residents).toLocaleString()}${
           totals.served === false ? ` · ${STRINGS.panel.notServed}` : ''}</span></div>
       <div class="row"><span>${STRINGS.panel.interchange}</span>
-        <span>${stop.interchange ? STRINGS.panel.yes : STRINGS.panel.no}</span></div>
+        <span>${game.network.changesAt(stop) ? STRINGS.panel.yes : STRINGS.panel.no}</span></div>
       ${stop.mode === 'metro' || stop.mode === 'train' ? `
         <div class="row"><span>${STRINGS.panel.structure}</span>
           <span>${STRINGS.panel.structureNames[stop.structure] || stop.structure}</span></div>` : ''}
