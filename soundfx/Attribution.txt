@@ -1,0 +1,51 @@
+Plastic toy rolling by giddster -- https://freesound.org/s/387977/ -- License: Creative Commons 0
+
+Motor Loop.wav by soundjoao -- https://freesound.org/s/325808/ -- License: Creative Commons 0
+
+Train Wheel Impact Contact Mic - 2.wav by JarredGibb -- https://freesound.org/s/219057/ -- License: Creative Commons 0
+
+ferry_engine_pulse.wav by suonidigenova -- https://freesound.org/s/55053/ -- License: Creative Commons 0
+
+kasowanie biletu - ticket on the tram.wav by monosfera -- https://freesound.org/s/319340/ -- License: Creative Commons 0
+
+Menu Select Tick by el_boss -- https://freesound.org/s/628638/ -- License: Creative Commons 0
+
+Diesel_engine_Startup by roboroo -- https://freesound.org/s/436786/ -- License: Creative Commons 0
+
+powerfull horn by trezz77 -- https://freesound.org/s/546528/ -- License: Creative Commons 0
+
+NYC_Subway, ding dong door opening sound.aif by carroll27 -- https://freesound.org/s/187314/ -- License: Creative Commons 0
+
+rocky_mtns_train_horn_moving.wav by polymorpheva -- https://freesound.org/s/91559/ -- License: Creative Commons 0
+
+Jingle4h.wav by jochen1988 -- https://freesound.org/s/420643/ -- License: Attribution 3.0
+
+glass_ding.mp3 by hihirex -- https://freesound.org/s/66876/ -- License: Creative Commons 0
+
+Budapest_metro_loop_sound1.wav by csengeri -- https://freesound.org/s/108739/ -- License: Attribution 4.0
+
+13750 cargo train passing loop by Robinhood76 -- https://freesound.org/s/827942/ -- License: Attribution NonCommercial 4.0
+
+Atmo_TrainStation_Bremen_Interior_02_Loop.wav by LamaMakesMusic -- https://freesound.org/s/685462/ -- License: Creative Commons 0
+
+---
+
+Which file in the game is which, and what plays it. Each was converted to
+mono 96 kbps mp3 and levelled (one-shots -24 dBFS, loops -28); the
+originals are kept out of the repository.
+
+bulldoze.mp3        Plastic toy rolling (giddster)           something bulldozed
+loop-bus.mp3        Motor Loop (soundjoao)                   a bus line selected
+month.mp3           Train Wheel Impact Contact Mic 2 (JarredGibb)  the month turns
+loop-ferry.mp3      ferry_engine_pulse (suonidigenova)       a ferry line selected
+finances.mp3        kasowanie biletu (monosfera)             the finances panel opens
+stop.mp3            Menu Select Tick (el_boss)               a stop added to a line, or moved
+new-line-bus.mp3    Diesel_engine_Startup (roboroo)          a new bus line
+new-line-ferry.mp3  powerfull horn (trezz77)                 a new ferry line
+new-line-metro.mp3  NYC_Subway ding dong (carroll27)         a new metro line
+new-line-train.mp3  rocky_mtns_train_horn_moving (polymorpheva)  a new train line
+new-line-tram.mp3   Jingle4h (jochen1988, CC BY 3.0)         a new tram line
+station-full.mp3    glass_ding (hihirex)                     a stop fills up
+loop-metro.mp3      Budapest_metro_loop_sound1 (csengeri, CC BY 4.0)  a metro line selected
+loop-train.mp3      13750 cargo train passing loop (Robinhood76, CC BY-NC 4.0)  a train line selected
+loop-tram.mp3       Atmo_TrainStation_Bremen_Interior_02_Loop (LamaMakesMusic)  a tram line selected

@@ -862,6 +862,26 @@ function runStopPairs(check, near) {
     check('…with the reason in words', /steep/i.test(STRINGS.errors.tramTooSteep));
   }
 
+  // What the sound effects listen for (Alex, Oct 18 2026).
+  {
+    const game = avenue();
+    const heard = [];
+    for (const type of ['lineCreated', 'stopPlaced', 'bulldozed']) game.on(type, () => heard.push(type));
+    const line = lineAlong(game, [east(1000), east(2000)]);
+    check('a new line announces itself once, after a stop placed for each click',
+      heard.join() === 'stopPlaced,stopPlaced,lineCreated', heard.join());
+    heard.length = 0;
+    game.draft = { line, cursor: null, spot: null };
+    game.extendDraft(...game.frame.toLonLat(...east(3000)));
+    game.finishDraft();
+    check('…but extending an old line is not a new line', heard.join() === 'stopPlaced', heard.join());
+    heard.length = 0;
+    game.moveStop(game.network.stops.get(line.stops[1]), ...game.frame.toLonLat(...east(2200)));
+    game.bulldoze(game.network.stops.get(line.stops[2]));
+    check('moving a stop and bulldozing one are heard too',
+      heard[0] === 'stopPlaced' && heard.includes('bulldozed'), heard.join());
+  }
+
   // Drawing: Undo, Cancel, and clicking the first stop to finish.
   {
     const game = avenue();

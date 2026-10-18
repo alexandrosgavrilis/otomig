@@ -39,7 +39,7 @@ export function mountPanels(root, game, { onChange }) {
   /** What the line, stop or track view was last built for. */
   let shownFor = null;
 
-  function showFinances() { view = 'finances'; game.selection = null; render(); }
+  function showFinances() { view = 'finances'; game.selection = null; render(); game.emit('financesOpened'); }
   function clear() { view = null; game.selection = null; render(); }
 
   /**

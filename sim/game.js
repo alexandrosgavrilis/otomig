@@ -87,6 +87,12 @@ export class Game {
 
     /** Listeners fired after each tick, for the HUD. */
     this.listeners = new Set();
+    /**
+     * Listeners for things the player has just done, by type — what the
+     * sound effects play on. See `emit` for the types.
+     * @type {Map<string, Set<Function>>}
+     */
+    this.eventListeners = new Map();
 
     this.lastRealTime = 0;
     this.accumulator = 0;
@@ -95,6 +101,22 @@ export class Game {
   onTick(callback) {
     this.listeners.add(callback);
     return () => this.listeners.delete(callback);
+  }
+
+  /** Listen for one kind of player action. See `emit`. */
+  on(type, callback) {
+    if (!this.eventListeners.has(type)) this.eventListeners.set(type, new Set());
+    this.eventListeners.get(type).add(callback);
+    return () => this.eventListeners.get(type).delete(callback);
+  }
+
+  /**
+   * Tell listeners the player just did something: `lineCreated` (a new line
+   * finished, with its line), `stopPlaced` (a stop added to a line or moved),
+   * `bulldozed` (something torn down), `financesOpened`.
+   */
+  emit(type, detail) {
+    for (const callback of this.eventListeners.get(type) || []) callback(detail);
   }
 
   /**
@@ -203,7 +225,8 @@ export class Game {
   /** Start a new line in a mode. */
   startLine(mode) {
     const line = this.network.createLine(mode);
-    this.draft = { line, cursor: null, spot: null };
+    // `created`: a new line, as opposed to one picked up with Extend line.
+    this.draft = { line, cursor: null, spot: null, created: true };
     return line;
   }
 
@@ -282,6 +305,7 @@ export class Game {
     line.trackCost += Math.max(0, owed);
     if (line.vehicles.length > 0) respaceVehicles(line);
     this.invalidate();
+    this.emit('stopPlaced', placed.stop);
     return { ok: true, stop: placed.stop };
   }
 
@@ -474,6 +498,7 @@ export class Game {
     this.network.recomputeInterchanges();
     this.network.touch();
     this.invalidate();
+    this.emit('stopPlaced', stop);
     return { ok: true, cost: owed };
   }
 
@@ -528,7 +553,7 @@ export class Game {
   /** Finish drawing. A line with fewer than two stops is discarded. */
   finishDraft() {
     if (!this.draft) return;
-    const line = this.draft.line;
+    const { line, created } = this.draft;
     this.draft = null;
     if (line.stops.length < 2) {
       this.network.deleteLine(line.id);
@@ -538,6 +563,7 @@ export class Game {
       this.addVehicle(line);
     }
     this.invalidate();
+    if (created && line.stops.length >= 2) this.emit('lineCreated', line);
     return line;
   }
 
@@ -753,6 +779,7 @@ export class Game {
     }
     if (this.selection === target) this.selection = null;
     this.invalidate();
+    this.emit('bulldozed', target);
     return { ok: true };
   }
 
@@ -812,6 +839,7 @@ export class Game {
       if (this.selection === stop) this.selection = null;
     }
     this.invalidate();
+    this.emit('bulldozed', line);
     return { ok: true, lineRemoved, stopRemoved };
   }
 

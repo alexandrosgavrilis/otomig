@@ -54,6 +54,8 @@ Where OSM has the roads but not the buildings — much of Greece outside its cit
 
 The typeface is [Sansation](https://fonts.google.com/specimen/Sansation) by Bernd Montag, under the [SIL Open Font License](vendor/fonts/OFL-Sansation.txt), served from `vendor/fonts/` so the game works offline.
 
+Sound effects are from [Freesound](https://freesound.org), converted to mono mp3 and levelled to one loudness, in [soundfx/](soundfx/) with [their credits](soundfx/Attribution.txt). Most are CC0. Three ask for credit: *Jingle4h* by jochen1988 ([CC BY 3.0](https://creativecommons.org/licenses/by/3.0/), [source](https://freesound.org/s/420643/)), a new tram line; *Budapest_metro_loop_sound1* by csengeri ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), [source](https://freesound.org/s/108739/)), a selected metro line; and *13750 cargo train passing loop* by Robinhood76 ([CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/), [source](https://freesound.org/s/827942/)), a selected train line — **non-commercial only**, so it would have to be replaced if the game were ever sold.
+
 Elevation from [Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) on the Registry of Open Data on AWS — Terrain Tiles by Mapzen/Tilezen, from SRTM (NASA), 3DEP (USGS), GMTED2010 (USGS), ETOPO1 (NOAA) and other sources.
 
 The game follows the OSMF usage policies for [tiles](https://operations.osmfoundation.org/policies/tiles/) and [Nominatim](https://operations.osmfoundation.org/policies/nominatim/): visible attribution, place search on Enter only (never autocomplete, which the policy forbids), at most one search per second, results cached, and no tile prefetching or bulk download.

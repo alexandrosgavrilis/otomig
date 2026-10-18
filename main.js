@@ -25,6 +25,7 @@ import { mountHud, mountLegend } from './ui/hud.js';
 import { mountToolbar, wireMapInteraction } from './ui/toolbar.js';
 import { mountPanels } from './ui/panels.js';
 import { mountTuning } from './ui/tuning.js';
+import { mountSound } from './ui/sound.js';
 import { applyOverrides, loadSaved } from './sim/tuning.js';
 import { STRINGS } from './ui/strings.js';
 
@@ -85,6 +86,7 @@ function startGame(region, loaded = null) {
 
   const map = createMap(document.getElementById('map'), region, game.frame);
   const hud = mountHud(document.getElementById('hud'), game);
+  const sound = mountSound(game, { signal: shutdown.signal });
   const legend = mountLegend(document.getElementById('legend'), game);
   const panels = mountPanels(document.getElementById('panels'), game, {
     onChange: () => hud.update(),
@@ -134,7 +136,7 @@ function startGame(region, loaded = null) {
     // when the player is not panning.
     game.onTick(() => overlay.draw());
 
-    window.otomig = { game, region, map, overlay, frame: game.frame };
+    window.otomig = { game, region, map, overlay, sound, frame: game.frame };
   });
 
   wireSaveButtons(game, regionKey, panels, hud);

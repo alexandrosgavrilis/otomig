@@ -1260,6 +1260,15 @@ try {
       const line = [...window.otomig.game.network.lines.values()].filter((l) => l.mode === 'bus').at(-1);
       return { stops: line.stops.length, selected: window.otomig.game.selection === line };
     });
+    // Sound: the earlier clicks woke it; drawing and selecting were heard.
+    const sound = await page.evaluate(() => {
+      const s = window.otomig.sound;
+      return { state: s.state, loaded: s.loaded.length, played: s.played, loop: s.loopMode };
+    });
+    check('every sound effect loads', sound.state === 'running' && sound.loaded === 15, JSON.stringify(sound));
+    check('…placing stops and finishing a new bus line are heard',
+      sound.played.includes('stop') && sound.played.includes('new-line-bus'), JSON.stringify(sound.played));
+    check('…and the selected bus line plays its loop', sound.loop === 'bus', JSON.stringify(sound.loop));
     check('with a line selected, hovering beside it shows where a stop would go', hovering);
     check('…and a click there inserts the stop into the line', inserted.stops === 3 && inserted.selected,
       JSON.stringify(inserted));

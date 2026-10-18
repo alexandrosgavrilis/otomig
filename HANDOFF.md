@@ -89,8 +89,8 @@ Both would have reached Alex as a broken screen, and both were invisible to 272 
 ## 2. Testing
 
 ```bash
-npm test                            # 770 logic assertions, plain Node, no dependencies
-npm run test:browser                # 178 assertions in real Chromium via Playwright
+npm test                            # 773 logic assertions, plain Node, no dependencies
+npm run test:browser                # 181 assertions in real Chromium via Playwright
 npm run test:browser -- --headed    # ...and watch it
 npm run test:live                   # 24 assertions against a REAL import — hits live OSM services
 npm run test:live -- --km 5         # ...at a given size (default 5, the slider minimum)
@@ -1139,4 +1139,22 @@ Both were waiting on Alex's go-ahead since §23.
 The fixture's ridge has streets of 15% to 180% (it is synthetic and has cliffs), so the two tests that drag a tram over it — Phase 3's and the browser's — lift the street limit for that block, and Phase 3's maintenance test moved its tram line to the flat. 768 logic and 178 browser assertions pass.
 
 **Interchanges are drawn as thin lines**, black at 30% (`COLORS.interchangeLink`), between each two stops of an interchange within walking distance of each other, in place of the ring round them all. Two stops sharing a line get no line between them: the two sides of one stop still count as an interchange, but changing there is no change. That costs nothing, so the mechanic is untouched. The router uses it to let a trip start across the road (§31), and never "changes" on to the same line, since staying aboard is free and changing costs a wait and the transfer penalty. The stop panel's "Interchange" row follows the same rule (`Network.changesAt`): yes only where a stop of another line is within the interchange. A stop no line calls at is never a change either, on the map or in the panel (`Network.isChange`).
+
+## 33. Sound effects — Oct 18 2026
+
+Alex supplied fifteen sounds from Freesound, each named for its event. They are in [soundfx/](soundfx/) as mono 96 kbps mp3s with plain names (37 MB of wav became 1.2 MB), levelled with ffmpeg to one loudness — one-shots −24 dBFS mean, loops −28, peaks under −3 dBFS — and one-shots trimmed of silence. The originals sit in `soundfx/originals/`, kept out of git. Credits: [soundfx/Attribution.txt](soundfx/Attribution.txt) (with which file is which) and the README. **One is CC BY-NC** (the train loop): fine while the game is free, to be replaced if it is ever sold.
+
+[ui/sound.js](ui/sound.js) plays them with Web Audio, quiet by design (`AUDIO` in config.js: master 0.45, effects 0.6, loops 0.35):
+
+| sound | when |
+| --- | --- |
+| `new-line-<mode>` | a new line is finished (not an old one extended) — `Game.emit('lineCreated')` |
+| `stop` | a stop is added to a line or moved — `stopPlaced` |
+| `bulldoze` | anything bulldozed or deleted — `bulldozed` |
+| `finances` | the finances panel opens — `financesOpened` |
+| `month` | the month turns |
+| `station-full` | a stop passes the crowd it can show (`RENDER.MAX_PASSENGER_DOTS`, where it says "+N"); each stop once until it empties, at most every 8 s |
+| `loop-<mode>` | while a line of that mode is selected, fading in and out |
+
+Browsers allow sound only after the player has touched the page, so nothing loads until the first click or key; the tab going hidden suspends it. Loops decode to exactly their original length in Chromium (the encoder's gapless header), so they repeat without a gap. There is no mute control yet. Ferry sounds are wired for when ferries arrive.
 

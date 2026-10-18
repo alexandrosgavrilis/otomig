@@ -914,6 +914,28 @@ export const LINE_PALETTE = [
   '#E0742E', '#3C3C3C',
 ];
 
+/**
+ * Sound effects (soundfx/). The files are already levelled to one loudness
+ * when converted — one-shots to −24 dBFS, loops to −28 — so these are the
+ * only volume settings, and they keep everything well in the background:
+ * the game should never compete with whatever else the player is hearing
+ * (Alex, Oct 18 2026). Multipliers of full volume.
+ */
+export const AUDIO = {
+  /** Everything together. */
+  MASTER: 0.45,
+  /** A sound for something the player did, the month turning, a full stop. */
+  EFFECTS: 0.6,
+  /** The quiet loop for the mode of the selected line. */
+  LOOPS: 0.35,
+  /** Seconds a loop takes to fade in or out. */
+  LOOP_FADE_S: 0.6,
+  /** The same sound twice within this many seconds plays once. */
+  REPEAT_GAP_S: 0.15,
+  /** A full stop chimes at most this often, s, however many fill up. */
+  FULL_STOP_GAP_S: 8,
+};
+
 export const RENDER = {
   /** Line width at default zoom, px. [spec] */
   LINE_WIDTH_PX: 6,

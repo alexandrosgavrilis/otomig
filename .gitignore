@@ -8,3 +8,6 @@ node_modules/
 
 tests/screenshots/
 
+
+# Uncompressed source recordings; the game uses the mp3s beside them.
+soundfx/originals/
