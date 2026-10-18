@@ -4,8 +4,8 @@
  *
  * The road graph's counterpart for rail. Its nodes are the 20 m samples of
  * every piece of track the player has built; its edges join consecutive
- * samples along a track, plus a zero-length edge wherever one track was drawn
- * from or to another — a junction.
+ * samples along a track, plus a junction wherever one track was drawn from or
+ * to another, or crosses another at the same height.
  *
  * Compatibility lives on the nodes: a train line may only visit samples of
  * train track, while a metro line may visit any. That one rule is the whole of
@@ -15,6 +15,21 @@
 
 import { BUILD } from '../config.js';
 import { MinHeap } from './road-routing.js';
+
+const CELL_M = 50;
+
+/**
+ * Where two straight stretches p1–p2 and q1–q2 cross, as how far along each
+ * (0..1), or null. Touching counts, so a track ending on another joins it.
+ */
+function intersect([x1, y1], [x2, y2], [x3, y3], [x4, y4]) {
+  const d = (x2 - x1) * (y4 - y3) - (y2 - y1) * (x4 - x3);
+  if (Math.abs(d) < 1e-9) return null;
+  const s = ((x3 - x1) * (y4 - y3) - (y3 - y1) * (x4 - x3)) / d;
+  const t = ((x3 - x1) * (y2 - y1) - (y3 - y1) * (x2 - x1)) / d;
+  const e = 1e-6;
+  return s >= -e && s <= 1 + e && t >= -e && t <= 1 + e ? { s, t } : null;
+}
 
 /** Stable id for a track sample. Stations store this, so it must survive a rebuild. */
 export const trackNodeKey = (trackId, index) => `${trackId}:${index}`;
@@ -42,10 +57,21 @@ export class TrackGraph {
     for (const track of list) {
       track.points.forEach((lonLat, i) => {
         this.index.set(trackNodeKey(track.id, i), this.nodes.length);
-        this.nodes.push({ track, sample: i, mode: track.mode, kind: track.kinds[i], lonLat });
+        this.nodes.push({ track, sample: i, mode: track.mode, kind: track.kinds[i], lonLat,
+          xy: frame.toLocal(lonLat[0], lonLat[1]), height: track.height[i] });
         this.adjacency.push([]);
       });
     }
+    /** Every stretch between two samples, bucketed by 50 m cell: cell → first node indices. */
+    this.cells = new Map();
+    this.nodes.forEach((node, n) => {
+      if (n + 1 < this.nodes.length && this.nodes[n + 1].track === node.track) {
+        for (const cell of this.cellsAlong(node.xy, this.nodes[n + 1].xy)) {
+          if (!this.cells.has(cell)) this.cells.set(cell, []);
+          this.cells.get(cell).push(n);
+        }
+      }
+    });
 
     for (const track of list) {
       for (let i = 1; i < track.points.length; i++) {
@@ -61,6 +87,63 @@ export class TrackGraph {
           trackNodeKey(track.end.trackId, track.end.index));
       }
     }
+
+    // Wherever a player's track crosses another at the same height, the two
+    // are joined, with no need to click the exact spot (Alex, Oct 18 2026).
+    // Existing railways already meet at their shared nodes, and a tunnel or
+    // a bridge passes over or under without joining.
+    for (const track of list) {
+      if (track.osm) continue;
+      for (const meeting of this.crossings(track.points, track.height, track.id)) {
+        this.link(trackNodeKey(track.id, meeting.index), trackNodeKey(meeting.trackId, meeting.otherIndex));
+      }
+    }
+  }
+
+  /** The 50 m cells a straight stretch between two local points passes through. */
+  cellsAlong([ax, ay], [bx, by]) {
+    const cells = [];
+    for (let row = Math.floor(Math.min(ay, by) / CELL_M); row <= Math.floor(Math.max(ay, by) / CELL_M); row++) {
+      for (let col = Math.floor(Math.min(ax, bx) / CELL_M); col <= Math.floor(Math.max(ax, bx) / CELL_M); col++) {
+        cells.push(`${col},${row}`);
+      }
+    }
+    return cells;
+  }
+
+  /**
+   * Where a run of track samples crosses built track at the same height
+   * (within BUILD.JOIN_HEIGHT_M): for each crossing, the sample of each
+   * nearest to it. Used to join tracks, and to show a track being drawn
+   * where it will join.
+   * @param {number[][]} points lon/lat samples
+   * @param {number[]} height per sample, m
+   * @param {string} [ownId] a track not to look for crossings with: itself
+   * @returns {Array<{index:number, trackId:string, otherIndex:number, lonLat:number[]}>}
+   */
+  crossings(points, height, ownId = null) {
+    const xy = points.map(([lon, lat]) => this.frame.toLocal(lon, lat));
+    const found = [];
+    const seen = new Set();
+    for (let i = 1; i < xy.length; i++) {
+      for (const cell of this.cellsAlong(xy[i - 1], xy[i])) {
+        for (const n of this.cells.get(cell) || []) {
+          const node = this.nodes[n];
+          if (node.track.id === ownId || seen.has(n)) continue;
+          const next = this.nodes[n + 1];
+          const hit = intersect(xy[i - 1], xy[i], node.xy, next.xy);
+          if (!hit) continue;
+          seen.add(n);
+          const here = height[i - 1] + (height[i] - height[i - 1]) * hit.s;
+          const there = node.height + (next.height - node.height) * hit.t;
+          if (!(Math.abs(here - there) <= BUILD.JOIN_HEIGHT_M)) continue;
+          const other = hit.t < 0.5 ? node : next;
+          found.push({ index: hit.s < 0.5 ? i - 1 : i, trackId: other.track.id, otherIndex: other.sample,
+            lonLat: other.lonLat });
+        }
+      }
+    }
+    return found;
   }
 
   link(keyA, keyB) {

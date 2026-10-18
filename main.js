@@ -106,9 +106,10 @@ function startGame(region, loaded = null) {
     },
   });
 
-  toolbar.onFeedback = (message) => showFeedback(message);
+  // The drawing bar only ever reports a refusal.
+  toolbar.onFeedback = (message) => showFeedback(message, undefined, { refused: true });
   wireMapInteraction(map, game, toolbar, {
-    onFeedback: (message, point) => showFeedback(message, point),
+    onFeedback: (message, point, options) => showFeedback(message, point, options),
     onSelect: () => panels.render(),
   });
 
@@ -280,12 +281,13 @@ function wireSaveButtons(game, regionKey, panels, hud) {
 }
 
 /** A short message near the cursor, with Mini Metro's refusal shake. */
-function showFeedback(message, point) {
+function showFeedback(message, point, { refused = false } = {}) {
   const existing = document.querySelector('.feedback');
   if (existing) existing.remove();
 
   const element = document.createElement('div');
-  element.className = 'feedback';
+  // A refusal in the logo's red; news that something was built in ink.
+  element.className = refused ? 'feedback refused' : 'feedback';
   element.textContent = message;
   element.style.left = `${point?.x ?? window.innerWidth / 2}px`;
   element.style.top = `${point?.y ?? window.innerHeight / 2}px`;

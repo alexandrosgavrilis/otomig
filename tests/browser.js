@@ -647,7 +647,13 @@ try {
         ?.classList.contains('on')) === true);
 
     // Build a tram line through the model, then drag it through the canvas.
-    const built = await page.evaluate(() => {
+    // Its stops are either side of the fixture's ridge, whose streets are far
+    // too steep for a tram (TRAM_STREET_MAX_GRADE); what is tested here is
+    // the drag off the road, so the limit is lifted until this block ends.
+    const built = await page.evaluate(async () => {
+      const { BUILD } = await import('/config.js');
+      window.streetLimit = BUILD.TRAM_STREET_MAX_GRADE;
+      BUILD.TRAM_STREET_MAX_GRADE = Infinity;
       const game = window.otomig.game;
       const frame = game.frame;
       const line = game.startLine('tram');
@@ -760,6 +766,10 @@ try {
     });
     check('the off-road track is actually drawn on the overlay', painted > 0,
       `${painted} opaque samples`);
+    await page.evaluate(async () => {
+      const { BUILD } = await import('/config.js');
+      BUILD.TRAM_STREET_MAX_GRADE = window.streetLimit;
+    });
   }
 
   // ─── Phase 4: rail track, stations and lines on track ──────────────────────

@@ -672,8 +672,14 @@ export class Network {
     if (path) return asSegment(path);
     // No legal way at all — a one-way street leading out of the region, say.
     // Breaking the rule beats refusing the line.
-    const any = this.roadIndex.pathThrough([from.node, ...vias, to.node], line.mode, { ignoreOneway: true });
-    return any ? { ...asSegment(any), ignoresOneway: true } : null;
+    const nodes = [from.node, ...vias, to.node];
+    const any = this.roadIndex.pathThrough(nodes, line.mode, { ignoreOneway: true });
+    if (any) return { ...asSegment(any), ignoresOneway: true };
+    // A tram that could only get there up a street too steep for it: the
+    // way it would have gone, refused (see `blockedError`).
+    const steep = line.mode === 'tram'
+      && this.roadIndex.pathThrough(nodes, line.mode, { ignoreOneway: true, ignoreGrade: true });
+    return steep ? { ...asSegment(steep), blocked: true, streetTooSteep: true } : null;
   }
 
   /**
@@ -736,6 +742,13 @@ export class Network {
   /** True when any segment is blocked — by a building, or too steep to build. */
   hasBlockedSegment(line) {
     return line.segments.some((segment) => segment.blocked);
+  }
+
+  /** Why a line's blocked segment is refused, as an error code, or null. */
+  blockedError(line) {
+    const segment = line.segments.find((s) => s.blocked);
+    if (!segment) return null;
+    return segment.streetTooSteep ? 'tramTooSteep' : segment.tooSteep ? 'tooSteep' : 'blockedByBuilding';
   }
 
   /**

@@ -219,7 +219,12 @@ export function runPhase3Tests(check, near) {
     const frame = game.frame;
 
     // Two stops either side of the fixture's ridge, which runs north-east to
-    // south-west and peaks around 180 m. It exists for exactly this.
+    // south-west and peaks around 180 m. It exists for exactly this. The
+    // streets over it are far too steep for a tram (TRAM_STREET_MAX_GRADE);
+    // what is tested here is dragging off the road, so the limit is lifted
+    // for this block and put back at its end.
+    const streetLimit = BUILD.TRAM_STREET_MAX_GRADE;
+    BUILD.TRAM_STREET_MAX_GRADE = Infinity;
     const line = game.startLine('tram');
     const a = game.extendDraft(...frame.toLonLat(2600, 3000));
     const b = game.extendDraft(...frame.toLonLat(2600, 4400));
@@ -291,6 +296,7 @@ export function runPhase3Tests(check, near) {
     check('clearing a drag returns the segment to the road',
       cleared.ok && line.segments[0].offRoad !== true);
     check('…and refunds, rather than charging again', game.economy.balance > beforeClear);
+    BUILD.TRAM_STREET_MAX_GRADE = streetLimit;
   }
 
   // ─── A bus drag is a via-point, not off-road track ────────────────────────
@@ -335,9 +341,10 @@ export function runPhase3Tests(check, near) {
     game.finishDraft();
     const busOnly = game.economy.maintenancePerYear(game.network, false);
 
+    // On the flat: the streets over the ridge are too steep for a tram.
     const tram = game.startLine('tram');
-    game.extendDraft(...frame.toLonLat(2600, 3000));
-    game.extendDraft(...frame.toLonLat(2600, 4400));
+    game.extendDraft(...frame.toLonLat(4200, 700));
+    game.extendDraft(...frame.toLonLat(5200, 700));
     game.finishDraft();
     const withTram = game.economy.maintenancePerYear(game.network, false);
 

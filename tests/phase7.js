@@ -28,6 +28,7 @@ import { placeDot, patienceFor } from '../sim/passengers.js';
 import { stopOrder, hopSeconds, segmentFor } from '../sim/routing.js';
 import { Clock } from '../sim/clock.js';
 import { setTunable, resetAll, readout } from '../sim/tuning.js';
+import { STRINGS } from '../ui/strings.js';
 
 const fixturePath = join(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'test-region.json');
 const fixtureText = readFileSync(fixturePath, 'utf8');
@@ -691,11 +692,19 @@ export async function runSaveFileTests(check, near) {
  * Synthetic streets over the fixture's terrain.
  */
 function runStopPairs(check, near) {
-  /** A game on hand-made roads; `streets` are [refs, tags] with node ids → [x, y]. */
-  const gameOn = (points, streets) => {
+  /**
+   * A game on hand-made roads; `streets` are [refs, tags] with node ids →
+   * [x, y]. `height(x, y)`, if given, replaces the terrain.
+   */
+  const gameOn = (points, streets, height = null) => {
     const region = reviveRegion(JSON.parse(fixtureText));
     region.meta.difficulty = 'creative';
     region.meta.season = 'urban';
+    if (height) {
+      const { cols, rows, cellM } = region.terrain;
+      region.terrain.values = Float32Array.from({ length: cols * rows },
+        (_, i) => height(((i % cols) + 0.5) * cellM, (Math.floor(i / cols) + 0.5) * cellM));
+    }
     const frame = new LocalFrame(region.meta.bbox);
     const nodes = new Map([...points].map(([id, [x, y]]) => [id, frame.toLonLat(x, y)]));
     region.roads = buildGraph(streets.map(([refs, tags], i) =>
@@ -798,6 +807,49 @@ function runStopPairs(check, near) {
     const wrongSide = game.placeStop(...game.frame.toLonLat(3500, 2010), 'bus');
     check('a stop on a one-way carriageway faces the way it flows, whichever side is clicked',
       wrongSide.stop.heading[0] > 0.99);
+  }
+
+  // A tram will not climb a street steeper than TRAM_STREET_MAX_GRADE: it
+  // goes round, or the stop is refused (Alex, Oct 18 2026). A hill rises 75 m
+  // north over 500 m west of x=1500 (15%), fading out by x=2500, so the
+  // street up at x=1000 is too steep and the one at x=3000 is flat.
+  {
+    const hill = (x, y) => 75 * Math.min(1, Math.max(0, (y - 2000) / 500))
+      * Math.min(1, Math.max(0, (2500 - x) / 1000));
+    const points = new Map([[1, [500, 2000]], [2, [1000, 2000]], [3, [3000, 2000]], [4, [3500, 2000]],
+      [5, [500, 2500]], [6, [1000, 2500]], [7, [3000, 2500]], [8, [3500, 2500]]]);
+    const streets = (withWayRound) => [
+      [[1, 2, 3, 4], {}], [[5, 6, 7, 8], {}], [[2, 6], {}], ...(withWayRound ? [[[3, 7], {}]] : []),
+    ];
+    /** The x of every street the line's first segment climbs north–south. */
+    const ups = (line) => line.segments[0].nodes.slice(1).flatMap((n, i) => {
+      const [ax, ay] = at(line.game, line.segments[0].nodes[i]);
+      const [bx, by] = at(line.game, n);
+      return ax === bx && ay !== by ? [ax] : [];
+    });
+    const draw = (mode, withWayRound) => {
+      const game = gameOn(points, streets(withWayRound), hill);
+      game.startLine(mode);
+      // Westbound below the hill, eastbound above it: the short way between
+      // them is straight up the steep street at x=1000.
+      const first = game.extendDraft(...game.frame.toLonLat(1200, 2005));
+      const second = game.extendDraft(...game.frame.toLonLat(1200, 2495));
+      const line = game.draft.line;
+      line.game = game;
+      return { game, line, first, second };
+    };
+    const bus = draw('bus', true);
+    const tram = draw('tram', true);
+    check('a bus climbs the steep street, the short way up',
+      bus.second.ok && ups(bus.line).includes(1000) && !ups(bus.line).includes(3000));
+    check('a tram goes round by the gentle street instead',
+      tram.second.ok && ups(tram.line).includes(3000) && !ups(tram.line).includes(1000),
+      JSON.stringify(tram.second));
+    const stuck = draw('tram', false);
+    check('with no way round, the tram stop is refused as too steep',
+      stuck.second.error === 'tramTooSteep' && stuck.line.stops.length === 1 && stuck.game.network.stops.size === 1,
+      JSON.stringify(stuck.second));
+    check('…with the reason in words', /steep/i.test(STRINGS.errors.tramTooSteep));
   }
 
   // Drawing: Undo, Cancel, and clicking the first stop to finish.

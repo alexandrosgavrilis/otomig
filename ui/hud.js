@@ -1,5 +1,6 @@
 /**
- * The top bar: balance, date, speed, and the two headline numbers.
+ * The top bar: balance, date, speed, the difficulty, and the two headline
+ * numbers.
  *
  * The spec's headline numbers are passengers transported (cumulative, in
  * thousands) and passengers on the network right now. The first is scaled to a
@@ -8,7 +9,7 @@
  * this second" legible without any explanation.
  */
 
-import { CLOCK } from '../config.js';
+import { CLOCK, DIFFICULTY } from '../config.js';
 import { Clock } from '../sim/clock.js';
 import { formatMoney, formatThousands } from '../sim/economy.js';
 import { formatDate } from '../sim/clock.js';
@@ -30,6 +31,10 @@ export function mountHud(root, game) {
             title="${speed === 0 ? STRINGS.hud.paused : `${speed}×`}">
             ${speed === 0 ? '❙❙' : `${speed}×`}
           </button>`).join('')}
+      </div>
+      <div class="spacer"></div>
+      <div class="stat difficulty" id="hud-difficulty-wrap">
+        <b id="hud-difficulty">—</b><span>${STRINGS.hud.difficulty}</span>
       </div>
       <div class="spacer"></div>
       <div class="stat" title="${STRINGS.clocks.perDay}">
@@ -77,6 +82,11 @@ export function mountHud(root, game) {
     // How far through today, so a paused or slow game still shows time moving.
     $('hud-day').style.width = `${((game.clock.days % 1) * 100).toFixed(1)}%`;
     $('hud-season').textContent = STRINGS.seasons[game.region.meta.season] || '';
+    const difficulty = DIFFICULTY[game.difficulty]?.label ?? game.difficulty;
+    if ($('hud-difficulty').textContent !== difficulty) {
+      $('hud-difficulty').textContent = difficulty;
+      $('hud-difficulty-wrap').title = STRINGS.difficultyHints[game.difficulty] || '';
+    }
 
     $('hud-transported').textContent = formatThousands(stats.transported);
     $('hud-onnetwork').textContent = stats.onNetwork.toLocaleString();

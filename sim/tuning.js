@@ -18,7 +18,7 @@
  * Nothing here touches the DOM, so the Node suite tests it.
  */
 
-import { DEMAND, PATIENCE, ROUTING, DIFFICULTY, INCOME, COSTS, CLOCK, INTERCITY } from '../config.js';
+import { DEMAND, PATIENCE, ROUTING, DIFFICULTY, INCOME, COSTS, CLOCK, INTERCITY, BUILD } from '../config.js';
 import { Clock } from './clock.js';
 
 /**
@@ -27,7 +27,7 @@ import { Clock } from './clock.js';
  *   demand   the pair table and catchments
  *   network  interchanges, then everything downstream of the network
  */
-const ROOTS = { DEMAND, PATIENCE, ROUTING, DIFFICULTY, INCOME, COSTS, INTERCITY };
+const ROOTS = { DEMAND, PATIENCE, ROUTING, DIFFICULTY, INCOME, COSTS, INTERCITY, BUILD };
 
 /**
  * Every tunable, grouped for the panel. `scale` and `unit` only change how a
@@ -52,6 +52,8 @@ export const TUNABLES = [
   { group: 'routing', path: 'ROUTING.BOARDING_WAIT_FRACTION', min: 0, max: 1, step: 0.05, affects: 'network' },
   { group: 'routing', path: 'DEMAND.WALK_SPEED_MS', min: 0.5, max: 2.5, step: 0.1, unit: 'm/s', affects: 'network' },
   { group: 'routing', path: 'DEMAND.INTERCHANGE_M', min: 0, max: 500, step: 10, unit: 'm', affects: 'network' },
+  // Read whenever a tram route is planned, so it applies to the next one.
+  { group: 'routing', path: 'BUILD.TRAM_STREET_MAX_GRADE', min: 0.02, max: 0.3, step: 0.01, scale: 100, unit: '%', affects: 'live' },
 
   { group: 'patience', path: 'DIFFICULTY.{difficulty}.patienceSimMinutes', min: 1, max: 60, step: 1, unit: 'min', affects: 'live' },
   { group: 'patience', path: 'PATIENCE.GRACE_SIM_S', min: 0, max: 180, step: 5, unit: 's', affects: 'live' },

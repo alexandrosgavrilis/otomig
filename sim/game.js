@@ -29,7 +29,7 @@ export class Game {
     this.frame = new LocalFrame(region.meta.bbox);
     this.difficulty = region.meta.difficulty || 'normal';
 
-    this.roadIndex = new RoadIndex(region.roads, this.frame);
+    this.roadIndex = new RoadIndex(region.roads, this.frame, region.terrain);
     this.network = new Network(this.roadIndex, this.frame, region);
     // Existing railways are ready-made train track from the start (Phase 6).
     this.network.addOsmRail(osmRailTracks(region, this.frame));
@@ -266,6 +266,13 @@ export class Game {
       this.refundStop(placed);
       return result;
     }
+    // A tram that would have to climb a street too steep for it is refused.
+    const blocked = this.network.blockedError(line);
+    if (blocked) {
+      this.network.removeStopFromLine(line, placed.stop.id);
+      this.refundStop(placed);
+      return { error: blocked };
+    }
     const owed = this.network.trackCostOf(line) - before;
     if (owed > 0 && !this.economy.spend(owed, 'construction')) {
       this.network.removeStopFromLine(line, placed.stop.id);
@@ -317,10 +324,10 @@ export class Game {
       this.restoreVia(line, key, previous);
       return { error: 'noRoadPath' };
     }
-    if (this.network.hasBlockedSegment(line)) {
-      const reason = line.segments.find((segment) => segment.blocked);
+    const blocked = this.network.blockedError(line);
+    if (blocked) {
       this.restoreVia(line, key, previous);
-      return { error: reason?.tooSteep ? 'tooSteep' : 'blockedByBuilding' };
+      return { error: blocked };
     }
 
     const owed = this.network.trackCostOf(line) - before;
@@ -451,10 +458,8 @@ export class Game {
       if (!this.network.rebuildSegments(line)) {
         return restore(stop.mode === 'metro' || stop.mode === 'train' ? 'noTrackPath' : 'noRoadPath');
       }
-      if (this.network.hasBlockedSegment(line)) {
-        const reason = line.segments.find((segment) => segment.blocked);
-        return restore(reason?.tooSteep ? 'tooSteep' : 'blockedByBuilding');
-      }
+      const blocked = this.network.blockedError(line);
+      if (blocked) return restore(blocked);
     }
 
     const trackOwed = lines.reduce((sum, line, i) =>
@@ -609,6 +614,9 @@ export class Game {
     draft.preview = this.network.planTrack(draft.mode, [...draft.control, draft.cursor],
       draft.start, atJunction ? { trackId: junction.trackId, index: junction.index } : null);
     draft.preview.joins = atJunction;
+    // Where it crosses built track at the same height, and so will join it.
+    draft.preview.crossings = draft.preview.points?.length > 1
+      ? this.network.trackGraph.crossings(draft.preview.points, draft.preview.height) : [];
     return draft.preview;
   }
 

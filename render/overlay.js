@@ -319,6 +319,11 @@ export function trackDraftPainter(game) {
       const [x, y] = overlay.project(lon, lat);
       drawWaypoint(ctx, x, y, i === 0 && Boolean(draft.start));
     });
+    // Where it will join track it crosses.
+    for (const { lonLat } of preview?.crossings || []) {
+      const [x, y] = overlay.project(lonLat[0], lonLat[1]);
+      drawWaypoint(ctx, x, y, true);
+    }
     if (preview?.joins && draft.cursor) {
       const [x, y] = overlay.project(draft.cursor[0], draft.cursor[1]);
       drawWaypoint(ctx, x, y, true);

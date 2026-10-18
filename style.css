@@ -278,6 +278,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 }
 .topbar .negative b { color: var(--danger); }
 .topbar .spacer { flex: 1; }
+.topbar .stat.difficulty { align-items: center; }
 .topbar .speeds { display: flex; gap: 4px; }
 .topbar .speeds button { padding: 4px 9px; }
 
@@ -418,6 +419,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   transform: translate(-50%, -150%);
   animation: feedback-shake 0.3s ease;
 }
+.feedback.refused { background: var(--danger); color: #fff; }
 @keyframes feedback-shake {
   0%, 100% { transform: translate(-50%, -150%); }
   25% { transform: translate(calc(-50% - 4px), -150%); }

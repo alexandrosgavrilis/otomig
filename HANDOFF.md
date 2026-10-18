@@ -3,7 +3,7 @@
 Read this first in every session. Update it last.
 
 **State:** Phases 0–4, R, Q, **5 and 6** complete — every phase of the build plan is in. Phase 5: loans, the fare slider and a full finance panel (§11). Phase 6: existing OSM railways are free, ready-made train track, and stations on them can switch on intercity service (§14). There is also a **play-testing panel on the ` key** that tunes passenger behaviour and money live (§15). Every acceptance criterion is asserted in code; the economic half of "Hard on a small island" is measured on a real island, and holds since timetables (§15, §16).
-**Latest:** Oct 17, 2026 (evening) — bus and tram lines rebuilt to work exactly as in Cities: Skylines, and the double/single stop machinery removed (§30); then two passenger fixes: trips may start across the road, and big dots no longer throttle a new network (§31).
+**Latest:** Oct 17, 2026 (evening) — bus and tram lines rebuilt to work exactly as in Cities: Skylines, and the double/single stop machinery removed (§30); then two passenger fixes: trips may start across the road, and big dots no longer throttle a new network (§31). Oct 18: tracks join where they cross, trams refuse streets over 10%, refusals are red, and the top bar shows the difficulty (§32).
 **Last session:** Oct 16, 2026 (evening and night) — Phase 5, Phase 6 with intercity, the tuning panel, a fix for panel buttons that could lose clicks (§11), a balance measurement on Poros (§15), then Alex's decisions on what a dot means: capacity in people, a dot sized to cap what is drawn, a legend, timetables, a Flows layer, and groundwork for ferries (§16, §17).
 **Before that:** Oct 15–16, 2026 — Phase 4 (rail), a real-data trial at Kiato (§10), lines sharing stops (§12), buildings filled in from Overture, population set by the seasonal profile, and a transfer penalty on every change of vehicle (§13).
 **Earlier still:** Oct 10, 2026 — Phase 0 (research), Phase 1 (region and map), Phase 2 (buses and passengers), Phase R (data architecture), first live import, Phase Q (query restructure), Phase 3 (trams).
@@ -89,7 +89,7 @@ Both would have reached Alex as a broken screen, and both were invisible to 272 
 ## 2. Testing
 
 ```bash
-npm test                            # 760 logic assertions, plain Node, no dependencies
+npm test                            # 768 logic assertions, plain Node, no dependencies
 npm run test:browser                # 178 assertions in real Chromium via Playwright
 npm run test:browser -- --headed    # ...and watch it
 npm run test:live                   # 24 assertions against a REAL import — hits live OSM services
@@ -1123,4 +1123,18 @@ Now people are banked for the whole network (`DemandModel.carry`), and each time
 - **Giving up costs satisfaction per dot, not per person**: ten 1-person dots giving up cost ten `GIVE_UP_PENALTY`s, one 10-person dot costs one. Small towns are punished hardest.
 
 **Decided, Oct 17 2026:** seats now round to the nearest whole dot (`Vehicle.seats`, every mode — the same bias in all, and one rule), and a dot giving up costs `GIVE_UP_PENALTY` × the people it stands for (`DemandModel.penalise`). Consequence worth knowing: with 0.15 a person, one 10-person dot giving up drops its pair from 1 to the 0.2 floor at once, and at 0.02 a day it takes 40 days to recover — exactly what ten one-person give-ups always cost a small town. If big cities feel too unforgiving, `PATIENCE.GIVE_UP_PENALTY` is on the tuning panel.
+
+## 32. Tracks join where they meet; trams and steep streets — Oct 18 2026
+
+Both were waiting on Alex's go-ahead since §23.
+
+**Tracks join wherever they cross.** A junction used to need a click on the exact spot (the first click, or the click that ends a track). Now `TrackGraph` also joins a player's track to any track it crosses at the same height, within `BUILD.JOIN_HEIGHT_M` (3 m): another player track or an existing railway. A tunnel or a bridge passing over or under is several metres clear and does not join. The junctions are worked out from the geometry every time the graph is built, so saves are unchanged and old saves gain them. Existing railways were already joined where their ways share a node; railway-to-railway crossings are left alone (a level crossing of two lines is not a switch). While drawing, the preview marks each place the new track will join with a filled junction square (`TrackGraph.crossings`). Compatibility is unchanged: metro may run on to train track, train never on to metro track.
+
+**Trams refuse streets steeper than `BUILD.TRAM_STREET_MAX_GRADE` (10%).** Real trams mostly manage 6–8%, so this is kinder, and far kinder than metro track's 4.5%. Each stretch of street is judged from the terrain at its two ends (`RoadIndex.gradeOf`); tram routing simply will not use one that is too steep, and goes round if it can. Where it cannot, the stop is refused with "Too steep for a tram — the street climbs too much." No profile strip. On Patras, 10% rules out 3.1% of the streets trams may use, essentially the upper town (6% would rule out 11.5%). On the tuning panel ("Steepest street a tram climbs"); it applies to the next route planned. Buses climb anything. Off-road (dragged) tram track keeps its own grade rule, 7%.
+
+**Refusals are red.** Every refused click — too steep, too far from a road, can't afford, no route — now shows in the logo's red (`.feedback.refused`); news that something was built stays in ink.
+
+**The top bar shows the difficulty**, between the speed buttons and Transported, with its description on hover. In the console: `otomig.game.difficulty`.
+
+The fixture's ridge has streets of 15% to 180% (it is synthetic and has cliffs), so the two tests that drag a tram over it — Phase 3's and the browser's — lift the street limit for that block, and Phase 3's maintenance test moved its tram line to the flat. 768 logic and 178 browser assertions pass.
 

@@ -12,6 +12,7 @@
  */
 
 import { BUILD } from '../config.js';
+import { heightAt } from '../model/region.js';
 
 /**
  * Precomputed structures for one region's road graph. Built once per region
@@ -22,10 +23,15 @@ export class RoadIndex {
   /**
    * @param {import('../model/region.js').RoadGraph} graph
    * @param {import('../model/region.js').LocalFrame} frame
+   * @param {Object} [terrain] the region's height grid, for how steep each
+   *   street is; without it every street counts as flat
    */
-  constructor(graph, frame) {
+  constructor(graph, frame, terrain = null) {
     this.graph = graph;
     this.frame = frame;
+    this.terrain = terrain;
+    /** Each edge's grade, by index, worked out when first asked. */
+    this.grades = new Map();
     this.nodeCount = graph.nodes.length / 2;
 
     /**
@@ -127,7 +133,32 @@ export class RoadIndex {
     this.adjacency = buildAdjacency(this.graph, this.nodeCount);
     this.spatial = buildSpatialIndex(this.graph, this.frame, this.nodeCount);
     this._edgeGrid = null;
+    this.grades.clear();
     return node;
+  }
+
+  /** How steep a road edge is, rise over run, from the terrain at its two ends. */
+  gradeOf(index) {
+    if (!this.terrain) return 0;
+    let grade = this.grades.get(index);
+    if (grade === undefined) {
+      const edge = this.graph.edges[index];
+      const [ax, ay] = this.nodePosition(edge.a);
+      const [bx, by] = this.nodePosition(edge.b);
+      const run = Math.hypot(bx - ax, by - ay);
+      grade = run > 0 ? Math.abs(heightAt(this.terrain, bx, by) - heightAt(this.terrain, ax, ay)) / run : 0;
+      this.grades.set(index, grade);
+    }
+    return grade;
+  }
+
+  /**
+   * Can a vehicle of this mode climb this edge? A tram cannot take a street
+   * steeper than BUILD.TRAM_STREET_MAX_GRADE (Alex, Oct 18 2026); a bus
+   * climbs anything.
+   */
+  climbable(index, mode) {
+    return mode !== 'tram' || this.gradeOf(index) <= BUILD.TRAM_STREET_MAX_GRADE;
   }
 
   /** Edges bucketed into a 50 m grid, built on first use. */
@@ -307,7 +338,7 @@ export class RoadIndex {
       for (let i = start[node]; i < start[node + 1]; i++) {
         const index = edges[i];
         const edge = all[index];
-        if (!allowed.has(edge.cls) || !mayTravel(edge, node, mode)) continue;
+        if (!allowed.has(edge.cls) || !mayTravel(edge, node, mode) || !this.climbable(index, mode)) continue;
         ways.push(index);
       }
       const onward = ways.filter((index) => index !== came);
@@ -397,12 +428,13 @@ export class RoadIndex {
    * @param {number} fromNode
    * @param {number} toNode
    * @param {'bus'|'tram'} mode
-   * @param {{ignoreOneway?:boolean}} [options] `ignoreOneway`: the fallback
-   *   when no legal path exists, which happens where a one-way street runs
-   *   out of the region.
+   * @param {{ignoreOneway?:boolean, ignoreGrade?:boolean}} [options]
+   *   `ignoreOneway`: the fallback when no legal path exists, which happens
+   *   where a one-way street runs out of the region. `ignoreGrade`: streets
+   *   too steep for a tram count too — to show where one was refused.
    * @returns {{nodes:number[], lengthM:number}|null} null when unreachable
    */
-  shortestPath(fromNode, toNode, mode, { ignoreOneway = false } = {}) {
+  shortestPath(fromNode, toNode, mode, { ignoreOneway = false, ignoreGrade = false } = {}) {
     if (fromNode === toNode) return { nodes: [fromNode], lengthM: 0 };
     const allowed = ALLOWED_CLASSES[mode];
     const { start, edges } = this.adjacency;
@@ -428,6 +460,7 @@ export class RoadIndex {
         const edge = this.graph.edges[edges[i]];
         if (!allowed.has(edge.cls)) continue;
         if (!ignoreOneway && !mayTravel(edge, node, mode)) continue;
+        if (!ignoreGrade && !this.climbable(edges[i], mode)) continue;
         const next = edge.a === node ? edge.b : edge.a;
         if (settled[next]) continue;
         const candidate = distance[node] + edgeCost(edge);

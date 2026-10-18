@@ -210,6 +210,41 @@ export function runPhase4Tests(check, near) {
       graph.path('tA:0', 'tM:2', 'train') === null);
     near('a path through a junction measures its real length',
       graph.path('tA:0', 'tM:2', 'metro').lengthM, 100, 0.5);
+
+    // Tracks join wherever they cross at the same height, with no click on
+    // the spot; a bridge passing over does not (Alex, Oct 18 2026).
+    const level = (track, h) => { track.height = track.points.map(() => h); return track; };
+    const across = (id, h) => {
+      const track = new Track('train', [], null, null);
+      track.id = id;
+      track.points = [450, 470, 490, 510, 530, 550].map((y) => frame.toLonLat(30, y));
+      track.kinds = track.points.map(() => 'atGrade');
+      return level(track, h);
+    };
+    const flat = new TrackGraph([level(fake('tA', 'train', [0, 20, 40, 60]), 10), across('tX', 10)], frame);
+    check('track crossing other track at the same height joins it',
+      flat.path('tA:0', 'tX:5', 'train') !== null);
+    const over = new TrackGraph([level(fake('tA', 'train', [0, 20, 40, 60]), 10), across('tB', 18)], frame);
+    check('…but a bridge passing over it does not',
+      over.path('tA:0', 'tB:5', 'train') === null);
+  }
+
+  // Drawn the way a player draws, crossing a track built earlier.
+  {
+    const game = richGame();
+    const first = drawTrack(game, 'metro', [[4200, 600], [5200, 900]]);
+    const second = drawTrack(game, 'metro', [[4700, 300], [4750, 1200]]);
+    const crossing = second.track && game.network.trackGraph.crossings(second.track.points, second.track.height, second.track.id);
+    check('a new track drawn across one built earlier joins it, with no click on the spot',
+      first.ok && second.ok && !second.track.start && !second.track.end && crossing?.length === 1,
+      JSON.stringify({ first: first.error, second: second.error, crossings: crossing?.length }));
+    const a = game.network.addStop(...game.frame.toLonLat(4250, 615), 'metro');
+    const b = game.network.addStop(...game.frame.toLonLat(4745, 1110), 'metro');
+    const line = game.network.createLine('metro');
+    game.network.extendLine(line, a.stop);
+    const joined = game.network.extendLine(line, b.stop);
+    check('…so a metro line runs from one onto the other', joined.ok && line.segments.length === 1,
+      JSON.stringify(joined));
   }
 
   // ─── ACCEPTANCE: metro underground on the flat, surfacing over a valley ───

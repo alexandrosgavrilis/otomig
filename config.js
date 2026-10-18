@@ -515,6 +515,14 @@ export const BUILD = {
 
   /** Maximum grade by mode, as a fraction. [spec] */
   MAX_GRADE: { tram: 0.07, metro: 0.045, train: 0.025 },
+  /**
+   * The steepest street a tram will follow, rise over run. Gentler on the
+   * player than real trams, which mostly manage 6–8%, and far kinder than
+   * metro track; a steeper street is refused, and the tram goes round it if
+   * it can (Alex, Oct 18 2026). Judged from the terrain at each end of a
+   * stretch of street. On the tuning panel.
+   */
+  TRAM_STREET_MAX_GRADE: 0.10,
 
   /** Metro's default depth below terrain, m — underground by default. [spec] */
   METRO_DEPTH_M: 15,
@@ -568,6 +576,12 @@ export const BUILD = {
    * by a few metres silently produces a dead end that looks connected.
    */
   JUNCTION_SNAP_M: 30,
+  /**
+   * Where a new track crosses built track, the two are joined if their
+   * heights there differ by no more than this, m. A tunnel or bridge
+   * passing over or under is several metres clear, and does not join.
+   */
+  JOIN_HEIGHT_M: 3,
   /**
    * Traffic keeps to the right, as in Greece and most of Europe: a bus or
    * tram stop clicked on the right of a two-way street serves the traffic

@@ -218,6 +218,8 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
  */
 export function wireMapInteraction(map, game, toolbar, { onFeedback, onSelect }) {
   const state = toolbar.state;
+  /** Say why a click was refused: in red, unlike news that something was built. */
+  const refuse = (code, point) => onFeedback?.(errorText(code), point, { refused: true });
 
   map.on('click', (event) => {
     const { lng: lon, lat } = event.lngLat;
@@ -248,11 +250,11 @@ export function wireMapInteraction(map, game, toolbar, { onFeedback, onSelect })
       // finishes it.
       if (!game.draft) game.startLine(state.mode);
       const result = game.extendDraft(lon, lat, stopReach);
-      if (result.error) onFeedback?.(errorText(result.error), event.point);
+      if (result.error) refuse(result.error, event.point);
     } else if (state.tool === 'extendLine') {
       if (!state.extendTarget) {
         const line = hitStop ? game.network.lines.get(hitStop.lines[0]) : null;
-        if (!line) { onFeedback?.(STRINGS.errors.pickALine, event.point); return; }
+        if (!line) { refuse('pickALine', event.point); return; }
         state.extendTarget = line;
         game.draft = { line, cursor: null, spot: null };
         // This click only picked the line. Carrying on would try to add the
@@ -260,7 +262,7 @@ export function wireMapInteraction(map, game, toolbar, { onFeedback, onSelect })
         return;
       }
       const result = game.extendDraft(lon, lat, stopReach);
-      if (result.error) onFeedback?.(errorText(result.error), event.point);
+      if (result.error) refuse(result.error, event.point);
       if (result.finished) state.extendTarget = null;
     } else if (state.tool === 'bulldoze') {
       // Section by section: a stop goes, and each line through it is joined
@@ -283,7 +285,7 @@ export function wireMapInteraction(map, game, toolbar, { onFeedback, onSelect })
           result = game.bulldoze(game.network.trackNear(lon, lat, reach));
         }
       }
-      if (result?.error) onFeedback?.(errorText(result.error), event.point);
+      if (result?.error) refuse(result.error, event.point);
     } else if (state.tool === 'editStops') {
       // Select whatever is under the cursor: a stop first, then a line, then
       // bare track. With a line selected, a click beside it inserts a stop
@@ -292,7 +294,7 @@ export function wireMapInteraction(map, game, toolbar, { onFeedback, onSelect })
       const line = selectedLine();
       if (!hitStop && line && game.insertionAt(line, lon, lat, reach)) {
         const result = game.insertStopAt(line, lon, lat, reach);
-        if (result.error) onFeedback?.(errorText(result.error), event.point);
+        if (result.error) refuse(result.error, event.point);
         game.insertHover = null;
         return;
       }
@@ -311,7 +313,7 @@ export function wireMapInteraction(map, game, toolbar, { onFeedback, onSelect })
   }
 
   function reportTrack(result, point) {
-    if (result.error) onFeedback?.(errorText(result.error), point);
+    if (result.error) refuse(result.error, point);
     else if (result.track) {
       onFeedback?.(`${STRINGS.build.trackBuilt} ${formatMoney(result.cost)}`, point);
     }
@@ -404,7 +406,7 @@ export function wireMapInteraction(map, game, toolbar, { onFeedback, onSelect })
       // A press that never moved is a click: it selects, as before.
       if (!cursor) return;
       const result = game.moveStop(stop, cursor[0], cursor[1]);
-      if (result.error) onFeedback?.(errorText(result.error), event?.point);
+      if (result.error) refuse(result.error, event?.point);
       else if (result.cost > 0) onFeedback?.(formatMoney(result.cost), event?.point);
       return;
     }
@@ -417,7 +419,7 @@ export function wireMapInteraction(map, game, toolbar, { onFeedback, onSelect })
     if (!drag.preview) return;
 
     const result = game.setVia(drag.line, drag.fromId, drag.toId, drag.via);
-    if (result.error) onFeedback?.(errorText(result.error), event?.point);
+    if (result.error) refuse(result.error, event?.point);
     else if (result.cost > 0) {
       onFeedback?.(`${STRINGS.build.trackBuilt} ${formatMoney(result.cost)}`, event?.point);
     }
