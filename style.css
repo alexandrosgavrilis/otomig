@@ -458,6 +458,27 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   border-radius: 6px;
 }
 .saves button { padding: 5px 9px; font-size: 12px; }
+.saves button.cog { display: flex; align-items: center; padding: 4px 7px; }
+/* The cog's menu, opening upwards from the strip. */
+.game-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 170px;
+  padding: 7px;
+  background: rgba(255, 255, 255, 0.97);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+}
+.game-menu[hidden] { display: none; }
+.game-menu button { text-align: left; }
+.game-menu hr { width: 100%; margin: 2px 0; border: 0; border-top: 1px solid var(--line); }
+.game-menu button.danger { color: var(--danger); border-color: var(--danger-faint); }
+.game-menu button.danger:hover { border-color: var(--danger); }
 
 /* ─── Build track ─────────────────────────────────────────────────────────── */
 

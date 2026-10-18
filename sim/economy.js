@@ -389,7 +389,20 @@ export function formatMoney(amount) {
   return `${sign}€${Math.round(value)}`;
 }
 
-/** Passengers transported, in thousands, as the spec's headline number. */
-export function formatThousands(count) {
-  return `${(count / 1000).toFixed(count < 100000 ? 1 : 0)}k`;
+/**
+ * A count for the HUD, in the unit it has reached: 950, 12.3k, 123k, 4.5M,
+ * 1.2B. One decimal below 100 of a unit. It used to be thousands always, so
+ * a grown network read 100,000k (Alex, Oct 18 2026).
+ */
+export function formatCount(count) {
+  if (Math.abs(Math.round(count)) < 1000) return String(Math.round(count));
+  const units = ['k', 'M', 'B', 'T'];
+  let value = count / 1000;
+  for (let i = 0; i < units.length; i++) {
+    const text = value.toFixed(Math.abs(value) < 100 ? 1 : 0);
+    // 999.96k rounds to 1000k: that is 1.0M.
+    if (Math.abs(Number(text)) < 1000 || i === units.length - 1) return `${text}${units[i]}`;
+    value /= 1000;
+  }
+  return String(count);
 }

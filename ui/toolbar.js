@@ -105,7 +105,7 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
         const result = game.undoDraftStop();
         if (result.error) onFeedbackForDraft?.(STRINGS.errors[result.error] || result.error);
       } else if (action === 'finish') game.finishDraft();
-      else game.discardDraft();
+      else { game.emit('buttonPressed'); game.discardDraft(); }
     }
     update();
     onChange?.(state);
@@ -133,6 +133,7 @@ export function mountToolbar(root, game, { onChange, onToggleLayer }) {
   tools.addEventListener('click', (event) => {
     const button = event.target.closest('button[data-tool]:not(:disabled)');
     if (!button) return;
+    if (button.dataset.tool === 'newLine') game.emit('buttonPressed');
     setTool(button.dataset.tool);
   });
 

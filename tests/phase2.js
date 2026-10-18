@@ -24,7 +24,7 @@ import { Network } from '../model/network.js';
 import { RoadIndex } from '../build/road-routing.js';
 import { Clock, daysInMonth, formatDate } from '../sim/clock.js';
 import { Game } from '../sim/game.js';
-import { Economy, formatMoney, formatThousands } from '../sim/economy.js';
+import { Economy, formatMoney, formatCount } from '../sim/economy.js';
 import { stopOrder, directionsServed, hopSeconds } from '../sim/routing.js';
 import { respaceVehicles, cycleOf, phaseOf } from '../sim/vehicles.js';
 import { offsetPolyline, shade } from '../render/shapes.js';
@@ -390,7 +390,10 @@ export function runPhase2Tests(check, near) {
     check('money formats compactly',
       formatMoney(1.25e6) === '€1.3M' && formatMoney(-5e3) === '-€5k' &&
       formatMoney(Infinity) === '∞');
-    check('transported formats in thousands', formatThousands(12345) === '12.3k');
+    check('transported formats in thousands', formatCount(12345) === '12.3k');
+    check('…and steps up a unit as it grows, never 1000k',
+      [950, 123456, 999960, 4.5e6, 123e6, 1.25e9].map(formatCount).join(' ') === '950 123k 1.0M 4.5M 123M 1.3B',
+      [950, 123456, 999960, 4.5e6, 123e6, 1.25e9].map(formatCount).join(' '));
   }
 
   // ─── Vehicles ───────────────────────────────────────────────────────────

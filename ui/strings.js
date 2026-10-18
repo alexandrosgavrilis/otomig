@@ -163,6 +163,17 @@ export const STRINGS = {
     debt: 'Still owed',
   },
 
+  /** The cog's menu, beside Finances. */
+  menu: {
+    title: 'Settings',
+    mainMenu: 'Back to main menu',
+    muteAudio: 'Mute audio',
+    unmuteAudio: 'Unmute audio',
+    muteMusic: 'Mute music',
+    unmuteMusic: 'Unmute music',
+    musicHint: 'There is no music yet; this switch will be ready for it.',
+  },
+
   saves: {
     title: 'Save and load',
     save: 'Save',

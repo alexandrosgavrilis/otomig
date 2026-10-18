@@ -30,10 +30,19 @@ import { applyOverrides, loadSaved } from './sim/tuning.js';
 import { STRINGS } from './ui/strings.js';
 
 const app = document.getElementById('app');
-mountNewGame(app, (region) => startGame(region), {
-  // A save chosen on the start screen, or a save file opened there.
-  onResume: ({ game }) => startGame(game.region, game),
-});
+/** Shuts the running game screen down, before another replaces it. */
+let stopCurrent = null;
+showMainMenu();
+
+/** The start screen: pick a place to play, or carry on with a save. */
+function showMainMenu() {
+  stopCurrent?.();
+  stopCurrent = null;
+  mountNewGame(app, (region) => startGame(region), {
+    // A save chosen on the start screen, or a save file opened there.
+    onResume: ({ game }) => startGame(game.region, game),
+  });
+}
 
 /**
  * Show the game screen: a new game on a region, or a loaded one.
@@ -45,9 +54,6 @@ mountNewGame(app, (region) => startGame(region), {
  * @param {import('./model/region.js').Region} region
  * @param {Game} [loaded] a game rebuilt from a save
  */
-/** Shuts the running game screen down, before another replaces it. */
-let stopCurrent = null;
-
 function startGame(region, loaded = null) {
   // A load replaces the screen. Without stopping the old one, its frame loop,
   // monthly autosave and keyboard handlers all kept running: Space paused
@@ -73,10 +79,19 @@ function startGame(region, loaded = null) {
       <div id="legend"></div>
       <div class="saves" id="saves">
         <button type="button" id="s-finances">${STRINGS.toolbar.finances}</button>
-        <button type="button" id="s-save">${STRINGS.saves.save}</button>
-        <button type="button" id="s-load">${STRINGS.saves.load}</button>
-        <button type="button" id="s-export">${STRINGS.saves.export}</button>
-        <button type="button" id="s-import">${STRINGS.saves.import}</button>
+        <button type="button" id="s-menu" class="cog" title="${STRINGS.menu.title}"
+          aria-label="${STRINGS.menu.title}" aria-haspopup="true" aria-expanded="false">${COG_ICON}</button>
+        <div class="game-menu" id="game-menu" role="menu" hidden>
+          <button type="button" id="s-save">${STRINGS.saves.save}</button>
+          <button type="button" id="s-load">${STRINGS.saves.load}</button>
+          <button type="button" id="s-export">${STRINGS.saves.export}</button>
+          <button type="button" id="s-import">${STRINGS.saves.import}</button>
+          <hr />
+          <button type="button" id="s-audio"></button>
+          <button type="button" id="s-music" title="${STRINGS.menu.musicHint}"></button>
+          <hr />
+          <button type="button" id="s-main-menu" class="danger">${STRINGS.menu.mainMenu}</button>
+        </div>
         <input type="file" id="s-file" accept=".otomig,.json,.gz,application/json,application/gzip" hidden />
       </div>
       <div class="attribution">${ATTRIBUTION.osm} · ${ATTRIBUTION.terrain}${
@@ -140,6 +155,7 @@ function startGame(region, loaded = null) {
   });
 
   wireSaveButtons(game, regionKey, panels, hud);
+  wireGameMenu(game, regionKey, sound, shutdown.signal);
   wireKeyboard(game, toolbar, panels, hud, tuning, (message) => showFeedback(message), shutdown.signal);
 
   // Keep the heat map honest as coverage changes.
@@ -238,6 +254,53 @@ function wireKeyboard(game, toolbar, panels, hud, tuning, feedback, signal) {
       } else if (game.draft) game.finishDraft();
     }
   }, { signal });
+}
+
+/** A cog: a toothed ring round a hole, drawn so it is crisp at any size. */
+const COG_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+  <circle cx="12" cy="12" r="7.6" fill="none" stroke="currentColor" stroke-width="3.6" stroke-dasharray="2.98 2.99"/>
+  <circle cx="12" cy="12" r="5.4" fill="none" stroke="currentColor" stroke-width="2.4"/></svg>`;
+
+/**
+ * The cog's menu: saving and loading, the sound switches, and back to the
+ * start screen (Alex, Oct 18 2026). It closes on a choice, a click anywhere
+ * else, or Esc.
+ */
+function wireGameMenu(game, regionKey, sound, signal) {
+  const $ = (id) => document.getElementById(id);
+  const cog = $('s-menu');
+  const menu = $('game-menu');
+  const setOpen = (open) => {
+    menu.hidden = !open;
+    cog.setAttribute('aria-expanded', String(open));
+    cog.classList.toggle('on', open);
+  };
+  const labels = () => {
+    $('s-audio').textContent = sound.muted ? STRINGS.menu.unmuteAudio : STRINGS.menu.muteAudio;
+    $('s-music').textContent = sound.musicMuted ? STRINGS.menu.unmuteMusic : STRINGS.menu.muteMusic;
+  };
+  labels();
+
+  cog.addEventListener('click', () => setOpen(menu.hidden));
+  // Any choice closes it; the switches relabel first.
+  menu.addEventListener('click', (event) => {
+    if (event.target.closest('button')) setOpen(false);
+  });
+  window.addEventListener('pointerdown', (event) => {
+    if (!menu.hidden && !event.target.closest('#game-menu, #s-menu')) setOpen(false);
+  }, { signal });
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !menu.hidden) setOpen(false);
+  }, { signal, capture: true });
+
+  $('s-audio').addEventListener('click', () => { sound.setMuted(!sound.muted); labels(); });
+  $('s-music').addEventListener('click', () => { sound.setMusicMuted(!sound.musicMuted); labels(); });
+  // Saved first, so leaving loses nothing: Continue on the start screen
+  // picks the game up again.
+  $('s-main-menu').addEventListener('click', async () => {
+    await autosave(game, regionKey);
+    showMainMenu();
+  });
 }
 
 function wireSaveButtons(game, regionKey, panels, hud) {

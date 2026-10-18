@@ -141,10 +141,12 @@ export function mountPanels(root, game, { onChange }) {
       });
     } else if (isLine(selection)) {
       container.querySelector('[data-act="add-vehicle"]')?.addEventListener('click', () => {
+        game.emit('buttonPressed');
         game.addVehicle(selection);
         render(); onChange?.();
       });
       container.querySelector('[data-act="remove-vehicle"]')?.addEventListener('click', () => {
+        game.emit('buttonPressed');
         game.removeVehicle(selection);
         render(); onChange?.();
       });

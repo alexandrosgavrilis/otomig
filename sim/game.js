@@ -113,7 +113,9 @@ export class Game {
   /**
    * Tell listeners the player just did something: `lineCreated` (a new line
    * finished, with its line), `stopPlaced` (a stop added to a line or moved),
-   * `bulldozed` (something torn down), `financesOpened`.
+   * `bulldozed` (something torn down), `financesOpened`, and from the UI
+   * `buttonPressed` (one of the buttons that click: vehicles ±, New line,
+   * Cancel).
    */
   emit(type, detail) {
     for (const callback of this.eventListeners.get(type) || []) callback(detail);

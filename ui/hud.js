@@ -3,7 +3,7 @@
  * numbers.
  *
  * The spec's headline numbers are passengers transported (cumulative, in
- * thousands) and passengers on the network right now. The first is scaled to a
+ * whatever unit it has reached — k, M, B) and passengers on the network right now. The first is scaled to a
  * daily total; the second never is. Keeping them side by side makes the
  * difference between "how much work has this network done" and "how busy is it
  * this second" legible without any explanation.
@@ -11,7 +11,7 @@
 
 import { CLOCK, DIFFICULTY } from '../config.js';
 import { Clock } from '../sim/clock.js';
-import { formatMoney, formatThousands } from '../sim/economy.js';
+import { formatMoney, formatCount } from '../sim/economy.js';
 import { formatDate } from '../sim/clock.js';
 import { STRINGS } from './strings.js';
 
@@ -38,7 +38,7 @@ export function mountHud(root, game) {
       </div>
       <div class="spacer"></div>
       <div class="stat" title="${STRINGS.clocks.perDay}">
-        <b id="hud-transported">0k</b><span>${STRINGS.hud.transported}</span>
+        <b id="hud-transported">0</b><span>${STRINGS.hud.transported}</span>
       </div>
       <div class="stat" title="${STRINGS.clocks.live}">
         <b id="hud-onnetwork">0</b><span>${STRINGS.hud.onNetwork}</span>
@@ -88,7 +88,7 @@ export function mountHud(root, game) {
       $('hud-difficulty-wrap').title = STRINGS.difficultyHints[game.difficulty] || '';
     }
 
-    $('hud-transported').textContent = formatThousands(stats.transported);
+    $('hud-transported').textContent = formatCount(stats.transported);
     $('hud-onnetwork').textContent = stats.onNetwork.toLocaleString();
 
     const net = stats.lastMonthNet;

@@ -924,7 +924,7 @@ export const LINE_PALETTE = [
 export const AUDIO = {
   /** Everything together. */
   MASTER: 0.45,
-  /** A sound for something the player did, the month turning, a full stop. */
+  /** A sound for something the player did, or the month turning. */
   EFFECTS: 0.6,
   /** The quiet loop for the mode of the selected line. */
   LOOPS: 0.35,
@@ -932,8 +932,6 @@ export const AUDIO = {
   LOOP_FADE_S: 0.6,
   /** The same sound twice within this many seconds plays once. */
   REPEAT_GAP_S: 0.15,
-  /** A full stop chimes at most this often, s, however many fill up. */
-  FULL_STOP_GAP_S: 8,
 };
 
 export const RENDER = {

@@ -1452,8 +1452,15 @@ try {
       };
     });
     const saved = await snapshot();
+    // Save and load live in the cog's menu, beside Finances.
+    check('the save buttons are tucked away until the cog is pressed',
+      !(await page.isVisible('#s-save')));
+    await page.click('#s-menu');
+    check('…and the cog opens a menu holding them', await page.isVisible('#s-save')
+      && await page.isVisible('#s-main-menu') && await page.isVisible('#s-audio'));
     await page.click('#s-save');
     await page.waitForTimeout(400);
+    check('…which closes once a choice is made', !(await page.isVisible('#game-menu')));
 
     // Change things, then Load: everything must come back as saved. Until
     // Oct 17 2026 Load quietly started a fresh game on the same map.
@@ -1464,6 +1471,7 @@ try {
     const changed = await snapshot();
     // The old screen's handle goes away; wait for the loaded screen's own.
     await page.evaluate(() => { window.otomig = null; });
+    await page.click('#s-menu');
     await page.click('#s-load');
     await page.waitForFunction(() => window.otomig?.map?.loaded?.(), null, { timeout: 30000 });
     await page.waitForTimeout(300);
@@ -1481,7 +1489,7 @@ try {
     // Save to file, then open it in a browser with nothing in it at all.
     const [download] = await Promise.all([
       page.waitForEvent('download', { timeout: 30000 }),
-      page.click('#s-export'),
+      page.click('#s-menu').then(() => page.click('#s-export')),
     ]);
     const filePath = await download.path();
     check('Save to file downloads one compressed file',
@@ -1528,6 +1536,44 @@ try {
       continued === loaded.lines, `${continued}`);
     check('…with no errors in that browser', otherErrors.length === 0, otherErrors.join(' | '));
     await fresh.close();
+  }
+
+  // ─── The cog's menu: sound switches and back to the start screen ──────────
+  {
+    // The button sound: New line clicks (a stop filling up no longer does).
+    await page.click('#tb-tools button[data-tool="newLine"]');
+    await page.waitForTimeout(100);
+    check('pressing New line plays the button sound',
+      await page.evaluate(() => window.otomig.sound.played.at(-1) === 'button'));
+
+    await page.click('#s-menu');
+    await page.click('#s-audio');
+    const muted = await page.evaluate(() => ({
+      muted: window.otomig.sound.muted,
+      label: document.getElementById('s-audio').textContent,
+      remembered: JSON.parse(localStorage.getItem('otomig.audio') || '{}').muted,
+    }));
+    check('Mute audio silences the game and is remembered, the button now saying Unmute',
+      muted.muted && muted.remembered && /Unmute/.test(muted.label), JSON.stringify(muted));
+    await page.click('#s-menu');
+    await page.click('#s-audio');
+    await page.click('#s-menu');
+    await page.click('#s-music');
+    check('the music switch is there for when there is music',
+      await page.evaluate(() => window.otomig.sound.musicMuted
+        && /Unmute music/.test(document.getElementById('s-music').textContent)));
+    await page.click('#s-menu');
+    await page.click('#s-music');
+
+    const before = await page.evaluate(() => window.otomig.game.network.lines.size);
+    await page.click('#s-menu');
+    await page.click('#s-main-menu');
+    await page.waitForSelector('.ng-panel', { timeout: 10000 });
+    await page.waitForSelector('#ng-continue li', { timeout: 10000 });
+    await page.click('#ng-continue li');
+    await page.waitForFunction(() => window.otomig?.map?.loaded?.(), null, { timeout: 60000 });
+    check('Back to main menu saves first, so Continue carries on where it left off',
+      await page.evaluate((n) => window.otomig.game.network.lines.size === n, before));
   }
 
   // ─── Nothing threw ────────────────────────────────────────────────────────

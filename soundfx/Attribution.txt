@@ -45,7 +45,7 @@ new-line-ferry.mp3  powerfull horn (trezz77)                 a new ferry line
 new-line-metro.mp3  NYC_Subway ding dong (carroll27)         a new metro line
 new-line-train.mp3  rocky_mtns_train_horn_moving (polymorpheva)  a new train line
 new-line-tram.mp3   Jingle4h (jochen1988, CC BY 3.0)         a new tram line
-station-full.mp3    glass_ding (hihirex)                     a stop fills up
+button.mp3          glass_ding (hihirex)                     vehicles +/-, New line, Cancel
 loop-metro.mp3      Budapest_metro_loop_sound1 (csengeri, CC BY 4.0)  a metro line selected
 loop-train.mp3      13750 cargo train passing loop (Robinhood76, CC BY-NC 4.0)  a train line selected
 loop-tram.mp3       Atmo_TrainStation_Bremen_Interior_02_Loop (LamaMakesMusic)  a tram line selected

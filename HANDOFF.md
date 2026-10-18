@@ -89,8 +89,8 @@ Both would have reached Alex as a broken screen, and both were invisible to 272 
 ## 2. Testing
 
 ```bash
-npm test                            # 773 logic assertions, plain Node, no dependencies
-npm run test:browser                # 181 assertions in real Chromium via Playwright
+npm test                            # 774 logic assertions, plain Node, no dependencies
+npm run test:browser                # 188 assertions in real Chromium via Playwright
 npm run test:browser -- --headed    # ...and watch it
 npm run test:live                   # 24 assertions against a REAL import — hits live OSM services
 npm run test:live -- --km 5         # ...at a given size (default 5, the slider minimum)
@@ -1153,8 +1153,16 @@ Alex supplied fifteen sounds from Freesound, each named for its event. They are 
 | `bulldoze` | anything bulldozed or deleted — `bulldozed` |
 | `finances` | the finances panel opens — `financesOpened` |
 | `month` | the month turns |
-| `station-full` | a stop passes the crowd it can show (`RENDER.MAX_PASSENGER_DOTS`, where it says "+N"); each stop once until it empties, at most every 8 s |
+| `button` | vehicles + and −, the New line tool, the drawing bar's Cancel (not Done: the new line has its own sound) — `buttonPressed`. *Until Oct 18 it rang when a stop filled up, which in a grown network never stopped (`station-full.mp3`, renamed).* |
 | `loop-<mode>` | while a line of that mode is selected, fading in and out |
 
 Browsers allow sound only after the player has touched the page, so nothing loads until the first click or key; the tab going hidden suspends it. Loops decode to exactly their original length in Chromium (the encoder's gapless header), so they repeat without a gap. There is no mute control yet. Ferry sounds are wired for when ferries arrive.
+
+## 34. The cog menu, a button sound, and counts in k, M and B — Oct 18 2026
+
+- **The cog** beside Finances opens a menu: Save, Load, Save to file, Open file; Mute audio / Unmute audio; Mute music / Unmute music (a placeholder — remembered, nothing to mute yet); and **Back to main menu**, in the bulldoze red, which autosaves first so Continue on the start screen carries on (`wireGameMenu` in main.js, `showMainMenu`). It closes on a choice, a click elsewhere, or Esc. The mute settings live in this browser's localStorage (`otomig.audio`), owned by the sound module (`sound.setMuted`, `setMusicMuted`).
+- **The glass ding is now a button sound** (`soundfx/button.mp3`, was `station-full.mp3`): vehicles + and −, the New line tool, the drawing bar's Cancel — not Done, which has the new line's own sound. Ringing it when a stop filled up never stopped in a grown network, so that is gone.
+- **Transported reads in the unit it has reached** — 950, 12.3k, 123k, 4.5M, 1.2B (`formatCount`, was `formatThousands`, which made 100,000k).
+
+**Next, flagged by Alex and not started:** a main menu. The start screen's clutter (Load from file and the like) moves into it, with a blue PLAY button with white text, in a white triangular corner taking about a third of the screen, bottom right; the rest a zoomed-in sample map with lines of several colours and modes (metro, train, tram, bus) running and crossing in rectangular paths. Alex will provide a drawing.
 
